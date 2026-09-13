@@ -1,0 +1,54 @@
+{
+  "name": "autofiller-desktop",
+  "version": "1.0.0",
+  "description": "AutoFiller AI - AI-assisted document-to-web-form desktop workflow engine",
+  "main": "dist-electron/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.electron.json",
+    "build": "npm run typecheck && vite build && tsc -p tsconfig.electron.json",
+    "electron": "npm run build && electron .",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "test": "npm run build && node tests/policy_test.js && node tests/tool_registry_test.js && node tests/scanner_test.js && node tests/e2e_integration_test.js"
+  },
+  "dependencies": {
+    "lucide-react": "0.474.0",
+    "playwright": "1.50.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.13.1",
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
+    "@vitejs/plugin-react": "4.3.4",
+    "electron": "34.0.2",
+    "electron-builder": "25.1.8",
+    "typescript": "5.7.3",
+    "vite": "6.1.0"
+  },
+  "build": {
+    "appId": "com.autofiller.ai",
+    "productName": "AutoFiller AI",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "public/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

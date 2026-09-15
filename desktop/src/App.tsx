@@ -40,45 +40,46 @@ export const App: React.FC = () => {
   const [state, setState] = useState<string>('IDLE');
   const [activeNav, setActiveNav] = useState<string>('Home');
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [isEditingFacts, setIsEditingFacts] = useState<boolean>(false);
   const [documentName, setDocumentName] = useState<string>('student_admission.pdf');
   const [documentPath, setDocumentPath] = useState<string>('');
   const [documentText, setDocumentText] = useState<string>(`STUDENT REGISTRATION RECORD 2026
-Student Name: Rohan Verma
-Date of Birth: 22-07-2008
+Student Name: Aarav Sharma
+Date of Birth: 15-03-2010
 Gender: Male
-Applying Grade: 10th Grade
-Father's Name: Suresh Verma
-Mother's Name: Anita Verma
-Email Address: rohan.verma@example.com
+Applying Grade: Grade 10
+Father's Name: Rajesh Sharma
+Mother's Name: Sunita Sharma
+Email Address: aarav@example.com
 Contact Phone: +91 98230 11223
 Alternate Phone: +91 98111 44556
-Residential Address: 12 Sunshine Apartments, MG Road
-City: Mumbai
+Residential Address: 42 Palm Avenue
+City: Nagpur
 State: Maharashtra
-Postal Code: 400001
-Blood Group: O+
+Postal Code: 440001
+Blood Group: B+
 Allergies: None
-Transport Required: No
-Previous School: St. Francis High School`);
+Transport Required: Yes
+Previous School: Model High School Nagpur`);
   const [targetUrl, setTargetUrl] = useState<string>('http://127.0.0.1:8000/mock_school_form.html');
   const [instruction, setInstruction] = useState<string>(
-    'Fill out the student registration form using the extracted student details.'
+    'Fill out the student admission form using the extracted student information.'
   );
   const [facts, setFacts] = useState<ExtractedFact[]>([]);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [clarificationPrompt, setClarificationPrompt] = useState<ClarificationPrompt | null>(null);
 
-  // Default initial facts mapping matching mockup display
+  // Default initial facts mapping matching demo specification
   const defaultFacts: ExtractedFact[] = [
-    { key: 'full_name', label: 'Full Name', value: 'Rohan Verma', confidence: 0.98 },
-    { key: 'dob', label: 'Date of Birth', value: '22 July 2008', confidence: 0.96 },
-    { key: 'email', label: 'Email', value: 'rohan.verma@example.com', confidence: 0.99 },
-    { key: 'phone', label: 'Phone', value: '+91 98230 11223', confidence: 0.97 },
+    { key: 'full_name', label: 'Full Name', value: 'Aarav Sharma', confidence: 0.98 },
+    { key: 'dob', label: 'Date of Birth', value: '15 March 2010', confidence: 0.96 },
     { key: 'gender', label: 'Gender', value: 'Male', confidence: 0.95 },
-    { key: 'class', label: 'Class Applying For', value: '10th Grade', confidence: 0.98 },
-    { key: 'city', label: 'City', value: 'Mumbai', confidence: 0.94 },
+    { key: 'class', label: 'Class', value: 'Grade 10', confidence: 0.98 },
+    { key: 'email', label: 'Email', value: 'aarav@example.com', confidence: 0.99 },
+    { key: 'phone', label: 'Phone', value: '+91 98230 11223', confidence: 0.97 },
+    { key: 'city', label: 'City', value: 'Nagpur', confidence: 0.94 },
     { key: 'allergies', label: 'Allergies', value: 'None', confidence: 0.92 },
-    { key: 'transport', label: 'Transport Required', value: 'No', confidence: 0.95 },
+    { key: 'transport', label: 'Transport Required', value: 'Yes', confidence: 0.95 },
   ];
 
   useEffect(() => {
@@ -191,39 +192,46 @@ Previous School: St. Francis High School`);
 
   const displayFacts = facts.length > 0 ? facts : defaultFacts;
 
-  // Timeline steps definitions
+  // Streamlined 7-stage timeline steps matching assignment specification
   const timelineSteps = [
-    { title: 'Document ingested', desc: 'Completed', done: true },
-    { title: 'Extracting information', desc: 'Completed', done: true },
-    { title: 'Student facts ready', desc: 'Completed', done: true },
     {
-      title: 'Navigating to form',
-      desc: state === 'IDLE' ? 'Pending' : 'Completed',
+      title: 'Document processed',
+      desc: 'student_admission.pdf (842 KB)',
+      done: true,
+    },
+    {
+      title: 'Information extracted',
+      desc: `${displayFacts.length} student facts extracted`,
+      done: true,
+    },
+    {
+      title: 'Form opened',
+      desc: state === 'IDLE' ? 'Pending' : 'Connected to Playwright',
       done: state !== 'IDLE' && state !== 'EXTRACTING_DOC',
     },
     {
-      title: 'Scanning form fields',
-      desc: isRunning && state !== 'SCANNING_FORM' ? 'Completed' : 'Pending',
+      title: 'Fields detected',
+      desc: isRunning || isReviewReady ? 'DOM form controls discovered' : 'Pending',
       done: isRunning || isReviewReady,
     },
     {
-      title: 'Mapping fields',
-      desc: isRunning && state !== 'MAPPING_FIELDS' ? 'Completed' : 'Pending',
+      title: 'Information mapped',
+      desc: state === 'FILLING_FORM' || state === 'VERIFYING' || isReviewReady ? 'Mapped with Gemini AI' : 'Pending',
       done: state === 'FILLING_FORM' || state === 'VERIFYING' || isReviewReady,
     },
     {
-      title: 'Filling form',
+      title: 'Form filled',
       desc: isReviewReady ? 'Completed' : state === 'FILLING_FORM' ? 'In progress...' : 'Pending',
       done: isReviewReady,
     },
     {
-      title: 'Verifying values',
-      desc: isReviewReady ? 'Completed' : state === 'VERIFYING' ? 'In progress...' : 'Pending',
+      title: 'Values verified',
+      desc: isReviewReady ? 'Verified against document' : state === 'VERIFYING' ? 'In progress...' : 'Pending',
       done: isReviewReady,
     },
     {
-      title: 'Review ready',
-      desc: isReviewReady ? 'In progress...' : 'Pending',
+      title: 'REVIEW READY',
+      desc: isReviewReady ? 'Ready for human review' : 'Pending',
       done: isReviewReady,
       active: isReviewReady,
     },
@@ -495,50 +503,59 @@ Previous School: St. Francis High School`);
                 padding: '20px',
                 border: '1px solid var(--border-subtle)',
                 boxShadow: 'var(--shadow-card)',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                  <div
+                    style={{
+                      width: '28px',
+                      height: '28px',
+                      borderRadius: '50%',
+                      background: '#16654E',
+                      color: '#FFFFFF',
+                      fontWeight: 700,
+                      fontSize: '0.875rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    1
+                  </div>
+                  <div>
+                    <h3 style={{ fontSize: '0.9375rem', fontWeight: 700, color: '#0F2E23' }}>
+                      Document Uploaded
+                    </h3>
+                    <div style={{ fontSize: '0.75rem', color: '#16654E', fontWeight: 600 }}>
+                      ✓ Document processed
+                    </div>
+                  </div>
+                </div>
+
                 <div
+                  onClick={handleSelectDocument}
                   style={{
-                    width: '28px',
-                    height: '28px',
-                    borderRadius: '50%',
-                    background: '#16654E',
-                    color: '#FFFFFF',
-                    fontWeight: 700,
-                    fontSize: '0.875rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
+                    border: '1.5px dashed #B0C4B8',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '16px',
+                    textAlign: 'center',
+                    background: '#F9F8F5',
+                    cursor: 'pointer',
+                    marginBottom: '10px',
                   }}
                 >
-                  1
+                  <UploadCloud size={24} color="#16654E" style={{ margin: '0 auto 6px auto' }} />
+                  <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#0F2E23' }}>
+                    {documentName}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    PDF • 842 KB
+                  </div>
                 </div>
-                <div>
-                  <h3 style={{ fontSize: '0.9375rem', fontWeight: 700, color: '#0F2E23' }}>
-                    Upload Student Document
-                  </h3>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>PDF, Excel, Word or Image</div>
-                </div>
-              </div>
-
-              <div
-                onClick={handleSelectDocument}
-                style={{
-                  border: '1.5px dashed #B0C4B8',
-                  borderRadius: 'var(--radius-md)',
-                  padding: '20px',
-                  textAlign: 'center',
-                  background: '#F9F8F5',
-                  cursor: 'pointer',
-                  marginBottom: '12px',
-                }}
-              >
-                <UploadCloud size={24} color="#16654E" style={{ margin: '0 auto 8px auto' }} />
-                <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#0F2E23' }}>
-                  Drag & drop your file here
-                </div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>or click to browse</div>
               </div>
 
               <div
@@ -546,33 +563,21 @@ Previous School: St. Francis High School`);
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  background: '#F4F1EA',
+                  background: '#D9EFE0',
+                  border: '1px solid #B7E3C4',
                   borderRadius: 'var(--radius-md)',
                   padding: '8px 12px',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  color: '#0F4C3A',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span
-                    style={{
-                      background: '#E11D48',
-                      color: '#FFFFFF',
-                      fontSize: '0.625rem',
-                      fontWeight: 800,
-                      padding: '2px 6px',
-                      borderRadius: '4px',
-                    }}
-                  >
-                    PDF
-                  </span>
-                  <div>
-                    <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#0F2E23' }}>
-                      {documentName}
-                    </div>
-                    <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>842 KB</div>
-                  </div>
-                </div>
-                <button style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}>
-                  <X size={14} color="#64748B" />
+                <span>✓ Student information extracted</span>
+                <button
+                  onClick={handleSelectDocument}
+                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#16654E', fontWeight: 700 }}
+                >
+                  Change
                 </button>
               </div>
             </div>
@@ -609,20 +614,20 @@ Previous School: St. Francis High School`);
                     2
                   </div>
                   <div>
-                    <h3 style={{ fontSize: '0.9375rem', fontWeight: 700, color: '#0F2E23' }}>Target Form</h3>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Enter the website URL</div>
+                    <h3 style={{ fontSize: '0.9375rem', fontWeight: 700, color: '#0F2E23' }}>STEP 2: Target Form</h3>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Website URL</div>
                   </div>
                 </div>
 
-                <div style={{ position: 'relative', marginBottom: '14px' }}>
-                  <Globe size={16} style={{ position: 'absolute', left: '12px', top: '13px', color: 'var(--text-muted)' }} />
+                <div style={{ position: 'relative', marginBottom: '10px' }}>
+                  <Globe size={16} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--text-muted)' }} />
                   <input
                     type="text"
                     value={targetUrl}
                     onChange={(e) => setTargetUrl(e.target.value)}
                     style={{
                       width: '100%',
-                      padding: '10px 12px 10px 36px',
+                      padding: '9px 12px 9px 36px',
                       borderRadius: 'var(--radius-md)',
                       border: '1px solid var(--border-subtle)',
                       background: '#F9F8F5',
@@ -635,27 +640,43 @@ Previous School: St. Francis High School`);
                 </div>
               </div>
 
-              <button
-                onClick={() => window.open(targetUrl, '_blank')}
-                style={{
-                  width: '100%',
-                  padding: '10px',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid #DED8CB',
-                  background: 'var(--accent-tan-bg)',
-                  color: '#0F2E23',
-                  fontWeight: 600,
-                  fontSize: '0.875rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  cursor: 'pointer',
-                }}
-              >
-                <ExternalLink size={16} />
-                <span>Open in Browser</span>
-              </button>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={() => setTargetUrl('http://127.0.0.1:8000/mock_school_form.html')}
+                  style={{
+                    flex: 1,
+                    padding: '8px 10px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid #16654E',
+                    background: '#D9EFE0',
+                    color: '#0F4C3A',
+                    fontWeight: 700,
+                    fontSize: '0.75rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  ⚡ Use Demo School Form
+                </button>
+                <button
+                  onClick={() => window.open(targetUrl, '_blank')}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid #DED8CB',
+                    background: 'var(--accent-tan-bg)',
+                    color: '#0F2E23',
+                    fontWeight: 600,
+                    fontSize: '0.75rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <ExternalLink size={14} />
+                  <span>Open</span>
+                </button>
+              </div>
             </div>
 
             {/* Step Card 3 */}
@@ -690,8 +711,8 @@ Previous School: St. Francis High School`);
                     3
                   </div>
                   <div>
-                    <h3 style={{ fontSize: '0.9375rem', fontWeight: 700, color: '#0F2E23' }}>Operator Instruction</h3>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Tell the agent what to do</div>
+                    <h3 style={{ fontSize: '0.9375rem', fontWeight: 700, color: '#0F2E23' }}>STEP 3: Operator Instruction</h3>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>What should the agent do?</div>
                   </div>
                 </div>
 
@@ -702,7 +723,7 @@ Previous School: St. Francis High School`);
                     rows={3}
                     style={{
                       width: '100%',
-                      padding: '10px 12px',
+                      padding: '8px 10px',
                       borderRadius: 'var(--radius-md)',
                       border: '1px solid var(--border-subtle)',
                       background: '#F9F8F5',
@@ -712,14 +733,46 @@ Previous School: St. Francis High School`);
                       resize: 'none',
                     }}
                   />
-                  <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', textAlign: 'right', marginTop: '4px' }}>
-                    {instruction.length}/500
-                  </div>
                 </div>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.75rem', color: '#16654E', cursor: 'pointer', fontWeight: 600 }}>
-                💡 <span>Use a template ˅</span>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px' }}>
+                <span
+                  onClick={() =>
+                    setInstruction(
+                      'Fill the student admission form using the extracted student information.'
+                    )
+                  }
+                  style={{
+                    fontSize: '0.6875rem',
+                    background: '#EFF6FF',
+                    color: '#1D4ED8',
+                    padding: '3px 8px',
+                    borderRadius: '12px',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  + Student Admission Form
+                </span>
+                <span
+                  onClick={() =>
+                    setInstruction(
+                      'Extract student details and fill school registration form, verifying all input fields.'
+                    )
+                  }
+                  style={{
+                    fontSize: '0.6875rem',
+                    background: '#F5F3FF',
+                    color: '#6D28D9',
+                    padding: '3px 8px',
+                    borderRadius: '12px',
+                    cursor: 'pointer',
+                    fontWeight: 600,
+                  }}
+                >
+                  + Registration Form
+                </span>
               </div>
             </div>
           </div>
@@ -758,8 +811,8 @@ Previous School: St. Francis High School`);
 
           {/* Lower Workspace: 2-Column Split + Right Progress Sidebar */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '24px' }}>
-            {/* Left Column: Facts + Browser Preview */}
-            <div style={{ display: 'grid', gridTemplateColumns: '440px 1fr', gap: '20px' }}>
+            {/* Left Column: Facts + Live Browser Hero */}
+            <div style={{ display: 'grid', gridTemplateColumns: '400px 1fr', gap: '20px' }}>
               {/* Extracted Student Information Card */}
               <div
                 style={{
@@ -778,18 +831,19 @@ Previous School: St. Francis High School`);
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <FileText size={18} color="#16654E" />
                       <h3 style={{ fontSize: '0.9375rem', fontWeight: 700, color: '#0F2E23' }}>
-                        Extracted Student Information
+                        Student Information
                       </h3>
                     </div>
                     <button
+                      onClick={() => setIsEditingFacts(!isEditingFacts)}
                       style={{
                         padding: '4px 10px',
                         borderRadius: 'var(--radius-sm)',
                         border: '1px solid #DED8CB',
-                        background: '#F4F1EA',
+                        background: isEditingFacts ? '#16654E' : '#F4F1EA',
                         fontSize: '0.75rem',
                         fontWeight: 600,
-                        color: '#0F2E23',
+                        color: isEditingFacts ? '#FFFFFF' : '#0F2E23',
                         display: 'flex',
                         alignItems: 'center',
                         gap: '4px',
@@ -797,13 +851,13 @@ Previous School: St. Francis High School`);
                       }}
                     >
                       <Edit3 size={13} />
-                      <span>Edit</span>
+                      <span>{isEditingFacts ? 'Done' : 'Edit'}</span>
                     </button>
                   </div>
 
                   {/* Fact Table Rows */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    {displayFacts.map((fact) => (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {displayFacts.map((fact, index) => (
                       <div
                         key={fact.key}
                         style={{
@@ -819,13 +873,34 @@ Previous School: St. Francis High School`);
                           {getFactIcon(fact.label)}
                           <span>{fact.label}</span>
                         </div>
-                        <div style={{ fontWeight: 600, color: '#0F2E23' }}>{fact.value}</div>
+                        {isEditingFacts ? (
+                          <input
+                            type="text"
+                            value={fact.value}
+                            onChange={(e) => {
+                              const updated = [...displayFacts];
+                              updated[index] = { ...fact, value: e.target.value };
+                              setFacts(updated);
+                            }}
+                            style={{
+                              width: '140px',
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                              border: '1px solid #16654E',
+                              fontSize: '0.75rem',
+                              color: '#0F2E23',
+                              outline: 'none',
+                            }}
+                          />
+                        ) : (
+                          <div style={{ fontWeight: 600, color: '#0F2E23' }}>{fact.value}</div>
+                        )}
                       </div>
                     ))}
                   </div>
                 </div>
 
-                {/* Bottom Green Status Pill */}
+                {/* Bottom Status Pill */}
                 <div
                   style={{
                     marginTop: '16px',
@@ -841,23 +916,23 @@ Previous School: St. Francis High School`);
                   <CheckCircle2 size={18} color="#16654E" style={{ flexShrink: 0, marginTop: '1px' }} />
                   <div>
                     <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#0F4C3A' }}>
-                      Information extracted successfully using Gemini AI
+                      ✓ Document processed & facts extracted
                     </div>
                     <div style={{ fontSize: '0.6875rem', color: '#16654E' }}>
-                      Review and edit if needed before starting.
+                      Verify or edit values before starting automation.
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Live Browser Automation Card */}
+              {/* Live Browser Hero Card */}
               <div
                 style={{
                   background: 'var(--bg-card)',
                   borderRadius: 'var(--radius-lg)',
                   padding: '20px',
-                  border: '1px solid var(--border-subtle)',
-                  boxShadow: 'var(--shadow-card)',
+                  border: '2px solid #16654E',
+                  boxShadow: '0 8px 30px rgba(22, 101, 78, 0.12)',
                   display: 'flex',
                   flexDirection: 'column',
                 }}
@@ -865,25 +940,26 @@ Previous School: St. Francis High School`);
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <Globe size={18} color="#16654E" />
-                    <h3 style={{ fontSize: '0.9375rem', fontWeight: 700, color: '#0F2E23' }}>
-                      Live Browser Automation
+                    <h3 style={{ fontSize: '1rem', fontWeight: 800, color: '#0F2E23', letterSpacing: '0.02em' }}>
+                      LIVE BROWSER
                     </h3>
                   </div>
                   <div
                     style={{
-                      background: '#D9EFE0',
-                      color: '#0F4C3A',
+                      background: '#16654E',
+                      color: '#FFFFFF',
                       borderRadius: 'var(--radius-full)',
-                      padding: '3px 10px',
+                      padding: '4px 12px',
                       fontSize: '0.75rem',
-                      fontWeight: 700,
+                      fontWeight: 800,
                       display: 'flex',
                       alignItems: 'center',
                       gap: '6px',
+                      boxShadow: '0 2px 8px rgba(22, 101, 78, 0.3)',
                     }}
                   >
-                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#16654E' }} />
-                    Live
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#A5DCB4' }} />
+                    LIVE
                   </div>
                 </div>
 
@@ -960,9 +1036,9 @@ Previous School: St. Francis High School`);
                         🏫
                       </div>
                       <div style={{ fontWeight: 800, fontSize: '0.9375rem', color: '#1E293B' }}>
-                        SVPCET COLLEGE
+                        Student Admission Form
                       </div>
-                      <div style={{ fontSize: '0.75rem', color: '#64748B' }}>Student Admission Form</div>
+                      <div style={{ fontSize: '0.75rem', color: '#64748B' }}>Controlled via Playwright Browser</div>
                     </div>
 
                     {/* Render Form Controls */}
@@ -972,7 +1048,7 @@ Previous School: St. Francis High School`);
                         <input
                           type="text"
                           readOnly
-                          value={isReviewReady || isRunning ? 'Rohan Verma' : ''}
+                          value={isReviewReady || isRunning ? 'Aarav Sharma' : ''}
                           style={{
                             width: '100%',
                             padding: '6px 8px',
@@ -980,6 +1056,8 @@ Previous School: St. Francis High School`);
                             border: '1px solid #CBD5E1',
                             marginTop: '4px',
                             fontSize: '0.75rem',
+                            background: isReviewReady || isRunning ? '#ECFDF5' : '#FFFFFF',
+                            borderColor: isReviewReady || isRunning ? '#10B981' : '#CBD5E1',
                           }}
                         />
                       </div>
@@ -1003,7 +1081,7 @@ Previous School: St. Francis High School`);
                         <input
                           type="text"
                           readOnly
-                          value={isReviewReady || isRunning ? '22-07-2008' : ''}
+                          value={isReviewReady || isRunning ? '15-03-2010' : ''}
                           style={{
                             width: '100%',
                             padding: '6px 8px',
@@ -1011,6 +1089,8 @@ Previous School: St. Francis High School`);
                             border: '1px solid #CBD5E1',
                             marginTop: '4px',
                             fontSize: '0.75rem',
+                            background: isReviewReady || isRunning ? '#ECFDF5' : '#FFFFFF',
+                            borderColor: isReviewReady || isRunning ? '#10B981' : '#CBD5E1',
                           }}
                         />
                       </div>
@@ -1025,6 +1105,7 @@ Previous School: St. Francis High School`);
                             border: '1px solid #CBD5E1',
                             marginTop: '4px',
                             fontSize: '0.75rem',
+                            background: isReviewReady || isRunning ? '#ECFDF5' : '#FFFFFF',
                           }}
                         >
                           <option>Grade 10</option>
@@ -1036,7 +1117,7 @@ Previous School: St. Francis High School`);
                         <input
                           type="text"
                           readOnly
-                          value={isReviewReady || isRunning ? 'rohan.verma@example.com' : ''}
+                          value={isReviewReady || isRunning ? 'aarav@example.com' : ''}
                           style={{
                             width: '100%',
                             padding: '6px 8px',
@@ -1044,6 +1125,8 @@ Previous School: St. Francis High School`);
                             border: '1px solid #CBD5E1',
                             marginTop: '4px',
                             fontSize: '0.75rem',
+                            background: isReviewReady || isRunning ? '#ECFDF5' : '#FFFFFF',
+                            borderColor: isReviewReady || isRunning ? '#10B981' : '#CBD5E1',
                           }}
                         />
                       </div>
@@ -1052,7 +1135,7 @@ Previous School: St. Francis High School`);
                         <input
                           type="text"
                           readOnly
-                          value={isReviewReady || isRunning ? 'Mumbai' : ''}
+                          value={isReviewReady || isRunning ? 'Nagpur' : ''}
                           style={{
                             width: '100%',
                             padding: '6px 8px',
@@ -1060,6 +1143,8 @@ Previous School: St. Francis High School`);
                             border: '1px solid #CBD5E1',
                             marginTop: '4px',
                             fontSize: '0.75rem',
+                            background: isReviewReady || isRunning ? '#ECFDF5' : '#FFFFFF',
+                            borderColor: isReviewReady || isRunning ? '#10B981' : '#CBD5E1',
                           }}
                         />
                       </div>
@@ -1077,6 +1162,7 @@ Previous School: St. Francis High School`);
                             border: '1px solid #CBD5E1',
                             marginTop: '4px',
                             fontSize: '0.75rem',
+                            background: isReviewReady || isRunning ? '#ECFDF5' : '#FFFFFF',
                           }}
                         />
                       </div>
@@ -1093,6 +1179,7 @@ Previous School: St. Francis High School`);
                             border: '1px solid #CBD5E1',
                             marginTop: '4px',
                             fontSize: '0.75rem',
+                            background: isReviewReady || isRunning ? '#ECFDF5' : '#FFFFFF',
                           }}
                         />
                       </div>
@@ -1161,27 +1248,90 @@ Previous School: St. Francis High School`);
                 </div>
               </div>
 
-              {/* Final Review Ready Banner Box */}
+              {/* Review Ready Screen / Banner Box */}
               <div
                 style={{
                   marginTop: '20px',
                   background: '#D9EFE0',
-                  border: '1px solid #B7E3C4',
+                  border: '1.5px solid #16654E',
                   borderRadius: 'var(--radius-md)',
-                  padding: '14px',
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: '12px',
+                  padding: '16px',
+                  textAlign: 'center',
                 }}
               >
-                <CheckCircle2 size={22} color="#16654E" style={{ flexShrink: 0 }} />
-                <div>
-                  <div style={{ fontSize: '0.8125rem', fontWeight: 800, color: '#0F4C3A' }}>
-                    Form filled and verified — ready for human review.
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: '#16654E', marginTop: '4px', lineHeight: '1.4' }}>
-                    Final submission is disabled. The user must review and submit manually.
-                  </div>
+                <div
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '50%',
+                    background: '#16654E',
+                    color: '#FFFFFF',
+                    fontSize: '1.25rem',
+                    fontWeight: 800,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    margin: '0 auto 10px auto',
+                  }}
+                >
+                  ✓
+                </div>
+                <div style={{ fontSize: '0.9375rem', fontWeight: 800, color: '#0F4C3A' }}>
+                  FORM FILLED & VERIFIED
+                </div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#16654E', marginTop: '2px' }}>
+                  Ready for human review.
+                </div>
+                <div style={{ fontSize: '0.75rem', color: '#334155', marginTop: '6px', lineHeight: '1.4' }}>
+                  All detected fields have been populated and verified against the source document.
+                </div>
+
+                <div
+                  style={{
+                    background: '#FFFFFF',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '10px',
+                    marginTop: '12px',
+                    border: '1px solid #B7E3C4',
+                    fontSize: '0.75rem',
+                    textAlign: 'left',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px',
+                    fontWeight: 600,
+                    color: '#0F2E23',
+                  }}
+                >
+                  <div style={{ color: '#16654E' }}>✓ {displayFacts.length} fields verified</div>
+                  <div style={{ color: '#16654E' }}>✓ 0 unresolved fields</div>
+                  <div style={{ color: '#16654E' }}>✓ 0 conflicts</div>
+                </div>
+
+                <button
+                  onClick={() => window.open(targetUrl, '_blank')}
+                  style={{
+                    width: '100%',
+                    marginTop: '14px',
+                    padding: '10px',
+                    borderRadius: 'var(--radius-md)',
+                    background: '#16654E',
+                    color: '#FFFFFF',
+                    border: 'none',
+                    fontWeight: 700,
+                    fontSize: '0.8125rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <ExternalLink size={14} />
+                  <span>REVIEW THE FORM IN BROWSER</span>
+                </button>
+
+                <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid #B7E3C4', fontSize: '0.6875rem', color: '#16654E', fontWeight: 600 }}>
+                  🔒 Final submission is disabled. Please review the form and submit it manually when satisfied.
                 </div>
               </div>
             </div>

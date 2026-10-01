@@ -582,3 +582,44 @@ The following items are **not yet implemented** as of the current commit:
 ---
 
 *Last updated: 2026-10-01 by AutoFiller AI development team.*
+
+Work will be done according to the given below phases . for support mandatory check for reliable skills in - C:\Users\aayus\autofiller\.agents
+
+make sure that work will be done in phase wise manner and each phase will have clear outcome as given and as per  folder structure above . 
+
+phase 1 TASK: Rename every "FormPilot / formpilot / FORMPILOT" reference to AutoFiller
+in this repo. Work on the current branch . Behaviour must not
+change, except for the migration described below.
+
+MAPPING
+- FormPilot (display text, comments)  -> AutoFiller
+- FormPilotSettings -> AutoFillerSettings ; FormPilotAPI -> AutoFillerAPI
+- window.formpilot -> window.autofiller
+- IPC channels "formpilot:*" -> "autofiller:*" (preload.ts, ipcHandlers.ts,
+  bridge.ts, main.ts and any tests must all change together; no channel left
+  with the old prefix)
+- env vars FORMPILOT_INTERNAL_KEY -> AUTOFILLER_INTERNAL_KEY,
+  FORMPILOT_ALLOW_ANONYMOUS -> AUTOFILLER_ALLOW_ANONYMOUS
+- files .formpilot_token -> .autofiller_token ; .formpilot_secrets ->
+  .autofiller_secrets
+- git mv desktop/src/types/formpilot.ts desktop/src/types/autofiller.ts and
+  fix its imports
+
+BACKWARD COMPATIBILITY (important)
+- Backend: if AUTOFILLER_INTERNAL_KEY is unset, fall back to
+  FORMPILOT_INTERNAL_KEY, and log a deprecation warning. Do NOT fall back for
+  ALLOW_ANONYMOUS (that flag must keep being refused at startup under both names).
+- Secrets/token files: if the old file exists and the new one does not, move
+  it to the new name once at startup (preserve chmod 600 / contents). Never
+  log secret contents.
+
+SECURITY
+- Update .gitignore so BOTH old and new token/secret filenames are ignored.
+
+DO NOT
+- Touch package-lock.json, node_modules, or .git.
+- Change logic, add features, or reformat unrelated code.
+
+AFTER CHANGES run: npm run typecheck, npm run build, the three unit tests in
+desktop/tests, and pytest in backend. Fix only rename-related breakage.
+Report: files changed, remaining "formpilot" matches and why each remains.

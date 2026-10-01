@@ -17,7 +17,7 @@ import type {
   GeminiTestResult,
   StartSessionOptions,
   WorkflowState,
-} from '../types/formpilot';
+} from '../types/autofiller';
 
 /** Typed surface exposed by the Electron preload script. */
 export interface AutoFillerAPI {

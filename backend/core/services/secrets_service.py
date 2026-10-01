@@ -48,7 +48,13 @@ class SecretsService:
         primary = (Path(__file__).resolve().parent.parent / ".autofiller_secrets").resolve()
         legacy = (Path(__file__).resolve().parent.parent / ".formpilot_secrets").resolve()
         if legacy.exists() and not primary.exists():
-            return legacy
+            try:
+                legacy.rename(primary)
+                os.chmod(primary, 0o600)
+                logging.info(f"Migrated legacy secrets file from {legacy} to {primary}")
+            except OSError as error:
+                logging.warning(f"Could not migrate legacy secrets file: {error}")
+                return legacy
         return primary
 
     def _derive_master_key(self) -> bytes:

@@ -19,3 +19,9 @@ logs/
 .DS_Store
 .idea/
 .vscode/
+
+# AutoFiller & FormPilot tokens and secrets
+.autofiller_token
+.autofiller_secrets
+.formpilot_token
+.formpilot_secrets

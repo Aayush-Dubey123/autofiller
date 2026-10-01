@@ -34,7 +34,7 @@ export function registerIpcHandlers(
   };
 
   // Native document selection dialog.
-  ipcMain.handle('formpilot:select-document', async (): Promise<DocumentSelection> => {
+  ipcMain.handle('autofiller:select-document', async (): Promise<DocumentSelection> => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: 'Select Student Document / Admission Form',
       filters: [
@@ -56,7 +56,7 @@ export function registerIpcHandlers(
   });
 
   // Start an automation session, refusing concurrent runs.
-  ipcMain.handle('formpilot:start-session', async (_event, options: StartSessionOptions) => {
+  ipcMain.handle('autofiller:start-session', async (_event, options: StartSessionOptions) => {
     if (agentController.isSessionRunning()) {
       return { success: false, error: 'A session is already running.' };
     }
@@ -65,7 +65,7 @@ export function registerIpcHandlers(
 
     agentController.startSession(options).catch((error: Error) => {
       console.error('Session execution error:', error);
-      sendToRenderer('formpilot:event', {
+      sendToRenderer('autofiller:event', {
         eventId: `evt_${Date.now()}`,
         timestamp: new Date().toISOString(),
         type: 'TOOL_FAILED',
@@ -78,23 +78,23 @@ export function registerIpcHandlers(
   });
 
   // Interruption controls.
-  ipcMain.handle('formpilot:pause-agent', async () => {
+  ipcMain.handle('autofiller:pause-agent', async () => {
     agentController.pause();
   });
 
-  ipcMain.handle('formpilot:resume-agent', async () => {
+  ipcMain.handle('autofiller:resume-agent', async () => {
     agentController.resume();
   });
 
-  ipcMain.handle('formpilot:takeover-agent', async () => {
+  ipcMain.handle('autofiller:takeover-agent', async () => {
     agentController.takeOver();
   });
 
-  ipcMain.handle('formpilot:stop-agent', async () => {
+  ipcMain.handle('autofiller:stop-agent', async () => {
     agentController.stop();
   });
 
-  ipcMain.handle('formpilot:submit-form', async () => {
+  ipcMain.handle('autofiller:submit-form', async () => {
     try {
       const result = await agentController.submitFormAsOperator();
       return { success: true, message: result.message };
@@ -103,13 +103,13 @@ export function registerIpcHandlers(
     }
   });
 
-  ipcMain.handle('formpilot:answer-clarification', async (_event, { clarificationId, answer }) => {
+  ipcMain.handle('autofiller:answer-clarification', async (_event, { clarificationId, answer }) => {
     const delivered = agentController.answerClarification(clarificationId, answer);
     return { success: delivered };
   });
 
   // Read runtime configuration with a redacted credential preview.
-  ipcMain.handle('formpilot:get-settings', async () => {
+  ipcMain.handle('autofiller:get-settings', async () => {
     const preferences = secretStore.loadPreferences();
     try {
       const remote = await backendClient.getSettings();
@@ -133,7 +133,7 @@ export function registerIpcHandlers(
 
   // Persist settings. The API key is forwarded to the backend for encrypted storage
   // and is never written to the renderer or to a plaintext file here.
-  ipcMain.handle('formpilot:save-settings', async (_event, settings) => {
+  ipcMain.handle('autofiller:save-settings', async (_event, settings) => {
     const preferences = {
       headless: Boolean(settings?.headless ?? false),
       typingDelayMs: Number(settings?.typingDelayMs ?? 25),
@@ -152,7 +152,7 @@ export function registerIpcHandlers(
   });
 
   // Validate a candidate Gemini key without persisting it.
-  ipcMain.handle('formpilot:test-gemini', async (_event, { apiKey, model }) => {
+  ipcMain.handle('autofiller:test-gemini', async (_event, { apiKey, model }) => {
     try {
       return await backendClient.testGemini(apiKey, model);
     } catch (error: any) {
@@ -161,7 +161,7 @@ export function registerIpcHandlers(
   });
 
   // Extract document facts on behalf of the renderer so no direct backend access is needed.
-  ipcMain.handle('formpilot:extract-document', async (_event, payload) => {
+  ipcMain.handle('autofiller:extract-document', async (_event, payload) => {
     try {
       return await backendClient.extractDocument({
         filePath: payload?.filePath,
@@ -174,20 +174,20 @@ export function registerIpcHandlers(
   });
 
   // Report backend reachability for the UI status indicator.
-  ipcMain.handle('formpilot:backend-health', async () => {
+  ipcMain.handle('autofiller:backend-health', async () => {
     return { healthy: await backendClient.health() };
   });
 
   // Stream agent execution events to the renderer.
   agentController.onEvent((event) => {
-    sendToRenderer('formpilot:event', event);
+    sendToRenderer('autofiller:event', event);
   });
 
   agentController.onClarificationRequest((prompt) => {
-    sendToRenderer('formpilot:clarification-request', prompt);
+    sendToRenderer('autofiller:clarification-request', prompt);
   });
 
   agentController.getStateMachine().onTransition((state, previousState) => {
-    sendToRenderer('formpilot:state-change', { state, previousState });
+    sendToRenderer('autofiller:state-change', { state, previousState });
   });
 }

@@ -39,7 +39,13 @@ def _token_file_path() -> Path:
     primary = (Path(__file__).resolve().parent.parent / ".autofiller_token").resolve()
     legacy = (Path(__file__).resolve().parent.parent / ".formpilot_token").resolve()
     if legacy.exists() and not primary.exists():
-        return legacy
+        try:
+            legacy.rename(primary)
+            os.chmod(primary, 0o600)
+            logging.info(f"Migrated legacy token file from {legacy} to {primary}")
+        except OSError as error:
+            logging.warning(f"Could not migrate legacy token file: {error}")
+            return legacy
     return primary
 
 
@@ -57,9 +63,14 @@ def _load_or_create_internal_key() -> str:
     Raises:
         None
     """
-    configured = os.getenv(INTERNAL_KEY_ENV, "").strip() or os.getenv("FORMPILOT_INTERNAL_KEY", "").strip()
+    configured = os.getenv(INTERNAL_KEY_ENV, "").strip()
     if configured:
         return configured
+    legacy_key = os.getenv("FORMPILOT_INTERNAL_KEY", "").strip()
+    if legacy_key:
+        logging.warning("FORMPILOT_INTERNAL_KEY is deprecated; use AUTOFILLER_INTERNAL_KEY instead")
+        return legacy_key
+
     token_path = _token_file_path()
     try:
         if token_path.exists():

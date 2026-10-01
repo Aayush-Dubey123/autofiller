@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "skills": {
+    "backend-engineering": {
+      "source": "magnus919/agent-skills",
+      "sourceType": "github",
+      "skillPath": "backend-engineering/SKILL.md",
+      "computedHash": "c47d1544a0ba68e9fd39925a6ade7c02e394bf5a43041f82da2b4fdf050a10b2"
+    },
+    "impeccable": {
+      "source": "pbakaus/impeccable",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/impeccable/SKILL.md",
+      "computedHash": "932f49c617041a9c82cae40126bcaa1d69fdb66187abfc7283b4fb3e763da1dd"
+    },
+    "postgres-best-practices": {
+      "source": "neondatabase/postgres-skills",
+      "sourceType": "github",
+      "skillPath": "skills/postgres-best-practices/SKILL.md",
+      "computedHash": "316f8f76c582ff3bf9a6c8e4238867dbdbf70735587f40cb634c4d046ff5db42"
+    },
+    "security-best-practices": {
+      "source": "openai/skills",
+      "sourceType": "github",
+      "skillPath": "skills/.curated/security-best-practices/SKILL.md",
+      "computedHash": "0c42fff660b6f7e85add36437edc36976466bb254b7cd9eb38ec67b2ad64a9bf"
+    },
+    "web-design-guidelines": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/web-design-guidelines/SKILL.md",
+      "computedHash": "f3bc47f890f42a44db1007ab390709ec368e4b8c089baee6b0007182236ac474"
+    }
+  }
+}

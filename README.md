@@ -3,6 +3,39 @@
 
 AutoFiller AI is an intelligent Electron desktop application that automates the tedious, repetitive process of filling web-based school registration and admission forms using data extracted directly from user-uploaded documents (PDFs, images, Word docs, etc.).
 
+# idea:
+
+How the extension will work (brief)
+
+One-time setup: you enter your data once into an encrypted profile vault in the extension. You can type it in or upload a document and let Gemini extract it, which reuses what you already built.
+
+Every time you need to fill a form:
+
+Open any website with a form and click the extension icon or press a shortcut.
+A content script scans the page: fields, labels, dropdowns, radios, and multi-step forms.
+A fast rule-based mapper matches fields to your profile. Gemini is called only for fields the rules can't resolve, and it receives field labels only, never your actual values.
+The extension fills the fields locally and highlights them by confidence: green for confident, amber for uncertain, red for unmapped.
+You review and correct, then submit yourself. The extension never submits, and it never touches passwords, OTPs, or card fields.
+
+What carries over from your current project:
+
+The scanner logic, the policy engine (submission guard), the date normalizer, and the key aliases move into a shared core.
+Electron and Playwright are retired from the product and kept only as a test harness.
+FastAPI becomes a small, authenticated, stateless backend used for Gemini calls, so other users don't need their own API key.
+Phases, one per step
+#	Phase	Outcome
+0	Cleanup, rename, monorepo layout	A clean structure, with FormPilot renamed to AutoFiller everywhere
+1	Shared core package	Scanner and policy engine with no Electron or Playwright dependency
+2	Profile vault	Encrypted multi-profile data store
+3	Universal form engine	Works beyond the demo school form: shadow DOM, iframes, custom dropdowns, multi-step forms
+4	Chrome extension shell (MV3)	Popup, side panel, shortcut, and review overlay
+5	Safety layer	Sensitive-field rules and domain controls
+6	Backend v2	Auth, quotas, and stateless Gemini proxy
+7	UI/UX redesign	Design system, onboarding, light and dark themes
+8	Testing	Fixture forms from real sites and an accuracy score
+9	Privacy and compliance	Policy, data deletion, and Web Store requirements
+10	Deploy and publish	Hosted API and Chrome Web Store release
+
 ---
 
 ## 📌 Problem Statement

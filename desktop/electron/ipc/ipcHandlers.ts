@@ -157,8 +157,11 @@ export function registerIpcHandlers(
     }
   });
 
-  // History store handlers
+  // History & document store handlers
   ipcMain.handle('autofiller:history-list', async () => historyStore.listSessions());
+  ipcMain.handle('autofiller:documents-list', async () => []);
+  ipcMain.handle('autofiller:backend-health', async () => backendClient.healthStatus());
+  ipcMain.handle('autofiller:get-engine-status', async () => getEngineStatus());
   ipcMain.handle('autofiller:history-delete', async (_event, id: string) => {
     historyStore.deleteSession(id);
     return { success: true };

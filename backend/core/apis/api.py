@@ -23,8 +23,8 @@ from fastapi.responses import JSONResponse
 from commons.auth import validate_startup_security
 from commons.logger import logger
 from core.apis.routes.session_router import session_router
-from core.apis.routes.settings_router import settings_router
 from core.database.database import close_database, init_database
+from core.services.gemini_service import is_gemini_configured
 
 logging = logger(__name__)
 
@@ -56,6 +56,9 @@ def _allowed_origins() -> list[str]:
     return [origin.strip() for origin in configured.split(",") if origin.strip()]
 
 
+import sys
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -72,6 +75,9 @@ async def lifespan(app: FastAPI):
     """
     logging.info("Executing application startup lifespan")
     validate_startup_security()
+    if not is_gemini_configured():
+        logging.error("GEMINI_API_KEY is missing from backend/.env. Exiting.")
+        sys.exit(1)
     await init_database()
     yield
     logging.info("Executing application shutdown lifespan")
@@ -127,15 +133,15 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(session_router, tags=["Sessions & Form Automation"])
-    app.include_router(settings_router, tags=["Settings & Credentials"])
 
     @app.get("/health", tags=["Health"])
     async def health_check():
         """
         Application health check endpoint.
 
-        Returns the service operational status without requiring authentication so the
-        desktop shell can poll readiness during startup.
+        Returns the service operational status and whether a Gemini key is configured
+        (a boolean only, never the key) without requiring authentication so the desktop
+        shell can poll readiness during startup.
 
         Args:
             None
@@ -143,7 +149,11 @@ def create_app() -> FastAPI:
         Returns:
             dict: Service health status payload.
         """
-        return {"status": "HEALTHY", "service": "autofiller-backend"}
+        return {
+            "status": "HEALTHY",
+            "service": "autofiller-backend",
+            "gemini_configured": is_gemini_configured(),
+        }
 
     @app.get("/mock_school_form.html", include_in_schema=False)
     async def get_mock_school_form():

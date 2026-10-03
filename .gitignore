@@ -59,4 +59,7 @@ pnpm-debug.log*
 /start.ps1
 /verify_security_live.py
 /docs
-/tests
+/tests
+
+# Ignore all markdown documentation files (will push manually later)
+*.md

@@ -15,6 +15,7 @@ from httpx import ASGITransport, AsyncClient
 # A deterministic internal token keeps auth assertions independent of the environment.
 os.environ["AUTOFILLER_INTERNAL_KEY"] = "test-internal-token"
 os.environ["FORMPILOT_INTERNAL_KEY"] = "test-internal-token"
+os.environ.setdefault("GEMINI_API_KEY", "test-gemini-key")
 os.environ.pop("AUTOFILLER_ALLOW_ANONYMOUS", None)
 os.environ.pop("FORMPILOT_ALLOW_ANONYMOUS", None)
 
@@ -143,17 +144,17 @@ def test_startup_security_rejects_anonymous_flag():
 
 
 @pytest.mark.asyncio
-async def test_settings_routes_require_authentication(app_with_fake_db):
-    """Verify unauthenticated access to configuration endpoints is rejected."""
+async def test_settings_routes_are_removed(app_with_fake_db):
+    """Verify the credential/settings endpoints no longer exist."""
     transport = ASGITransport(app=app_with_fake_db)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        assert (await client.get("/v1/settings")).status_code == 401
-        assert (
-            await client.post("/v1/settings/update", json={"gemini_api_key": "x"})
-        ).status_code == 401
-        assert (
-            await client.post("/v1/settings/test-gemini", json={"api_key": "x"})
-        ).status_code == 401
+        for method, path in (
+            ("GET", "/v1/settings"),
+            ("POST", "/v1/settings/update"),
+            ("POST", "/v1/settings/test-gemini"),
+        ):
+            response = await client.request(method, path, headers=AUTH_HEADERS)
+            assert response.status_code in (404, 405), (method, path, response.status_code)
 
 
 @pytest.mark.asyncio
@@ -179,6 +180,18 @@ async def test_health_endpoint_is_public(app_with_fake_db):
         response = await client.get("/health")
         assert response.status_code == 200
         assert response.json()["status"] == "HEALTHY"
+
+
+@pytest.mark.asyncio
+async def test_health_reports_gemini_configured_as_boolean_only(app_with_fake_db):
+    """Verify /health exposes a boolean for key presence and never the key itself."""
+    transport = ASGITransport(app=app_with_fake_db)
+    for key, expected in ("secret-test-key-123", True), ("", False):
+        with patch.dict(os.environ, {"GEMINI_API_KEY": key}):
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                payload = (await client.get("/health")).json()
+        assert payload["gemini_configured"] is expected
+        assert "secret-test-key-123" not in json.dumps(payload)
 
 
 @pytest.mark.asyncio
@@ -360,7 +373,7 @@ async def test_gemini_service_requires_configuration():
         ],
     )
 
-    with patch.object(service.secrets_service, "get_api_key", return_value=""):
+    with patch.dict(os.environ, {"GEMINI_API_KEY": ""}):
         with pytest.raises(RuntimeError, match="not configured"):
             await service.map_form_fields(form_snapshot=snapshot, facts=[])
 

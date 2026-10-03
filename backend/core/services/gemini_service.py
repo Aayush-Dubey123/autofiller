@@ -18,12 +18,35 @@ from core.models.session_model import (
     FieldMapping,
     FormSnapshot,
 )
-from core.services.secrets_service import get_secrets_service
 
 logging = logger(__name__)
 
 # Single canonical default. gemini-3.5-flash is stable and supported.
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+
+# Developer configuration read from backend/.env (never a user setting).
+GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
+GEMINI_MODEL_ENV = "GEMINI_MODEL"
+
+
+def get_gemini_api_key() -> str:
+    """
+    Read the Gemini API key from the environment (backend/.env).
+
+    Returns:
+        str: The trimmed API key, or an empty string when unset.
+    """
+    return os.getenv(GEMINI_API_KEY_ENV, "").strip()
+
+
+def is_gemini_configured() -> bool:
+    """
+    Report whether a Gemini API key is configured, without exposing it.
+
+    Returns:
+        bool: True when GEMINI_API_KEY is set to a non-empty value.
+    """
+    return bool(get_gemini_api_key())
 
 # Fallback models if default model is rate limited (429) or unavailable.
 FALLBACK_GEMINI_MODELS = [
@@ -111,19 +134,11 @@ class GeminiService:
 
     def __init__(self) -> None:
         """
-        Initialize the Gemini client from securely stored credentials.
-
-        Reads the API key through the encrypted secrets service rather than only from
-        plaintext environment configuration.
+        Initialize the Gemini client from GEMINI_API_KEY / GEMINI_MODEL in backend/.env.
         """
         logging.info("Executing GeminiService.__init__")
-        self.secrets_service = get_secrets_service()
-        self.api_key = self.secrets_service.get_api_key()
-        self.model = (
-            os.getenv("GEMINI_MODEL", "").strip()
-            or self.secrets_service.get_model()
-            or DEFAULT_GEMINI_MODEL
-        )
+        self.api_key = get_gemini_api_key()
+        self.model = os.getenv(GEMINI_MODEL_ENV, "").strip() or DEFAULT_GEMINI_MODEL
         self.client = None
         if self.api_key:
             self._build_client(self.api_key)
@@ -152,55 +167,12 @@ class GeminiService:
             self.client = None
             logging.error(f"Could not initialize Google GenAI client: {error}")
 
-    def update_credentials(
-        self, api_key: str, model: str = DEFAULT_GEMINI_MODEL
-    ) -> None:
-        """
-        Update active Gemini credentials and reinitialize the client.
-
-        Args:
-            api_key (str): Google AI Studio API key.
-            model (str): Gemini model identifier.
-
-        Returns:
-            None
-
-        Raises:
-            Exception: If client instantiation fails.
-        """
-        logging.info("Executing GeminiService.update_credentials")
-        self.api_key = api_key.strip()
-        self.model = model.strip() or DEFAULT_GEMINI_MODEL
-        if not self.api_key:
-            self.client = None
-            return
-        self._build_client(self.api_key)
-        if self.client is None:
-            raise RuntimeError(
-                "Failed to instantiate Gemini client with supplied credentials"
-            )
-
-    def update_model(self, model: str) -> None:
-        """
-        Update the active Gemini model identifier without touching credentials.
-
-        Args:
-            model (str): Gemini model identifier.
-
-        Returns:
-            None
-
-        Raises:
-            None
-        """
-        logging.info("Executing GeminiService.update_model")
-        self.model = model.strip() or DEFAULT_GEMINI_MODEL
-
     def _ensure_client(self) -> None:
-        """Attempt to initialize the client from the secrets store if not yet ready."""
+        """Attempt to initialize the client from the environment if not yet ready."""
         if self.client is None:
-            api_key = self.secrets_service.get_api_key()
+            api_key = get_gemini_api_key()
             if api_key:
+                self.api_key = api_key
                 self._build_client(api_key)
 
     async def _generate_async(
@@ -347,7 +319,7 @@ class GeminiService:
         if self.client is None:
             raise RuntimeError(
                 "Gemini API key is required to extract facts from images. "
-                "Please configure your Google Gemini API key in Settings."
+                "Set GEMINI_API_KEY in backend/.env and restart the backend."
             )
 
         from google.genai import types
@@ -454,7 +426,7 @@ Respond ONLY with valid JSON."""
         if self.client is None:
             raise RuntimeError(
                 "Gemini API key is required to extract facts from text. "
-                "Please configure your Google Gemini API key in Settings."
+                "Set GEMINI_API_KEY in backend/.env and restart the backend."
             )
 
         from google.genai import types
@@ -537,73 +509,6 @@ Respond ONLY with valid JSON."""
         )
         return facts
 
-    async def test_connection(
-        self, api_key: str, model: str = DEFAULT_GEMINI_MODEL
-    ) -> dict:
-        """
-        Validate a candidate Gemini API key without persisting it.
-
-        Args:
-            api_key (str): API key to validate.
-            model (str): Gemini model identifier.
-
-        Returns:
-            dict: Verification status with latency and model info.
-
-        Raises:
-            None
-        """
-        import time
-
-        logging.info("Executing GeminiService.test_connection")
-        clean_key = (api_key or "").strip()
-        clean_model = (model or DEFAULT_GEMINI_MODEL).strip()
-        if not clean_key:
-            return {"valid": False, "message": "API key cannot be empty"}
-
-        try:
-            from google import genai
-
-            test_client = genai.Client(api_key=clean_key)
-
-            def _call() -> str:
-                """Perform the blocking validation call inside the worker thread."""
-                response = test_client.models.generate_content(
-                    model=clean_model,
-                    contents="Ping. Respond with 'OK'.",
-                )
-                return (response.text or "").strip()
-
-            start_time = time.time()
-            text = await asyncio.wait_for(
-                asyncio.to_thread(_call),
-                timeout=GEMINI_TIMEOUT_SECONDS,
-            )
-            elapsed_ms = int((time.time() - start_time) * 1000)
-            return {
-                "valid": True,
-                "message": f"Successfully connected to {clean_model}",
-                "latency_ms": elapsed_ms,
-                "model": clean_model,
-                "sample_response": text,
-            }
-        except asyncio.TimeoutError:
-            logging.warning(
-                f"Gemini test connection timed out after {GEMINI_TIMEOUT_SECONDS}s"
-            )
-            return {
-                "valid": False,
-                "message": f"Connection timed out after {GEMINI_TIMEOUT_SECONDS:.0f}s",
-                "model": clean_model,
-            }
-        except Exception as error:
-            logging.warning(f"Gemini test connection failed: {error}")
-            return {
-                "valid": False,
-                "message": "Connection failed. Verify the API key and model name.",
-                "model": clean_model,
-            }
-
     async def map_form_fields(
         self,
         *,
@@ -628,14 +533,11 @@ Respond ONLY with valid JSON."""
             f"Executing GeminiService.map_form_fields for "
             f"{len(form_snapshot.fields)} fields and {len(facts)} facts"
         )
-        if self.client is None:
-            self.api_key = self.secrets_service.get_api_key()
-            if self.api_key:
-                self._build_client(self.api_key)
+        self._ensure_client()
         if self.client is None:
             raise RuntimeError(
                 "Gemini API client is not configured. A valid Gemini API key is required; "
-                "configure it in Settings before running a session."
+                "set GEMINI_API_KEY in backend/.env and restart the backend."
             )
 
         try:

@@ -82,21 +82,26 @@ export type WorkflowState =
   | 'COMPLETED'
   | 'ERROR';
 
-/** Runtime configuration surfaced to the settings UI. */
-export interface AutoFillerSettings {
-  headless: boolean;
-  typingDelayMs: number;
-  geminiModel: string;
-  apiKeyConfigured: boolean;
-  maskedKey: string;
+/** Backend readiness as reported by the unauthenticated /health endpoint. */
+export interface BackendHealth {
+  healthy: boolean;
+  /** Whether GEMINI_API_KEY is configured in backend/.env. Boolean only, never the key. */
+  geminiConfigured: boolean;
 }
-export type FormPilotSettings = AutoFillerSettings;
+
+/** Engine operational status surfaced to the renderer. */
+export interface EngineStatus {
+  ready: boolean;
+  errorDetail?: string;
+}
 
 /** Options accepted when starting an automation session. */
 export interface StartSessionOptions {
   documentPath?: string;
   documentText?: string;
   documentName?: string;
+  /** Operator-reviewed facts. When present the agent uses them directly. */
+  facts?: ExtractedFact[];
   targetUrl: string;
 }
 
@@ -105,15 +110,31 @@ export interface DocumentSelection {
   canceled: boolean;
   filePath?: string;
   fileName?: string;
+  /** Real file size in bytes. */
+  fileSize?: number;
+  error?: string;
 }
 
-/** Result of a Gemini credential test. */
-export interface GeminiTestResult {
-  valid: boolean;
-  message: string;
-  latency_ms?: number;
-  model?: string;
-  sample_response?: string;
+/** A past automation session persisted in the userData JSON store. */
+export interface SessionRecord {
+  id: string;
+  startedAt: string;
+  finishedAt?: string;
+  documentName: string;
+  targetUrl: string;
+  status: WorkflowState | 'INTERRUPTED';
+  fieldsFilled: number;
+  error?: string;
+}
+
+/** A processed document and its extracted facts, persisted in the userData JSON store. */
+export interface DocumentRecord {
+  id: string;
+  name: string;
+  size: number;
+  path: string;
+  extractedAt: string;
+  facts: ExtractedFact[];
 }
 
 /** Extracted document facts response. */

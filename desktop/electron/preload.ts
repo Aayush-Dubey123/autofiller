@@ -11,18 +11,20 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 import type {
   AgentEventPayload,
-  AutoFillerSettings,
+  BackendHealth,
   ClarificationPromptPayload,
   DocumentExtractResult,
+  DocumentRecord,
   DocumentSelection,
-  FormPilotSettings,
-  GeminiTestResult,
+  EngineStatus,
+  SessionRecord,
   StartSessionOptions,
   WorkflowState,
 } from './shared/types';
 
 /** Typed surface available to the renderer as `window.autofiller`. */
 export interface AutoFillerAPI {
+  isElectron: boolean;
   selectDocument: () => Promise<DocumentSelection>;
   startSession: (options: StartSessionOptions) => Promise<{ success: boolean; error?: string }>;
   pauseAgent: () => Promise<void>;
@@ -36,25 +38,23 @@ export interface AutoFillerAPI {
     rawText?: string;
     documentName?: string;
   }) => Promise<DocumentExtractResult | { error: string }>;
-  getSettings: () => Promise<AutoFillerSettings>;
-  saveSettings: (settings: {
-    geminiApiKey?: string;
-    geminiModel?: string;
-    headless?: boolean;
-    typingDelayMs?: number;
-  }) => Promise<{ success: boolean; apiKeyConfigured?: boolean; maskedKey?: string; error?: string }>;
-  testGemini: (apiKey: string, model?: string) => Promise<GeminiTestResult>;
-  backendHealth: () => Promise<{ healthy: boolean }>;
+  listSessions: () => Promise<SessionRecord[]>;
+  listDocuments: () => Promise<DocumentRecord[]>;
+  backendHealth: () => Promise<BackendHealth>;
+  getEngineStatus: () => Promise<EngineStatus>;
+  appVersion: () => Promise<string>;
   onAgentEvent: (callback: (event: AgentEventPayload) => void) => () => void;
   onClarificationRequest: (callback: (prompt: ClarificationPromptPayload) => void) => () => void;
   onStateChange: (
     callback: (update: { state: WorkflowState; previousState: WorkflowState }) => void
   ) => () => void;
+  onEngineError: (callback: (status: EngineStatus) => void) => () => void;
 }
 
 export type FormPilotAPI = AutoFillerAPI;
 
 const api: AutoFillerAPI = {
+  isElectron: true,
   selectDocument: () => ipcRenderer.invoke('autofiller:select-document'),
   startSession: (options) => ipcRenderer.invoke('autofiller:start-session', options),
   pauseAgent: () => ipcRenderer.invoke('autofiller:pause-agent'),
@@ -65,10 +65,11 @@ const api: AutoFillerAPI = {
   answerClarification: (clarificationId, answer) =>
     ipcRenderer.invoke('autofiller:answer-clarification', { clarificationId, answer }),
   extractDocument: (payload) => ipcRenderer.invoke('autofiller:extract-document', payload),
-  getSettings: () => ipcRenderer.invoke('autofiller:get-settings'),
-  saveSettings: (settings) => ipcRenderer.invoke('autofiller:save-settings', settings),
-  testGemini: (apiKey, model) => ipcRenderer.invoke('autofiller:test-gemini', { apiKey, model }),
+  listSessions: () => ipcRenderer.invoke('autofiller:history-list'),
+  listDocuments: () => ipcRenderer.invoke('autofiller:documents-list'),
   backendHealth: () => ipcRenderer.invoke('autofiller:backend-health'),
+  getEngineStatus: () => ipcRenderer.invoke('autofiller:get-engine-status'),
+  appVersion: () => ipcRenderer.invoke('autofiller:app-version'),
 
   onAgentEvent: (callback) => {
     const subscription = (_event: unknown, payload: AgentEventPayload) => callback(payload);
@@ -89,6 +90,12 @@ const api: AutoFillerAPI = {
     ) => callback(payload);
     ipcRenderer.on('autofiller:state-change', subscription);
     return () => ipcRenderer.removeListener('autofiller:state-change', subscription);
+  },
+
+  onEngineError: (callback) => {
+    const subscription = (_event: unknown, payload: EngineStatus) => callback(payload);
+    ipcRenderer.on('autofiller:engine-error', subscription);
+    return () => ipcRenderer.removeListener('autofiller:engine-error', subscription);
   },
 };
 

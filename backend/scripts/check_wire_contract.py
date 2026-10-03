@@ -71,6 +71,20 @@ def main() -> None:
     )
     check("clarification: empty string", lambda: clarification("snake", ""))
     check("clarification: null", lambda: clarification("snake", None))
+    check_health_contract()
+
+
+def check_health_contract() -> None:
+    """Verify /health returns the shape the desktop shell reads (no secrets)."""
+    from fastapi.testclient import TestClient
+
+    from core.apis.api import create_app
+
+    payload = TestClient(create_app()).get("/health").json()
+    ok = payload.get("status") == "HEALTHY" and isinstance(
+        payload.get("gemini_configured"), bool
+    )
+    print(f"{'health: status + gemini_configured':34} -> {'OK' if ok else 'REJECTED'}")
 
 
 if __name__ == "__main__":

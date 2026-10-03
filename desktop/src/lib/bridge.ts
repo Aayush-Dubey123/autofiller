@@ -8,19 +8,21 @@
 
 import type {
   AgentEventPayload,
-  AutoFillerSettings,
+  BackendHealth,
   ClarificationPromptPayload,
   DocumentExtractResult,
+  DocumentRecord,
   DocumentSelection,
+  EngineStatus,
   ExtractedFact,
-  FormPilotSettings,
-  GeminiTestResult,
+  SessionRecord,
   StartSessionOptions,
   WorkflowState,
 } from '../types/autofiller';
 
 /** Typed surface exposed by the Electron preload script. */
 export interface AutoFillerAPI {
+  isElectron: boolean;
   selectDocument: () => Promise<DocumentSelection>;
   startSession: (options: StartSessionOptions) => Promise<{ success: boolean; error?: string }>;
   pauseAgent: () => Promise<void>;
@@ -34,20 +36,17 @@ export interface AutoFillerAPI {
     rawText?: string;
     documentName?: string;
   }) => Promise<DocumentExtractResult | { error: string }>;
-  getSettings: () => Promise<AutoFillerSettings>;
-  saveSettings: (settings: {
-    geminiApiKey?: string;
-    geminiModel?: string;
-    headless?: boolean;
-    typingDelayMs?: number;
-  }) => Promise<{ success: boolean; apiKeyConfigured?: boolean; maskedKey?: string; error?: string }>;
-  testGemini: (apiKey: string, model?: string) => Promise<GeminiTestResult>;
-  backendHealth: () => Promise<{ healthy: boolean }>;
+  listSessions: () => Promise<SessionRecord[]>;
+  listDocuments: () => Promise<DocumentRecord[]>;
+  backendHealth: () => Promise<BackendHealth>;
+  getEngineStatus: () => Promise<EngineStatus>;
+  appVersion: () => Promise<string>;
   onAgentEvent: (callback: (event: AgentEventPayload) => void) => () => void;
   onClarificationRequest: (callback: (prompt: ClarificationPromptPayload) => void) => () => void;
   onStateChange: (
     callback: (update: { state: WorkflowState; previousState: WorkflowState }) => void
   ) => () => void;
+  onEngineError: (callback: (status: EngineStatus) => void) => () => void;
 }
 
 export type FormPilotAPI = AutoFillerAPI;
@@ -60,7 +59,8 @@ declare global {
 }
 
 /** True when the app is running inside Electron with the preload bridge available. */
-export const hasElectronBridge = typeof window !== 'undefined' && Boolean(window.autofiller || window.formpilot);
+export const hasElectronBridge =
+  typeof window !== 'undefined' && Boolean(window.autofiller || window.formpilot);
 
 /**
  * Fallback implementation used when the UI is opened in a plain browser for design work.
@@ -69,38 +69,46 @@ export const hasElectronBridge = typeof window !== 'undefined' && Boolean(window
  * depend on mock behaviour leaking into the packaged app.
  */
 const browserFallback: AutoFillerAPI = {
-  selectDocument: async (): Promise<DocumentSelection> => ({ canceled: true }),
+  isElectron: false,
+  selectDocument: async (): Promise<DocumentSelection> => ({
+    canceled: false,
+    error: 'Desktop bridge unavailable. Run in desktop app to start session.',
+  }),
   startSession: async (): Promise<{ success: boolean; error?: string }> => ({
     success: false,
-    error: 'Desktop bridge unavailable. Run the app through Electron.',
+    error: 'Desktop bridge unavailable. Run in desktop app to start session.',
   }),
   pauseAgent: async () => undefined,
   resumeAgent: async () => undefined,
   takeOver: async () => undefined,
   stopAgent: async () => undefined,
-  submitForm: async () => ({ success: false, error: 'Desktop bridge unavailable.' }),
+  submitForm: async () => ({ success: false, error: 'Desktop bridge unavailable' }),
   answerClarification: async () => ({ success: false }),
-  extractDocument: async () => ({ error: 'Desktop bridge unavailable.' }),
-  getSettings: async (): Promise<AutoFillerSettings> => ({
-    headless: false,
-    typingDelayMs: 25,
-    geminiModel: 'gemini-3.6-flash',
-    apiKeyConfigured: false,
-    maskedKey: '',
-  }),
-  saveSettings: async () => ({ success: false, error: 'Desktop bridge unavailable.' }),
-  testGemini: async (): Promise<GeminiTestResult> => ({
-    valid: false,
-    message: 'Desktop bridge unavailable.',
-  }),
-  backendHealth: async () => ({ healthy: false }),
+  extractDocument: async () => ({ error: 'Desktop bridge unavailable' }),
+  listSessions: async () => [],
+  listDocuments: async () => [],
+  backendHealth: async () => ({ healthy: false, geminiConfigured: false }),
+  getEngineStatus: async (): Promise<EngineStatus> => {
+    const isElectronUA = typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron');
+    if (isElectronUA) {
+      return {
+        ready: false,
+        errorDetail: 'Fatal preload bridge error: window.autofiller is undefined inside Electron shell.',
+      };
+    }
+    return { ready: true };
+  },
+  appVersion: async () => '1.0.0 (Browser Preview)',
   onAgentEvent: () => () => undefined,
   onClarificationRequest: () => () => undefined,
   onStateChange: () => () => undefined,
+  onEngineError: () => () => undefined,
 };
 
 /** Active bridge implementation for the current runtime. */
-export const bridge: AutoFillerAPI = (typeof window !== 'undefined' ? (window.autofiller ?? window.formpilot) : undefined) ?? browserFallback;
+export const bridge: AutoFillerAPI =
+  (typeof window !== 'undefined' ? (window.autofiller ?? window.formpilot) : undefined) ??
+  browserFallback;
 
 /**
  * Extract document facts through the desktop bridge.

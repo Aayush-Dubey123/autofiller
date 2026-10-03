@@ -163,15 +163,6 @@ function makeStubBackend() {
     async appendEventSafe() {
       return { success: true };
     },
-    async getSettings() {
-      return { api_key_configured: true, masked_key: 'AIza****wxyz', model: 'gemini-3.6-flash' };
-    },
-    async updateSettings() {
-      return { success: true };
-    },
-    async testGemini() {
-      return { valid: true };
-    },
     getBaseUrl() {
       return TARGET_URL;
     },
@@ -187,8 +178,7 @@ async function runLiveDemo() {
   const backend = makeStubBackend();
   const controller = new AgentController(backend);
 
-  // Force VISIBLE browser launch so the user can see everything on screen
-  controller.updateSettings({ headless: false, typingDelayMs: 40 });
+  // The browser is always launched visibly so the user can see everything on screen.
 
   controller.onEvent((event) => {
     const timestamp = new Date(event.timestamp).toLocaleTimeString();

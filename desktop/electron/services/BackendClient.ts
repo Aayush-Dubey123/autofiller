@@ -6,11 +6,11 @@
  */
 
 import {
+  BackendHealth,
   DocumentExtractResult,
   ExtractedFact,
   FormMapResult,
   FormSnapshot,
-  GeminiTestResult,
 } from '../shared/types';
 
 /**
@@ -168,13 +168,25 @@ export class BackendClient {
    * @returns True when the backend reports a healthy status.
    */
   public async health(): Promise<boolean> {
+    return (await this.healthStatus()).healthy;
+  }
+
+  /**
+   * Read backend readiness and whether a Gemini key is configured (boolean only).
+   *
+   * @returns Health summary; unhealthy with geminiConfigured=false when unreachable.
+   */
+  public async healthStatus(): Promise<BackendHealth> {
     try {
       const response = await fetch(`${this.baseUrl}/health`);
-      if (!response.ok) return false;
-      const payload = (await response.json()) as { status?: string };
-      return payload.status === 'HEALTHY';
+      if (!response.ok) return { healthy: false, geminiConfigured: false };
+      const payload = (await response.json()) as { status?: string; gemini_configured?: boolean };
+      return {
+        healthy: payload.status === 'HEALTHY',
+        geminiConfigured: payload.gemini_configured === true,
+      };
     } catch {
-      return false;
+      return { healthy: false, geminiConfigured: false };
     }
   }
 
@@ -322,47 +334,5 @@ export class BackendClient {
       `/v1/sessions/${sessionId}/events`,
       { method: 'POST', body: JSON.stringify({ events: safeEvents, verifications: safeVerifications }) }
     );
-  }
-
-  /**
-   * Read the current runtime configuration.
-   *
-   * @returns Masked configuration summary.
-   */
-  public async getSettings(): Promise<{ api_key_configured: boolean; masked_key: string; model: string }> {
-    return this.request<{ api_key_configured: boolean; masked_key: string; model: string }>(
-      '/v1/settings'
-    );
-  }
-
-  /**
-   * Persist updated runtime configuration.
-   *
-   * @param apiKey Optional replacement Gemini API key.
-   * @param model Optional replacement model identifier.
-   * @returns Updated configuration summary.
-   */
-  public async updateSettings(
-    apiKey?: string,
-    model?: string
-  ): Promise<{ success: boolean; model: string; api_key_configured: boolean; masked_key: string }> {
-    return this.request('/v1/settings/update', {
-      method: 'POST',
-      body: JSON.stringify({ gemini_api_key: apiKey, gemini_model: model }),
-    });
-  }
-
-  /**
-   * Validate a candidate Gemini API key without persisting it.
-   *
-   * @param apiKey Candidate API key.
-   * @param model Candidate model identifier.
-   * @returns Validation outcome.
-   */
-  public async testGemini(apiKey: string, model?: string): Promise<GeminiTestResult> {
-    return this.request<GeminiTestResult>('/v1/settings/test-gemini', {
-      method: 'POST',
-      body: JSON.stringify({ api_key: apiKey, model }),
-    });
   }
 }

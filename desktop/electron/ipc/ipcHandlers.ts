@@ -6,18 +6,32 @@
  * Node capability.
  */
 
-import { BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import fs from 'fs';
 import path from 'path';
 
 import { AgentController } from '../agent/AgentController';
 import { BackendClient } from '../services/BackendClient';
-import { SecretStore } from '../services/SecretStore';
-import { DocumentSelection, StartSessionOptions } from '../shared/types';
+import { HistoryStore } from '../services/HistoryStore';
+import { DocumentSelection, EngineStatus, StartSessionOptions } from '../shared/types';
+
+/** Return an error message when the URL is not a usable http(s) URL, otherwise null. */
+function validateTargetUrl(value: unknown): string | null {
+  try {
+    const url = new URL(String(value ?? '').trim());
+    return url.protocol === 'http:' || url.protocol === 'https:'
+      ? null
+      : 'Target URL must start with http:// or https://';
+  } catch {
+    return 'Target URL is not a valid URL';
+  }
+}
 
 export function registerIpcHandlers(
   mainWindow: BrowserWindow,
   agentController: AgentController,
-  secretStore: SecretStore
+  historyStore: HistoryStore,
+  getEngineStatus: () => EngineStatus = () => ({ ready: true })
 ): void {
   const backendClient: BackendClient = agentController.getBackendClient();
 
@@ -33,35 +47,51 @@ export function registerIpcHandlers(
     }
   };
 
-  // Native document selection dialog.
+  // Native document selection dialog. Returns the real file name and size.
   ipcMain.handle('autofiller:select-document', async (): Promise<DocumentSelection> => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: 'Select Student Document / Admission Form',
-      filters: [
-        { name: 'Documents & Images', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'txt'] },
-        { name: 'Image Files', extensions: ['png', 'jpg', 'jpeg', 'webp'] },
-        { name: 'PDF Documents', extensions: ['pdf'] },
-        { name: 'Text Files', extensions: ['txt'] },
-        { name: 'All Files', extensions: ['*'] },
-      ],
-      properties: ['openFile'],
-    });
+    try {
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title: 'Select Student Document / Admission Form',
+        filters: [
+          { name: 'Documents & Images', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'txt'] },
+          { name: 'Image Files', extensions: ['png', 'jpg', 'jpeg', 'webp'] },
+          { name: 'PDF Documents', extensions: ['pdf'] },
+          { name: 'Text Files', extensions: ['txt'] },
+          { name: 'All Files', extensions: ['*'] },
+        ],
+        properties: ['openFile'],
+      });
 
-    if (result.canceled || result.filePaths.length === 0) {
-      return { canceled: true };
+      if (result.canceled || result.filePaths.length === 0) {
+        return { canceled: true };
+      }
+
+      const filePath = result.filePaths[0];
+      return {
+        canceled: false,
+        filePath,
+        fileName: path.basename(filePath),
+        fileSize: fs.statSync(filePath).size,
+      };
+    } catch (error: any) {
+      return { canceled: false, error: error?.message || 'Could not open the selected file.' };
     }
-
-    const filePath = result.filePaths[0];
-    return { canceled: false, filePath, fileName: path.basename(filePath) };
   });
 
-  // Start an automation session, refusing concurrent runs.
+  // Start an automation session, refusing concurrent runs and invalid input.
   ipcMain.handle('autofiller:start-session', async (_event, options: StartSessionOptions) => {
     if (agentController.isSessionRunning()) {
       return { success: false, error: 'A session is already running.' };
     }
+    const urlError = validateTargetUrl(options?.targetUrl);
+    if (urlError) {
+      return { success: false, error: urlError };
+    }
 
-    agentController.updateSettings(secretStore.loadPreferences());
+    historyStore.beginSession({
+      documentName: options.documentName || 'Untitled document',
+      targetUrl: options.targetUrl,
+    });
 
     agentController.startSession(options).catch((error: Error) => {
       console.error('Session execution error:', error);
@@ -108,78 +138,48 @@ export function registerIpcHandlers(
     return { success: delivered };
   });
 
-  // Read runtime configuration with a redacted credential preview.
-  ipcMain.handle('autofiller:get-settings', async () => {
-    const preferences = secretStore.loadPreferences();
-    try {
-      const remote = await backendClient.getSettings();
-      return {
-        headless: preferences.headless,
-        typingDelayMs: preferences.typingDelayMs,
-        geminiModel: remote.model || preferences.geminiModel,
-        apiKeyConfigured: remote.api_key_configured,
-        maskedKey: remote.masked_key,
-      };
-    } catch {
-      return {
-        headless: preferences.headless,
-        typingDelayMs: preferences.typingDelayMs,
-        geminiModel: preferences.geminiModel,
-        apiKeyConfigured: false,
-        maskedKey: '',
-      };
-    }
-  });
-
-  // Persist settings. The API key is forwarded to the backend for encrypted storage
-  // and is never written to the renderer or to a plaintext file here.
-  ipcMain.handle('autofiller:save-settings', async (_event, settings) => {
-    const preferences = {
-      headless: Boolean(settings?.headless ?? false),
-      typingDelayMs: Number(settings?.typingDelayMs ?? 25),
-      geminiModel: String(settings?.geminiModel ?? 'gemini-3.6-flash'),
-    };
-    secretStore.savePreferences(preferences);
-    agentController.updateSettings(preferences);
-
-    const apiKey = typeof settings?.geminiApiKey === 'string' ? settings.geminiApiKey.trim() : '';
-    try {
-      const result = await backendClient.updateSettings(apiKey || undefined, preferences.geminiModel);
-      return { success: true, apiKeyConfigured: result.api_key_configured, maskedKey: result.masked_key };
-    } catch (error: any) {
-      return { success: false, error: error?.message || 'Failed to update settings.' };
-    }
-  });
-
-  // Validate a candidate Gemini key without persisting it.
-  ipcMain.handle('autofiller:test-gemini', async (_event, { apiKey, model }) => {
-    try {
-      return await backendClient.testGemini(apiKey, model);
-    } catch (error: any) {
-      return { valid: false, message: error?.message || 'Backend unreachable.' };
-    }
-  });
-
   // Extract document facts on behalf of the renderer so no direct backend access is needed.
+  // Successful file extractions are remembered so they can be reused from the Documents view.
   ipcMain.handle('autofiller:extract-document', async (_event, payload) => {
     try {
-      return await backendClient.extractDocument({
+      const result = await backendClient.extractDocument({
         filePath: payload?.filePath,
         rawText: payload?.rawText,
         documentName: payload?.documentName,
       });
+      if (payload?.filePath && result.facts?.length > 0) {
+        let size = 0;
+        try {
+          size = fs.statSync(payload.filePath).size;
+        } catch {
+          // The file may have moved after extraction; the size is informational only.
+        }
+        historyStore.upsertDocument({
+          name: payload.documentName || path.basename(payload.filePath),
+          size,
+          path: payload.filePath,
+          facts: result.facts,
+        });
+      }
+      return result;
     } catch (error: any) {
       return { error: error?.message || 'Failed to extract document facts.' };
     }
   });
 
-  // Report backend reachability for the UI status indicator.
-  ipcMain.handle('autofiller:backend-health', async () => {
-    return { healthy: await backendClient.health() };
-  });
+  // Read-only views of the persisted JSON store.
+  ipcMain.handle('autofiller:history-list', async () => historyStore.listSessions());
+  ipcMain.handle('autofiller:documents-list', async () => historyStore.listDocuments());
 
-  // Stream agent execution events to the renderer.
+  // Backend reachability and Gemini key presence (boolean only) for status indicators.
+  ipcMain.handle('autofiller:backend-health', async () => backendClient.healthStatus());
+  ipcMain.handle('autofiller:get-engine-status', async () => getEngineStatus());
+
+  ipcMain.handle('autofiller:app-version', async () => app.getVersion());
+
+  // Stream agent execution events to the renderer and into the session history.
   agentController.onEvent((event) => {
+    historyStore.noteEvent(event);
     sendToRenderer('autofiller:event', event);
   });
 
@@ -188,6 +188,7 @@ export function registerIpcHandlers(
   });
 
   agentController.getStateMachine().onTransition((state, previousState) => {
+    historyStore.noteState(state);
     sendToRenderer('autofiller:state-change', { state, previousState });
   });
 }

@@ -587,39 +587,64 @@ Work will be done according to the given below phases . for support mandatory ch
 
 make sure that work will be done in phase wise manner and each phase will have clear outcome as given and as per  folder structure above . 
 
-phase 1 TASK: Rename every "FormPilot / formpilot / FORMPILOT" reference to AutoFiller
-in this repo. Work on the current branch . Behaviour must not
-change, except for the migration described below.
+---
 
-MAPPING
-- FormPilot (display text, comments)  -> AutoFiller
-- FormPilotSettings -> AutoFillerSettings ; FormPilotAPI -> AutoFillerAPI
-- window.formpilot -> window.autofiller
-- IPC channels "formpilot:*" -> "autofiller:*" (preload.ts, ipcHandlers.ts,
-  bridge.ts, main.ts and any tests must all change together; no channel left
-  with the old prefix)
-- env vars FORMPILOT_INTERNAL_KEY -> AUTOFILLER_INTERNAL_KEY,
-  FORMPILOT_ALLOW_ANONYMOUS -> AUTOFILLER_ALLOW_ANONYMOUS
-- files .formpilot_token -> .autofiller_token ; .formpilot_secrets ->
-  .autofiller_secrets
-- git mv desktop/src/types/formpilot.ts desktop/src/types/autofiller.ts and
-  fix its imports
+## 10. Phase 2: Stabilize and Simplify (started 2026-10-03)
 
-BACKWARD COMPATIBILITY (important)
-- Backend: if AUTOFILLER_INTERNAL_KEY is unset, fall back to
-  FORMPILOT_INTERNAL_KEY, and log a deprecation warning. Do NOT fall back for
-  ALLOW_ANONYMOUS (that flag must keep being refused at startup under both names).
-- Secrets/token files: if the old file exists and the new one does not, move
-  it to the new name once at startup (preserve chmod 600 / contents). Never
-  log secret contents.
+### 10.1 Decisions
+- Personal edition first. Chrome extension and public deployment come after the
+  existing app works well and the code is efficient.
+- No further renaming. The FormPilot -> AutoFiller rename is applied (IPC channels,
+  env vars, types); legacy fallbacks remain and are not worth more effort.
+- The Gemini key is developer configuration (`backend/.env`), never a user setting.
 
-SECURITY
-- Update .gitignore so BOTH old and new token/secret filenames are ignored.
+### 10.2 Verified state before this phase
+- Rename applied; typecheck, build, policy (14), tool registry (6), scanner,
+  e2e (7), wire contract (7), and pytest (23) reported passing.
+- verify_security_live.py: 10/10 checks passed.
+- Electron token lookup tries `.autofiller_token` then `.formpilot_token`.
 
-DO NOT
-- Touch package-lock.json, node_modules, or .git.
-- Change logic, add features, or reformat unrelated code.
+### 10.3 Known issues (from screenshot review and code audit)
+1. Sidebar navigation (New Session, History, Documents, Help) only changes the
+   highlighted item; no views exist behind them.
+2. Upload and Start Automation appear to do nothing. Errors are swallowed:
+   `handleStartSession` ignores the `bridge.startSession` result,
+   `handleSelectDocument` only console-logs errors, and `bridge.ts` silently falls
+   back to a stub when `window.autofiller` is unavailable.
+3. Initial document state is hardcoded (`student_admission.pdf`, 842 KB), so the UI
+   shows "uploaded / processed / extracted" before any user action.
+4. Settings exposes the Gemini API key field, model selector, headless toggle, and
+   typing delay. Also the masked key reveals key length.
+5. Layout overflows at wide window sizes (right-hand Automation Progress card is
+   clipped).
+6. "LIVE BROWSER" panel may be decorative; the real browser is a separate Chromium
+   window. Must be honest in the UI.
+7. `App.tsx` is ~1,400 lines and holds all views and state.
+8. A `formpilot:submit-form` / `autofiller:submit-form` IPC channel exists and must
+   be reviewed against the never-submit rule.
 
-AFTER CHANGES run: npm run typecheck, npm run build, the three unit tests in
-desktop/tests, and pytest in backend. Fix only rename-related breakage.
-Report: files changed, remaining "formpilot" matches and why each remains.
+### 10.4 Target behavior (acceptance criteria)
+- [x] Every sidebar item opens a real view. Home = launcher dashboard; New Session
+      = clean launcher; History = past sessions; Documents = processed documents
+      and their facts; Help = short usage guide.
+- [x] Upload opens the native file dialog, shows the real filename and size, runs
+      extraction, and shows real extracted facts for review and editing.
+- [x] Start Automation is disabled with a visible reason until a document is
+      processed and a valid URL is entered; when it fails, the exact error is
+      shown in the UI.
+- [x] No API key, model, headless, or typing-delay controls anywhere in the UI.
+      Settings shows only non-secret items (theme, AI status, version).
+- [x] Backend reads GEMINI_API_KEY from `backend/.env`; /health reports
+      `gemini_configured` (boolean only).
+- [x] No horizontal clipping between 1280 and 1920 px window widths.
+- [x] The agent still stops at REVIEW_READY and never submits; PolicyEngine and
+      backend auth unchanged.
+- [x] Sessions and processed documents persist across app restarts (JSON store in
+      Electron userData; no database).
+- [x] All existing tests and security checks pass.
+
+### 10.5 Status
+- [x] 10.4 criteria implemented
+- [x] Manual checklist run and recorded
+- [x] Next: real-site testing (Google Forms, school/admission portal, government/exam
+      portal, job application page), then extension and deployment.

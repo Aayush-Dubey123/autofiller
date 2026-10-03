@@ -175,15 +175,6 @@ function makeStubBackend(url) {
       calls.push(['appendEventSafe', sessionId, event.type]);
       return { success: true };
     },
-    async getSettings() {
-      return { api_key_configured: true, masked_key: 'AIza****wxyz', model: 'gemini-3.6-flash' };
-    },
-    async updateSettings() {
-      return { success: true, model: 'gemini-3.6-flash', api_key_configured: true, masked_key: '' };
-    },
-    async testGemini() {
-      return { valid: true, message: 'ok' };
-    },
     getBaseUrl() {
       return url;
     },

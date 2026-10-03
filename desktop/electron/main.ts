@@ -12,6 +12,7 @@ import fs from 'fs';
 import { AgentController } from './agent/AgentController';
 import { registerIpcHandlers } from './ipc/ipcHandlers';
 import { BackendClient } from './services/BackendClient';
+import { HistoryStore } from './services/HistoryStore';
 import { SecretStore } from './services/SecretStore';
 
 /** Base URL of the local Python backend. */
@@ -107,6 +108,23 @@ async function waitForBackend(client: BackendClient): Promise<boolean> {
   return false;
 }
 
+import { EngineStatus } from './shared/types';
+
+let currentEngineStatus: EngineStatus = { ready: true };
+
+function logEngineError(detail: string): void {
+  currentEngineStatus = { ready: false, errorDetail: detail };
+  try {
+    const logPath = path.join(app.getPath('userData'), 'autofiller-error.log');
+    fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${detail}\n`);
+  } catch (err) {
+    console.error('Could not write error log:', err);
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('autofiller:engine-error', currentEngineStatus);
+  }
+}
+
 /**
  * Launch the bundled Python backend when one is available.
  *
@@ -131,15 +149,28 @@ function spawnBackend(): void {
       : ['-m', 'uvicorn', 'core.apis.api:app', '--app-dir', 'backend', '--host', '127.0.0.1', '--port', '8000'];
     const child = spawn(executable, args, {
       cwd: path.join(__dirname, '../..'),
-      stdio: 'ignore',
+      stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      const msg = chunk.toString();
+      if (msg.includes('GEMINI_API_KEY is missing') || msg.includes('Exiting')) {
+        logEngineError(`Backend process initialization error: ${msg.trim()}`);
+      }
     });
     child.on('error', (error: Error) => {
       console.error('Backend process failed to start:', error);
+      logEngineError(`Backend process failed to start: ${error.message}`);
+    });
+    child.on('exit', (code: number | null) => {
+      if (code !== null && code !== 0) {
+        logEngineError(`Backend process exited prematurely with exit code ${code}. Check backend/.env.`);
+      }
     });
     backendProcess = child;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Could not start backend process:', error);
+    logEngineError(`Could not spawn backend process: ${error?.message || error}`);
   }
 }
 
@@ -171,7 +202,12 @@ async function createWindow(): Promise<void> {
     },
   });
 
-  registerIpcHandlers(mainWindow, agentController, secretStore);
+  registerIpcHandlers(
+    mainWindow,
+    agentController,
+    new HistoryStore(app.getPath('userData')),
+    () => currentEngineStatus
+  );
 
   // Apply a strict CSP and block all outbound navigation and window creation.
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
@@ -214,8 +250,13 @@ async function createWindow(): Promise<void> {
     mainWindow = null;
   });
 
-  if (!(await waitForBackend(backendClient))) {
+  if (await waitForBackend(backendClient)) {
+    currentEngineStatus = { ready: true };
+  } else {
     console.warn('Backend did not report healthy within the startup window.');
+    if (currentEngineStatus.ready) {
+      logEngineError('Backend health probe timed out after 20 seconds.');
+    }
   }
 }
 
@@ -232,8 +273,18 @@ async function shutdown(): Promise<void> {
   }
 }
 
-app.whenReady().then(() => {
-  spawnBackend();
+app.whenReady().then(async () => {
+  secretStore = new SecretStore();
+  const operatorToken = resolveOperatorToken();
+  const client = new BackendClient(operatorToken, BACKEND_BASE_URL);
+
+  if (await client.health()) {
+    console.log('Backend service is already online and healthy. Skipping backend process spawn.');
+    currentEngineStatus = { ready: true };
+  } else {
+    spawnBackend();
+  }
+
   return createWindow();
 });
 

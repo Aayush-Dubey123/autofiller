@@ -237,3 +237,40 @@ The system is designed to **clarify instead of guess** when information is missi
 **Phase One:** document extraction → browser automation → field mapping → verification → `REVIEW_READY`.
 
 MIT License.
+
+---
+
+## Manual Quick Start (Running Dev Environment)
+
+### Option A: Automatic Launcher (Recommended)
+Run the PowerShell launcher script from the root directory:
+```powershell
+.\start.ps1
+```
+*(Or `start.bat` on Command Prompt)*. This script verifies the Python environment, starts the FastAPI backend service, polls `/health` until ready, launches the Electron window, and cleanly shuts down the backend process upon exit.
+
+### Option B: Manual Two-Terminal Setup
+
+#### Terminal 1 — Start Python FastAPI Backend
+1. Ensure your Gemini API key is configured in `backend/.env`:
+   ```env
+   GEMINI_API_KEY=your_gemini_api_key_here
+   ```
+2. Activate virtual environment and start the Uvicorn ASGI server:
+   ```powershell
+   .\venv\Scripts\activate
+   python -m uvicorn core.apis.api:app --app-dir backend --host 127.0.0.1 --port 8000
+   ```
+
+#### Terminal 2 — Start Electron Desktop Window
+1. Navigate to the `desktop` directory and launch Electron:
+   ```powershell
+   cd desktop
+   npm run electron
+   ```
+2. *(Optional)* For Vite frontend UI previewing in a browser:
+   ```powershell
+   cd desktop
+   npm run dev
+   ```
+   *Note: Real document extraction and Playwright browser automation require running inside the Electron shell via `npm run electron` or `.\start.ps1`.*

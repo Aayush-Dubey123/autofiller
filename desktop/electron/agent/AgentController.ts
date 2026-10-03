@@ -17,6 +17,7 @@ import { BackendClient, coerceClarificationValue } from '../services/BackendClie
 import {
   AgentEventPayload,
   ClarificationPromptPayload,
+  ExtractedFact,
   FieldMapping,
   FormFieldSnapshot,
   FormSnapshot,
@@ -58,11 +59,6 @@ export class AgentController {
   private eventListeners: Array<(event: AgentEventPayload) => void> = [];
   private clarificationListeners: Array<(prompt: ClarificationPromptPayload) => void> = [];
 
-  private settings = {
-    headless: false,
-    typingDelayMs: 25,
-  };
-
   /**
    * Create the agent controller.
    *
@@ -74,27 +70,6 @@ export class AgentController {
     this.toolRegistry = new ToolRegistry();
     this.browserManager = new BrowserManager();
     this.policyEngine = new PolicyEngine();
-  }
-
-  /**
-   * Apply runtime settings from the settings UI.
-   *
-   * @param newSettings Partial settings to merge.
-   */
-  public updateSettings(newSettings: Record<string, unknown> | object): void {
-    this.settings = { ...this.settings, ...(newSettings as Record<string, unknown>) } as {
-      headless: boolean;
-      typingDelayMs: number;
-    };
-  }
-
-  /**
-   * Read current runtime settings.
-   *
-   * @returns A copy of the active settings.
-   */
-  public getSettings(): typeof this.settings {
-    return { ...this.settings };
   }
 
   /**
@@ -421,24 +396,27 @@ export class AgentController {
       );
       this.sessionId = session.id;
 
-      // Step 1: Extract document facts.
+      // Step 1: Use the operator-reviewed facts when supplied, otherwise extract them.
       this.stateMachine.transition('EXTRACTING_DOC');
       await this.checkPauseOrStop();
-      const facts = await this.runTool<any[]>(
-        'extract_document_facts',
-        {
-          filePath: options.documentPath,
-          rawText: options.documentText,
-          documentName: options.documentName,
-        },
-        `Extracting facts from ${options.documentName || 'document'}...`,
-        (result: any[]) => `Successfully extracted ${result.length} document facts.`
-      );
+      const facts =
+        options.facts && options.facts.length > 0
+          ? await this.useProvidedFacts(options.facts)
+          : await this.runTool<any[]>(
+              'extract_document_facts',
+              {
+                filePath: options.documentPath,
+                rawText: options.documentText,
+                documentName: options.documentName,
+              },
+              `Extracting facts from ${options.documentName || 'document'}...`,
+              (result: any[]) => `Successfully extracted ${result.length} document facts.`
+            );
 
       // Step 2: Launch the visible browser and scan the form.
       this.stateMachine.transition('SCANNING_FORM');
       await this.emitToolStarted('inspect_form', `Navigating to target form: ${options.targetUrl}...`);
-      await this.browserManager.launch(this.settings.headless);
+      await this.browserManager.launch(false);
       await this.browserManager.navigateTo(options.targetUrl, this.abortController.signal);
       await this.checkPauseOrStop();
 
@@ -666,6 +644,22 @@ export class AgentController {
    */
   private async emitToolStarted(tool: string, description: string): Promise<void> {
     this.emitEvent(this.buildEvent('TOOL_STARTED', description, { tool }));
+  }
+
+  /**
+   * Adopt facts the operator already reviewed in the UI instead of extracting again.
+   *
+   * @param facts Operator-reviewed facts.
+   * @returns The same facts, after emitting a truthful completion event.
+   */
+  private async useProvidedFacts(facts: ExtractedFact[]): Promise<ExtractedFact[]> {
+    this.emitEvent(
+      this.buildEvent('TOOL_COMPLETED', `Using ${facts.length} operator-reviewed document facts.`, {
+        tool: 'extract_document_facts',
+        success: true,
+      })
+    );
+    return facts;
   }
 
   /**

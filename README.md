@@ -2,239 +2,182 @@
 
 # AutoFiller AI
 
-### `DOCUMENT → AI → BROWSER AUTOMATION → REVIEW`
+### Document → AI → Browser Automation → Human Review
 
-AI-assisted desktop automation for turning student documents into verified web-form data.
+AutoFiller AI is a desktop application that extracts information from student documents and uses it to fill web-based school admission and registration forms safely and efficiently.
 
-**Electron** · **React** · **TypeScript** · **FastAPI** · **Gemini** · **Playwright**
+**Electron** · **React** · **TypeScript** · **FastAPI** · **Google Gemini** · **Playwright**
 
 </div>
 
-# idea:
+## The Problem
 
-How the extension will work (brief)
+School admissions, registrations, and similar workflows often require users or staff to manually copy information from documents into lengthy online forms. This process is:
 
-One-time setup: you enter your data once into an encrypted profile vault in the extension. You can type it in or upload a document and let Gemini extract it, which reuses what you already built.
+- **Repetitive:** The same student details are entered across multiple forms.
+- **Time-consuming:** Manual data entry slows down admissions and administrative work.
+- **Error-prone:** Names, dates, addresses, phone numbers, and other details can be mistyped.
+- **Difficult to verify:** It is easy to miss required fields or enter information in the wrong format.
+- **Unsafe to automate blindly:** An automated system must not submit forms or make decisions without human oversight.
 
-Every time you need to fill a form:
+## The Solution
 
-Open any website with a form and click the extension icon or press a shortcut.
-A content script scans the page: fields, labels, dropdowns, radios, and multi-step forms.
-A fast rule-based mapper matches fields to your profile. Gemini is called only for fields the rules can't resolve, and it receives field labels only, never your actual values.
-The extension fills the fields locally and highlights them by confidence: green for confident, amber for uncertain, red for unmapped.
-You review and correct, then submit yourself. The extension never submits, and it never touches passwords, OTPs, or card fields.
+AutoFiller AI combines document intelligence with visible browser automation. It reads information from an uploaded document, understands the target form, maps the extracted information to the appropriate fields, fills the form, and verifies the result.
 
-What carries over from your current project:
-
-The scanner logic, the policy engine (submission guard), the date normalizer, and the key aliases move into a shared core.
-Electron and Playwright are retired from the product and kept only as a test harness.
-FastAPI becomes a small, authenticated, stateless backend used for Gemini calls, so other users don't need their own API key.
-Phases, one per step
-#	Phase	Outcome
-0	Cleanup, rename, monorepo layout	A clean structure, with FormPilot renamed to AutoFiller everywhere
-1	Shared core package	Scanner and policy engine with no Electron or Playwright dependency
-2	Profile vault	Encrypted multi-profile data store
-3	Universal form engine	Works beyond the demo school form: shadow DOM, iframes, custom dropdowns, multi-step forms
-4	Chrome extension shell (MV3)	Popup, side panel, shortcut, and review overlay
-5	Safety layer	Sensitive-field rules and domain controls
-6	Backend v2	Auth, quotas, and stateless Gemini proxy
-7	UI/UX redesign	Design system, onboarding, light and dark themes
-8	Testing	Fixture forms from real sites and an accuracy score
-9	Privacy and compliance	Policy, data deletion, and Web Store requirements
-10	Deploy and publish	Hosted API and Chrome Web Store release
-
----
-
-## What it solves
-
-School and admission workflows often require staff to read documents and manually copy student information into web forms. AutoFiller AI turns that repetitive workflow into a supervised automation pipeline.
-
-**Input:** student document  →  **Extract:** structured facts  →  **Map:** form fields  →  **Fill:** visible browser  →  **Verify:** source vs. form  →  **Review:** human approval
-
-The project is intentionally designed around a **human-in-the-loop boundary**: automation stops at `REVIEW_READY`; final form submission remains user-controlled.
-
----
-
-## System architecture
-
-```mermaid
-flowchart LR
-    A[Student Document] --> B[Electron Desktop App]
-    B --> C[FastAPI Backend]
-    C --> D[Gemini AI]
-    D --> E[Structured Facts]
-    E --> F[Field Mapping]
-    F --> G[Playwright]
-    G --> H[Visible Web Form]
-    H --> I[Verification]
-    I --> J{Review Ready}
-    J --> K[Human Review]
-    K --> L[User-Controlled Submission]
-```
-
-### Core responsibilities
-
-| Layer | Responsibility |
-|---|---|
-| **Electron + React** | Desktop UI and agent host |
-| **FastAPI + Pydantic** | Backend API and validation |
-| **Gemini** | Document parsing and semantic field mapping |
-| **Playwright** | Visible browser navigation and form interaction |
-| **Verification** | Re-check filled values against extracted source data |
-| **Safety layer** | Origin/navigation policies, token bridge and submission guardrails |
-
----
-
-## Workflow
-
-### `01` Upload
-Provide a student record such as a PDF, image or text-based document.
-
-### `02` Extract
-Gemini converts the document into structured facts such as name, DOB, parent details, address and phone information.
-
-### `03` Discover & map
-The agent opens the target website and maps extracted facts to supported controls: text inputs, selects, radio groups and checkboxes.
-
-### `04` Fill visibly
-Playwright performs the browser interaction in a visible session so the user can observe the automation.
-
-### `05` Verify
-The application re-scans the completed fields and checks them against the source facts.
-
-### `06` Review boundary
-Missing or ambiguous information triggers clarification. Once the workflow reaches `REVIEW_READY`, automation stops and the user owns the final decision.
-
----
-
-## Why this project is interesting
-
-- **Agentic workflow:** combines LLM reasoning with deterministic browser automation.
-- **Desktop + backend architecture:** Electron hosts the user experience while FastAPI handles AI-backed processing.
-- **Semantic field matching:** maps document facts to form controls rather than relying only on exact labels.
-- **Visible automation:** the browser is observable and interruptible instead of being a hidden background process.
-- **Verification-first:** filled values are checked before the workflow reaches human review.
-- **Safety by design:** strict navigation and submission boundaries are part of the architecture, not an afterthought.
-
----
-
-## Technology
-
-**Desktop**  
-Electron 34 · React 18 · TypeScript · Vite · Playwright
-
-**Backend**  
-Python 3.13 · FastAPI · Pydantic v2 · Google Gemini AI · PyMuPDF · MongoDB
-
-**Engineering**  
-Dual-token authentication bridge · CSP/security controls · automated tests · Windows packaging
-
----
-
-## Repository structure
+The workflow is:
 
 ```text
-AutoFiller AI/
-├── backend/
-│   ├── core/              # Backend application logic
-│   ├── commons/           # Shared security/authentication utilities
-│   ├── scripts/           # Backend utilities
-│   ├── tests/             # Backend tests
-│   └── main.py            # FastAPI entry point
-│
-├── desktop/
-│   ├── electron/          # Electron main-process code
-│   ├── src/               # React application
-│   │   ├── components/
-│   │   ├── features/
-│   │   ├── lib/
-│   │   └── types/
-│   ├── tests/             # Desktop policy, scanner and E2E tests
-│   └── public/             # Mock form + sample document
-│
-└── AGENTS.md              # Engineering workflow and safety guidelines
+Student document
+      ↓
+AI-powered data extraction
+      ↓
+Web-form scanning
+      ↓
+Semantic field mapping
+      ↓
+Visible browser form filling
+      ↓
+Verification
+      ↓
+Human review
+      ↓
+User-controlled submission
 ```
 
----
+Automation always stops at the `REVIEW_READY` state. The user remains responsible for checking the completed form and submitting it manually.
 
-## Run locally
+## How It Works
+
+1. **Upload a document** — Provide a PDF, image, or supported student record.
+2. **Extract information** — Google Gemini and document-processing services identify structured facts such as the student's name, date of birth, address, parent details, and contact information.
+3. **Open the target form** — Playwright loads the web form in a visible browser session.
+4. **Scan and map fields** — The application discovers text inputs, selects, radio buttons, checkboxes, and other supported controls, then maps them to extracted facts.
+5. **Ask for clarification** — If information is missing or ambiguous, AutoFiller asks the user instead of guessing.
+6. **Fill the form** — Approved values are entered through controlled, policy-checked browser actions.
+7. **Verify the result** — The application re-reads the form values and compares them with the extracted source data.
+8. **Review and submit manually** — The workflow stops so the user can make the final decision.
+
+## Key Features
+
+- PDF and image document extraction.
+- AI-assisted semantic mapping between document facts and form fields.
+- Visible Playwright browser automation.
+- Support for text inputs, number fields, emails, phone numbers, dates, selects, radio groups, checkboxes, and textareas.
+- Human-in-the-loop clarification for uncertain values.
+- Field-level verification before review.
+- Pause, resume, stop, and user-takeover controls.
+- Strict protection against final form submission by the automation agent.
+- Navigation and tool permission policies.
+- Authenticated FastAPI backend.
+- Encrypted API-key and token storage where supported.
+- MongoDB persistence with an in-memory fallback for development.
+- Backend, policy, scanner, and end-to-end tests.
+
+## Technology Stack
+
+| Layer | Technology |
+|---|---|
+| Desktop application | Electron |
+| Frontend | React, TypeScript, Vite, Vanilla CSS |
+| Browser automation | Playwright, Chromium |
+| Backend | Python, FastAPI, Uvicorn, Pydantic |
+| AI processing | Google Gemini via the Google GenAI SDK |
+| Document parsing | PyMuPDF |
+| Database | MongoDB via Motor, with in-memory fallback |
+| Packaging | electron-builder |
+
+## Project Structure
+
+```text
+autofiller/
+├── backend/                  # FastAPI backend and AI services
+│   ├── commons/              # Authentication and shared utilities
+│   ├── core/                 # APIs, models, controllers, services, and database code
+│   ├── scripts/              # Backend validation scripts
+│   └── tests/                # Backend tests
+├── desktop/                  # Electron and React desktop application
+│   ├── electron/             # Main process, agent, browser, IPC, and policy code
+│   ├── src/                  # React renderer and UI features
+│   ├── public/               # Demo form and sample documents
+│   └── tests/                # Desktop and integration tests
+├── AGENTS.md                 # Engineering and contribution guidelines
+└── progress.md               # Detailed development progress report
+```
+
+## Getting Started
 
 ### Prerequisites
 
-- Node.js 18+
-- Python 3.11+
-- Gemini API key
+- Node.js 18 or later
+- Python 3.11 or later
+- A Google Gemini API key
+- Windows is currently the primary development environment
 
-### Backend
+### Set up the backend
 
-```bash
+```powershell
 python -m venv venv
-.\venv\Scripts\activate
+.\venv\Scripts\Activate.ps1
 pip install -r backend/requirements.txt
 ```
 
-Configure `GEMINI_API_KEY` in your environment, then start the FastAPI service using the project's backend entry point.
+Configure the required Gemini credentials and backend environment variables, then start the FastAPI backend using the project's backend entry point.
 
-### Desktop
+### Set up the desktop application
 
-```bash
+```powershell
 cd desktop
 npm install
 npm run dev
 ```
 
-For the packaged Electron application:
+To run the Electron application:
 
-```bash
+```powershell
 npm run electron
 ```
 
----
+The repository also includes `start.ps1` and `start.bat` launchers for starting the backend and desktop application together.
 
-## Verification
+## Testing
 
-The repository includes separate backend and desktop verification paths.
+Run the backend tests:
 
-```bash
-# Backend tests
+```powershell
 .\venv\Scripts\python.exe -m pytest backend/tests/test_backend.py
+```
 
-# Desktop build + policy + scanner + E2E integration tests
+Run the desktop build and test suite:
+
+```powershell
 cd desktop
 npm run test
 ```
 
-The desktop test command builds the application before running the policy, tool-registry, scanner and E2E integration checks.
+The test coverage includes authentication, document extraction, field mapping, clarification handling, policy enforcement, form scanning, tool execution, and end-to-end integration.
 
----
+## Safety and Privacy
 
-## Safety model
+AutoFiller AI is designed to assist users, not replace their judgment:
 
-```text
-DOCUMENT
-   ↓
-AI EXTRACTION
-   ↓
-FIELD MAPPING
-   ↓
-VISIBLE PLAYWRIGHT AUTOMATION
-   ↓
-VERIFICATION
-   ↓
-REVIEW_READY  ← automation stops here
-   ↓
-HUMAN REVIEW
-   ↓
-USER-CONTROLLED SUBMISSION
-```
+- The agent never submits the final form automatically.
+- Submit, register, apply, and finish controls are blocked by the policy engine.
+- Ambiguous fields trigger clarification instead of automatic guessing.
+- Browser automation runs visibly so the operator can monitor it.
+- Protected backend routes require authentication.
+- API keys are encrypted or masked and are not exposed in normal responses.
+- Document access is restricted to approved locations and file-size limits.
+- Renderer access to privileged Electron capabilities is restricted through a typed preload bridge.
 
-The system is designed to **clarify instead of guess** when information is missing, ambiguous or conflicting.
+## Current Status
 
----
+The current implementation supports the core workflow:
 
-## Status
+> Document extraction → form scanning → field mapping → controlled filling → verification → `REVIEW_READY`
 
-**Phase One:** document extraction → browser automation → field mapping → verification → `REVIEW_READY`.
+Planned improvements include multi-page form navigation, broader image-document support, packaged distribution, production MongoDB deployment, session history, multi-document workflows, and additional form-control compatibility.
+
+## License
 
 MIT License.
 

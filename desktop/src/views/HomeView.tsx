@@ -322,7 +322,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 >
                   <div style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     <div style={{ fontSize: '0.875rem', fontWeight: 700, color: '#0F2E23' }}>
-                      {session.documentName}
+                      {session.hostAndPath}
                     </div>
                     <div
                       style={{
@@ -335,7 +335,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                         maxWidth: '240px',
                       }}
                     >
-                      {session.targetUrl}
+                      {session.profileName ? `Profile: ${session.profileName}` : new Date(session.date).toLocaleDateString()}
                     </div>
                   </div>
                   <span

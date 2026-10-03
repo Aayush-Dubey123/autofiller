@@ -40,6 +40,10 @@ export interface AutoFillerAPI {
   }) => Promise<DocumentExtractResult | { error: string }>;
   listSessions: () => Promise<SessionRecord[]>;
   listDocuments: () => Promise<DocumentRecord[]>;
+  deleteHistorySession: (id: string) => Promise<{ success: boolean }>;
+  deleteHistorySessions: (ids: string[]) => Promise<{ success: boolean }>;
+  clearAllHistory: () => Promise<{ success: boolean }>;
+  eraseAllData: () => Promise<{ success: boolean; error?: string }>;
   backendHealth: () => Promise<BackendHealth>;
   getEngineStatus: () => Promise<EngineStatus>;
   appVersion: () => Promise<string>;
@@ -112,6 +116,10 @@ const browserFallback: AutoFillerAPI = {
   extractDocument: async () => ({ error: 'Desktop bridge unavailable' }),
   listSessions: async () => [],
   listDocuments: async () => [],
+  deleteHistorySession: async () => ({ success: true }),
+  deleteHistorySessions: async () => ({ success: true }),
+  clearAllHistory: async () => ({ success: true }),
+  eraseAllData: async () => ({ success: true }),
   backendHealth: async () => ({ healthy: false, geminiConfigured: false }),
   getEngineStatus: async (): Promise<EngineStatus> => {
     const isElectronUA = typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron');

@@ -335,4 +335,22 @@ export class BackendClient {
       { method: 'POST', body: JSON.stringify({ events: safeEvents, verifications: safeVerifications }) }
     );
   }
+
+  /** Delete/purge a single session from backend storage. */
+  public async purgeSession(sessionId: string): Promise<{ success: boolean }> {
+    try {
+      return await this.request<{ success: boolean }>(`/v1/sessions/${sessionId}`, { method: 'DELETE' });
+    } catch {
+      return { success: false };
+    }
+  }
+
+  /** Delete/purge all live sessions from backend storage. */
+  public async purgeAllSessions(): Promise<{ success: boolean }> {
+    try {
+      return await this.request<{ success: boolean }>('/v1/sessions', { method: 'DELETE' });
+    } catch {
+      return { success: false };
+    }
+  }
 }

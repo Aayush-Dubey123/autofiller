@@ -1,19 +1,37 @@
 import React, { useEffect, useState } from 'react';
-import { ShieldAlert } from 'lucide-react';
+import { ShieldAlert, Trash2, AlertTriangle, RefreshCw } from 'lucide-react';
 import { bridge } from '../lib/bridge';
 
 export const HelpView: React.FC = () => {
   const [version, setVersion] = useState<string>('1.0.0');
+  const [showEraseConfirm, setShowEraseConfirm] = useState<boolean>(false);
+  const [isErasing, setIsErasing] = useState<boolean>(false);
+  const [eraseError, setEraseError] = useState<string | null>(null);
 
   useEffect(() => {
     bridge.appVersion().then(setVersion).catch(() => setVersion('1.0.0'));
   }, []);
 
+  const handleEraseAllData = async () => {
+    setIsErasing(true);
+    setEraseError(null);
+    try {
+      const res = await bridge.eraseAllData();
+      if (!res.success && res.error) {
+        setEraseError(res.error);
+        setIsErasing(false);
+      }
+    } catch (err: any) {
+      setEraseError(err?.message || 'Data erasure error');
+      setIsErasing(false);
+    }
+  };
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '800px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', maxWidth: '800px', margin: '0 auto' }}>
       <div>
         <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0F2E23' }}>
-          AutoFiller AI — Usage Guide
+          AutoFiller AI — Usage & Privacy Guide
         </h1>
         <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
           Automated document extraction to web form filling with human-in-the-loop safety.
@@ -58,10 +76,10 @@ export const HelpView: React.FC = () => {
             </div>
             <div>
               <div style={{ fontSize: '0.9375rem', fontWeight: 700, color: '#0F2E23' }}>
-                Upload Student Document
+                Store Profiles in Encrypted Vault or Upload Document
               </div>
               <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                Select a PDF, PNG, JPG, or text document. AutoFiller uses Gemini AI to extract facts (Name, DOB, Email, Address, etc.). You can view and edit the extracted facts before starting.
+                Manage your personal data in the AES-256-GCM encrypted vault under <strong>My Details</strong>, or extract facts from uploaded PDFs/images.
               </div>
             </div>
           </div>
@@ -86,10 +104,10 @@ export const HelpView: React.FC = () => {
             </div>
             <div>
               <div style={{ fontSize: '0.9375rem', fontWeight: 700, color: '#0F2E23' }}>
-                Specify Target Form URL
+                Select Data Source & Form URL
               </div>
               <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                Enter the web form URL. You can also test with the built-in Demo School Form endpoint (<code style={{ background: '#F9F8F5', padding: '2px 4px', borderRadius: '4px' }}>http://127.0.0.1:8000/mock_school_form.html</code>).
+                Choose your data source (Vault Profile, Uploaded Document, or Both with conflict resolution) and specify the target web form URL.
               </div>
             </div>
           </div>
@@ -117,7 +135,7 @@ export const HelpView: React.FC = () => {
                 Start Automation & Observe Live Browser
               </div>
               <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                Click <strong>Start Automation</strong>. Playwright opens a separate browser window on your screen and maps document facts to DOM fields using Gemini AI.
+                Click <strong>Start Automation</strong>. Playwright opens a separate browser window and maps facts to DOM fields under your supervision.
               </div>
             </div>
           </div>
@@ -175,7 +193,49 @@ export const HelpView: React.FC = () => {
         </div>
       </div>
 
-      {/* Help View Footer */}
+      {/* Complete Data Erasure Card */}
+      <div
+        style={{
+          background: '#FEF2F2',
+          border: '1.5px solid #FCA5A5',
+          borderRadius: 'var(--radius-lg)',
+          padding: '24px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <h4 style={{ fontSize: '1rem', fontWeight: 800, color: '#991B1B', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Trash2 size={20} color="#DC2626" />
+              <span>Erase All My Data</span>
+            </h4>
+            <p style={{ fontSize: '0.8125rem', color: '#7F1D1D', marginTop: '4px', lineHeight: 1.4 }}>
+              Permanently delete your Encrypted Vault, session history, logs, and backend session data. The app will restart to the first-run state.
+            </p>
+          </div>
+
+          <button
+            onClick={() => setShowEraseConfirm(true)}
+            style={{
+              background: '#DC2626',
+              color: '#FFFFFF',
+              border: 'none',
+              borderRadius: 'var(--radius-md)',
+              padding: '10px 18px',
+              fontWeight: 800,
+              fontSize: '0.875rem',
+              cursor: 'pointer',
+              flexShrink: 0,
+            }}
+          >
+            Erase All Data
+          </button>
+        </div>
+      </div>
+
+      {/* Footer info */}
       <div
         style={{
           marginTop: '10px',
@@ -192,9 +252,103 @@ export const HelpView: React.FC = () => {
           AutoFiller AI <strong>v{version}</strong>
         </div>
         <div style={{ fontWeight: 600, color: '#0F2E23' }}>
-          AutoFiller never submits forms. You review and submit.
+          Built for Education & Privacy Security
         </div>
       </div>
+
+      {/* Erase All Confirmation Modal */}
+      {showEraseConfirm && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.7)',
+            backdropFilter: 'blur(6px)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '460px',
+              width: '100%',
+              background: 'var(--bg-card)',
+              borderRadius: 'var(--radius-lg)',
+              border: '1.5px solid #FCA5A5',
+              padding: '28px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '18px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: '#DC2626' }}>
+              <AlertTriangle size={28} />
+              <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#991B1B' }}>
+                Erase All Data & Reset App?
+              </h3>
+            </div>
+
+            <p style={{ fontSize: '0.875rem', color: 'var(--text-primary)', lineHeight: 1.5 }}>
+              This will permanently delete:
+            </p>
+            <ul style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', paddingLeft: '20px', margin: 0, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <li>Encrypted Vault file and all saved profiles</li>
+              <li>Session history metadata store</li>
+              <li>Local application logs</li>
+              <li>Backend session states</li>
+            </ul>
+
+            <p style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#991B1B', margin: 0 }}>
+              The application will automatically restart to the first-run welcome setup screen.
+            </p>
+
+            {eraseError && (
+              <div style={{ fontSize: '0.8125rem', color: '#DC2626', fontWeight: 600 }}>
+                Error: {eraseError}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px' }}>
+              <button
+                disabled={isErasing}
+                onClick={() => setShowEraseConfirm(false)}
+                style={{
+                  padding: '10px 18px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-subtle)',
+                  background: 'transparent',
+                  fontWeight: 600,
+                  cursor: isErasing ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                disabled={isErasing}
+                onClick={handleEraseAllData}
+                style={{
+                  padding: '10px 22px',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'none',
+                  background: '#DC2626',
+                  color: '#FFFFFF',
+                  fontWeight: 800,
+                  cursor: isErasing ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                {isErasing ? <RefreshCw size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                <span>Yes, Erase Everything</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

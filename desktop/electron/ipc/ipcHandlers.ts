@@ -91,8 +91,10 @@ export function registerIpcHandlers(
     }
 
     historyStore.beginSession({
-      documentName: options.documentName || 'Untitled document',
       targetUrl: options.targetUrl,
+      profileName: options.documentName ? 'Document & Profile' : 'Profile Facts',
+      dataSource: options.documentPath ? (options.facts ? 'both' : 'document') : 'profile',
+      totalFields: options.facts?.length || 0,
     });
 
     agentController.startSession(options).catch((error: Error) => {
@@ -149,29 +151,48 @@ export function registerIpcHandlers(
         rawText: payload?.rawText,
         documentName: payload?.documentName,
       });
-      if (payload?.filePath && result.facts?.length > 0) {
-        let size = 0;
-        try {
-          size = fs.statSync(payload.filePath).size;
-        } catch {
-          // The file may have moved after extraction; the size is informational only.
-        }
-        historyStore.upsertDocument({
-          name: payload.documentName || path.basename(payload.filePath),
-          size,
-          path: payload.filePath,
-          facts: result.facts,
-        });
-      }
       return result;
     } catch (error: any) {
       return { error: error?.message || 'Failed to extract document facts.' };
     }
   });
 
-  // Read-only views of the persisted JSON store.
+  // History store handlers
   ipcMain.handle('autofiller:history-list', async () => historyStore.listSessions());
-  ipcMain.handle('autofiller:documents-list', async () => historyStore.listDocuments());
+  ipcMain.handle('autofiller:history-delete', async (_event, id: string) => {
+    historyStore.deleteSession(id);
+    return { success: true };
+  });
+  ipcMain.handle('autofiller:history-delete-multiple', async (_event, ids: string[]) => {
+    historyStore.deleteSessions(ids);
+    return { success: true };
+  });
+  ipcMain.handle('autofiller:history-clear-all', async () => {
+    historyStore.clearAllSessions();
+    return { success: true };
+  });
+
+  // Global complete data erasure ("Erase all my data")
+  ipcMain.handle('autofiller:erase-all-data', async () => {
+    try {
+      vaultService.eraseAll();
+      historyStore.clearAllSessions();
+      const logsDir = path.join(app.getPath('userData'), 'logs');
+      if (fs.existsSync(logsDir)) {
+        fs.rmSync(logsDir, { recursive: true, force: true });
+      }
+      try {
+        await backendClient.purgeAllSessions();
+      } catch {
+        // Safe fallback if backend is offline
+      }
+      app.relaunch();
+      app.exit(0);
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Data erasure failed.' };
+    }
+  });
 
   // Encrypted Vault IPC Channels
   ipcMain.handle('vault:status', async (): Promise<VaultStatus> => vaultService.getStatus());

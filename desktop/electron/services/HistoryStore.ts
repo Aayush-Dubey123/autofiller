@@ -1,9 +1,16 @@
 /**
- * HistoryStore persists past sessions and processed documents as one JSON file.
+ * HistoryStore persists past session metadata only as a single JSON file.
  *
- * The file lives in Electron's userData directory and is written only by the main
- * process. Every record is rebuilt from a fixed whitelist of fields, so neither the
- * Gemini key nor the backend operator token can ever end up in it.
+ * Per strict privacy guidelines, session history records store metadata ONLY:
+ * - id
+ * - date
+ * - hostAndPath (query string and fragment stripped)
+ * - status
+ * - fieldsFilled / totalFields
+ * - profileName
+ * - dataSource
+ *
+ * NEVER stores values, prompt text, or document file contents.
  */
 
 import fs from 'fs';
@@ -11,17 +18,12 @@ import path from 'path';
 
 import type {
   AgentEventPayload,
-  DocumentRecord,
-  ExtractedFact,
   SessionRecord,
   WorkflowState,
 } from '../shared/types';
 
-const STORE_FILE = 'autofiller-store.json';
+const STORE_FILE = 'autofiller-history.json';
 const MAX_SESSIONS = 200;
-const MAX_DOCUMENTS = 100;
-const MAX_FACTS = 200;
-const MAX_TEXT = 2000;
 
 /** States in which a session is still running; found on disk they mean the app quit mid-run. */
 const ACTIVE_STATES = new Set<string>([
@@ -41,62 +43,53 @@ const FINISHED_STATES = new Set<string>(['REVIEW_READY', 'COMPLETED', 'ERROR', '
 /** Tools whose successful completion means one more field was populated. */
 const FILL_TOOLS = new Set<string>(['fill_text', 'select_option', 'select_radio', 'set_checkbox']);
 
-interface StoreData {
-  sessions: SessionRecord[];
-  documents: DocumentRecord[];
+/** Helper to strip query parameters and hash fragments from a URL. */
+export function cleanHostAndPath(urlStr: string): string {
+  if (!urlStr) return 'unknown';
+  try {
+    const parsed = new URL(urlStr.trim());
+    return `${parsed.host}${parsed.pathname}`;
+  } catch {
+    return urlStr.split('?')[0].split('#')[0].replace(/^https?:\/\//i, '');
+  }
 }
 
-const text = (value: unknown, max = MAX_TEXT): string => String(value ?? '').slice(0, max);
-
-/** Rebuild a fact from the whitelist of known fields. */
-function sanitizeFacts(facts: unknown): ExtractedFact[] {
-  if (!Array.isArray(facts)) return [];
-  return facts.slice(0, MAX_FACTS).map((fact) => ({
-    key: text(fact?.key, 120),
-    label: text(fact?.label, 200),
-    value: text(fact?.value),
-    confidence: Number.isFinite(Number(fact?.confidence)) ? Number(fact.confidence) : 0,
-  }));
+interface StoreData {
+  sessions: SessionRecord[];
 }
 
 export class HistoryStore {
   private readonly filePath: string;
-  private data: StoreData = { sessions: [], documents: [] };
+  private data: StoreData = { sessions: [] };
   private activeId: string | null = null;
   private lastFailure = '';
 
-  /**
-   * @param baseDir Directory that holds the store file (Electron's userData path).
-   */
   constructor(baseDir: string) {
     this.filePath = path.join(baseDir, STORE_FILE);
     this.load();
   }
 
-  /** Newest-first copy of the stored sessions. */
+  /** Newest-first copy of the stored session metadata. */
   public listSessions(): SessionRecord[] {
     return [...this.data.sessions].reverse();
   }
 
-  /** Newest-first copy of the stored documents. */
-  public listDocuments(): DocumentRecord[] {
-    return [...this.data.documents].reverse();
-  }
-
-  /**
-   * Record the start of a session and make it the one that agent events update.
-   *
-   * @param info Document name and target URL of the new session.
-   * @returns The new session record.
-   */
-  public beginSession(info: { documentName: string; targetUrl: string }): SessionRecord {
+  /** Record the start of a session (metadata only). */
+  public beginSession(info: {
+    targetUrl: string;
+    profileName?: string;
+    dataSource?: string;
+    totalFields?: number;
+  }): SessionRecord {
     const record: SessionRecord = {
       id: `run_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
-      startedAt: new Date().toISOString(),
-      documentName: text(info.documentName, 260) || 'Untitled document',
-      targetUrl: text(info.targetUrl, 2048),
+      date: new Date().toISOString(),
+      hostAndPath: cleanHostAndPath(info.targetUrl),
       status: 'IDLE',
       fieldsFilled: 0,
+      totalFields: info.totalFields || 0,
+      profileName: info.profileName || 'Default Profile',
+      dataSource: info.dataSource || 'profile',
     };
     this.data.sessions.push(record);
     this.data.sessions = this.data.sessions.slice(-MAX_SESSIONS);
@@ -112,15 +105,12 @@ export class HistoryStore {
     if (!record) return;
     record.status = state;
     if (FINISHED_STATES.has(state)) {
-      record.finishedAt = new Date().toISOString();
       if (state === 'ERROR') record.error = this.lastFailure || 'Session failed.';
-    } else {
-      delete record.finishedAt;
     }
     this.save();
   }
 
-  /** Apply an agent event (filled-field count, failure reason) to the active session. */
+  /** Apply an agent event (filled field count, failure reason metadata only) to the active session. */
   public noteEvent(event: AgentEventPayload): void {
     const record = this.active();
     if (!record) return;
@@ -128,8 +118,8 @@ export class HistoryStore {
       record.fieldsFilled += 1;
       this.save();
     } else if (event.type === 'TOOL_FAILED') {
-      this.lastFailure = text(event.description, 500);
-      // The ERROR transition can land before its explanatory event; keep the reason current.
+      // Store descriptive reason without field values
+      this.lastFailure = String(event.description || 'Step failed').slice(0, 300);
       if (record.status === 'ERROR') {
         record.error = this.lastFailure;
         this.save();
@@ -137,26 +127,23 @@ export class HistoryStore {
     }
   }
 
-  /**
-   * Store a processed document, replacing an earlier entry for the same file path.
-   *
-   * @param input Document metadata and its extracted facts.
-   * @returns The stored record.
-   */
-  public upsertDocument(input: { name: string; size: number; path: string; facts: unknown }): DocumentRecord {
-    const record: DocumentRecord = {
-      id: `doc_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
-      name: text(input.name, 260),
-      size: Number.isFinite(input.size) ? input.size : 0,
-      path: text(input.path, 2048),
-      extractedAt: new Date().toISOString(),
-      facts: sanitizeFacts(input.facts),
-    };
-    this.data.documents = this.data.documents.filter((doc) => doc.path !== record.path);
-    this.data.documents.push(record);
-    this.data.documents = this.data.documents.slice(-MAX_DOCUMENTS);
+  /** Delete a single session record by ID. */
+  public deleteSession(id: string): void {
+    this.data.sessions = this.data.sessions.filter((s) => s.id !== id);
     this.save();
-    return record;
+  }
+
+  /** Delete multiple session records by ID list. */
+  public deleteSessions(ids: string[]): void {
+    const set = new Set(ids);
+    this.data.sessions = this.data.sessions.filter((s) => !set.has(s.id));
+    this.save();
+  }
+
+  /** Clear all history records. */
+  public clearAllSessions(): void {
+    this.data.sessions = [];
+    this.save();
   }
 
   private active(): SessionRecord | undefined {
@@ -168,36 +155,27 @@ export class HistoryStore {
       if (!fs.existsSync(this.filePath)) return;
       const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
       const sessions: SessionRecord[] = (Array.isArray(raw?.sessions) ? raw.sessions : []).map(
-        (entry: Partial<SessionRecord>) => ({
-          id: text(entry.id, 80),
-          startedAt: text(entry.startedAt, 40),
-          finishedAt: entry.finishedAt ? text(entry.finishedAt, 40) : undefined,
-          documentName: text(entry.documentName, 260),
-          targetUrl: text(entry.targetUrl, 2048),
+        (entry: any) => ({
+          id: String(entry.id || ''),
+          date: String(entry.date || entry.startedAt || new Date().toISOString()),
+          hostAndPath: String(entry.hostAndPath || cleanHostAndPath(entry.targetUrl || '')),
           status: ACTIVE_STATES.has(String(entry.status))
             ? 'INTERRUPTED'
-            : ((text(entry.status, 40) || 'IDLE') as SessionRecord['status']),
+            : ((String(entry.status) || 'IDLE') as SessionRecord['status']),
           fieldsFilled: Number(entry.fieldsFilled) || 0,
-          error: entry.error ? text(entry.error, 500) : undefined,
+          totalFields: Number(entry.totalFields) || 0,
+          profileName: entry.profileName ? String(entry.profileName) : undefined,
+          dataSource: entry.dataSource ? String(entry.dataSource) : undefined,
+          error: entry.error ? String(entry.error).slice(0, 300) : undefined,
         })
       );
-      const documents: DocumentRecord[] = (Array.isArray(raw?.documents) ? raw.documents : []).map(
-        (entry: Partial<DocumentRecord>) => ({
-          id: text(entry.id, 80),
-          name: text(entry.name, 260),
-          size: Number(entry.size) || 0,
-          path: text(entry.path, 2048),
-          extractedAt: text(entry.extractedAt, 40),
-          facts: sanitizeFacts(entry.facts),
-        })
-      );
-      this.data = { sessions, documents };
+      this.data = { sessions };
     } catch (error) {
       console.error('Could not read history store; starting empty:', error);
+      this.data = { sessions: [] };
     }
   }
 
-  /** Write atomically so a crash mid-write cannot leave a truncated file. */
   private save(): void {
     try {
       const temp = `${this.filePath}.tmp`;

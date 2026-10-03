@@ -186,15 +186,16 @@ export interface DocumentSelection {
   error?: string;
 }
 
-/** A past automation session persisted in the userData JSON store. */
+/** A past automation session metadata persisted in the userData JSON store (no values). */
 export interface SessionRecord {
   id: string;
-  startedAt: string;
-  finishedAt?: string;
-  documentName: string;
-  targetUrl: string;
+  date: string;
+  hostAndPath: string;
   status: WorkflowState | 'INTERRUPTED';
   fieldsFilled: number;
+  totalFields?: number;
+  profileName?: string;
+  dataSource?: string;
   error?: string;
 }
 

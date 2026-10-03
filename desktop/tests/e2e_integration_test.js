@@ -175,6 +175,14 @@ function makeStubBackend(url) {
       calls.push(['appendEventSafe', sessionId, event.type]);
       return { success: true };
     },
+    async purgeSession(sessionId) {
+      calls.push(['purgeSession', sessionId]);
+      return { success: true };
+    },
+    async purgeAllSessions() {
+      calls.push(['purgeAllSessions']);
+      return { success: true };
+    },
     getBaseUrl() {
       return url;
     },

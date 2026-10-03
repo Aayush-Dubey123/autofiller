@@ -75,6 +75,5 @@ Thumbs.db
 /tests
 
 # Internal Markdown docs (user will push manually later)
-progress.md
-agent.md
-AGENTS.md
+*.md
+.agents/

@@ -399,7 +399,7 @@ export class AgentController {
       // Step 1: Use the operator-reviewed facts when supplied, otherwise extract them.
       this.stateMachine.transition('EXTRACTING_DOC');
       await this.checkPauseOrStop();
-      const facts =
+      let facts: ExtractedFact[] =
         options.facts && options.facts.length > 0
           ? await this.useProvidedFacts(options.facts)
           : await this.runTool<any[]>(
@@ -412,6 +412,11 @@ export class AgentController {
               `Extracting facts from ${options.documentName || 'document'}...`,
               (result: any[]) => `Successfully extracted ${result.length} document facts.`
             );
+
+      if (options.fillIdFields === false) {
+        const idRegex = /(ssn|passport|aadhaar|tax_id|id_number|national_id)/i;
+        facts = facts.filter((f) => !idRegex.test(f.key));
+      }
 
       // Step 2: Launch the visible browser and scan the form.
       this.stateMachine.transition('SCANNING_FORM');

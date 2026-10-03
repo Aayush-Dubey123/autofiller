@@ -132,6 +132,8 @@ export interface StartSessionOptions {
   /** Operator-reviewed facts. When present the agent uses them directly. */
   facts?: ExtractedFact[];
   targetUrl: string;
+  /** Explicit runtime permission to fill ID-number fields. */
+  fillIdFields?: boolean;
 }
 
 /** Result of a native document selection dialog. */

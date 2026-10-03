@@ -172,6 +172,8 @@ export interface StartSessionOptions {
   /** Operator-reviewed facts. When present the agent skips re-extraction. */
   facts?: ExtractedFact[];
   targetUrl: string;
+  /** Explicit runtime permission to fill ID-number fields (SSN, Aadhaar, Passport, etc.). */
+  fillIdFields?: boolean;
 }
 
 /** Result of a native document selection dialog. */

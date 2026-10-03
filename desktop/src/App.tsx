@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   ChevronDown,
-  FileText,
   HelpCircle,
   History,
   Home,
@@ -10,16 +9,18 @@ import {
   Play,
   Sprout,
   Sun,
+  User,
   X,
 } from 'lucide-react';
 import { ClarificationModal } from './features/clarification/ClarificationModal';
+import { VaultLockModal } from './features/vault/VaultLockModal';
 import { useFormSession } from './hooks/useFormSession';
 import { bridge } from './lib/bridge';
-import type { DocumentRecord } from './types/autofiller';
-import { DocumentsView } from './views/DocumentsView';
+import type { DocumentRecord, VaultStatus } from './types/autofiller';
 import { HelpView } from './views/HelpView';
 import { HistoryView } from './views/HistoryView';
 import { HomeView } from './views/HomeView';
+import { MyDetailsView } from './views/MyDetailsView';
 import { NewSessionView } from './views/NewSessionView';
 
 export const App: React.FC = () => {
@@ -33,11 +34,46 @@ export const App: React.FC = () => {
   });
   const [copiedDetails, setCopiedDetails] = useState<boolean>(false);
 
+  // Vault Lock/Setup state
+  const [vaultState, setVaultState] = useState<VaultStatus>({
+    exists: false,
+    unlocked: false,
+    recoveryAvailable: false,
+  });
+  const [showVaultModal, setShowVaultModal] = useState<boolean>(false);
+  const [vaultModalMode, setVaultModalMode] = useState<'setup' | 'unlock'>('unlock');
+
   const session = useFormSession();
 
   useEffect(() => {
     localStorage.setItem('autofiller_theme', theme);
   }, [theme]);
+
+  // Check vault status periodically to detect auto-lock and handle startup
+  useEffect(() => {
+    checkVaultStatus();
+    const interval = setInterval(checkVaultStatus, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const checkVaultStatus = async () => {
+    try {
+      const st = await bridge.vaultStatus();
+      setVaultState(st);
+
+      if (!st.exists) {
+        setVaultModalMode('setup');
+        setShowVaultModal(true);
+      } else if (!st.unlocked) {
+        setVaultModalMode('unlock');
+        setShowVaultModal(true);
+      } else {
+        setShowVaultModal(false);
+      }
+    } catch (err) {
+      console.error('Error checking vault status', err);
+    }
+  };
 
   useEffect(() => {
     bridge.getEngineStatus().then((status) => {
@@ -79,6 +115,22 @@ export const App: React.FC = () => {
 
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
+  };
+
+  const handleVaultUnlocked = () => {
+    setShowVaultModal(false);
+    checkVaultStatus();
+    if (vaultModalMode === 'setup') {
+      setActiveNav('My Details');
+    }
+  };
+
+  const handleResetVault = async () => {
+    if (confirm('Are you sure you want to erase all vault data and reset your privacy key? This cannot be undone.')) {
+      await bridge.vaultEraseAll();
+      setShowVaultModal(false);
+      await checkVaultStatus();
+    }
   };
 
   return (
@@ -155,8 +207,8 @@ export const App: React.FC = () => {
             {[
               { id: 'Home', label: 'Home', icon: <Home size={18} /> },
               { id: 'New Session', label: 'New Session', icon: <Play size={18} /> },
+              { id: 'My Details', label: 'My Details', icon: <User size={18} /> },
               { id: 'History', label: 'History', icon: <History size={18} /> },
-              { id: 'Documents', label: 'Documents', icon: <FileText size={18} /> },
               { id: 'Help', label: 'Help', icon: <HelpCircle size={18} /> },
             ].map((item) => {
               const isActive = activeNav === item.id;
@@ -419,7 +471,7 @@ export const App: React.FC = () => {
                 session.resetSession();
                 setActiveNav('New Session');
               }}
-              onOpenDocuments={() => setActiveNav('Documents')}
+              onOpenDocuments={() => setActiveNav('My Details')}
               onOpenHistory={() => setActiveNav('History')}
               onUseDocument={handleUseDocument}
             />
@@ -446,9 +498,9 @@ export const App: React.FC = () => {
             />
           )}
 
-          {activeNav === 'History' && <HistoryView />}
+          {activeNav === 'My Details' && <MyDetailsView />}
 
-          {activeNav === 'Documents' && <DocumentsView onUseDocument={handleUseDocument} />}
+          {activeNav === 'History' && <HistoryView />}
 
           {activeNav === 'Help' && <HelpView />}
         </main>
@@ -522,6 +574,14 @@ export const App: React.FC = () => {
       <ClarificationModal
         prompt={session.clarificationPrompt}
         onSubmitAnswer={session.handleAnswerClarification}
+      />
+
+      {/* Encrypted Vault Setup & Unlock Modal */}
+      <VaultLockModal
+        isOpen={showVaultModal}
+        mode={vaultModalMode}
+        onUnlocked={handleVaultUnlocked}
+        onResetVault={handleResetVault}
       />
     </div>
   );

@@ -7,6 +7,7 @@ import {
   PlusCircle,
   ShieldCheck,
   Sprout,
+  User,
   Zap,
 } from 'lucide-react';
 import { bridge } from '../lib/bridge';
@@ -106,8 +107,8 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 cursor: 'pointer',
               }}
             >
-              <FileText size={18} />
-              <span>Browse Documents</span>
+              <User size={18} />
+              <span>My Details & Vault</span>
             </button>
           </div>
         </div>

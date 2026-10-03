@@ -560,7 +560,7 @@ export class AgentController {
           (outcome) =>
             outcome.verified
               ? `Verified '${mapping.field_label}'.`
-              : `Mismatch on '${mapping.field_label}': expected '${outcome.expectedValue}', found '${outcome.actualValue}'.`,
+              : `Mismatch on '${mapping.field_label}'.`,
           true
         );
         if (result.verified) {
@@ -636,6 +636,9 @@ export class AgentController {
         throw error;
       }
     } finally {
+      if (this.sessionId) {
+        this.backendClient.purgeSession(this.sessionId).catch(() => {});
+      }
       this.isRunning = false;
       this.abortController = null;
     }
@@ -745,11 +748,11 @@ export class AgentController {
       await this.runTool(
         'select_option',
         { fieldRef: field.ref, option: value },
-        `Selecting '${value}' for '${label}'...`,
+        `Selecting option for '${label}'...`,
         (result: any) =>
           result.success
-            ? `Selected '${result.selectedOption}' for '${label}'.`
-            : `Could not select '${value}' for '${label}'. ${result.reason || ''}`.trim(),
+            ? `Selected option for '${label}'.`
+            : `Could not select option for '${label}'. ${result.reason || ''}`.trim(),
         false
       );
       return;
@@ -759,11 +762,11 @@ export class AgentController {
       await this.runTool(
         'select_radio',
         { fieldRef: field.ref, optionValue: value },
-        `Selecting '${value}' for '${label}'...`,
+        `Selecting option for '${label}'...`,
         (result: any) =>
           result.success
-            ? `Selected '${result.selectedValue}' for '${label}'.`
-            : `Could not select '${value}' for '${label}'.`,
+            ? `Selected option for '${label}'.`
+            : `Could not select option for '${label}'.`,
         false
       );
       return;
@@ -791,7 +794,7 @@ export class AgentController {
       (result: any) =>
         result.success
           ? `Filled '${label}'.`
-          : `Value mismatch on '${label}': expected '${result.expectedValue}', entered '${result.actualValue}'.`,
+          : `Field mismatch on '${label}'.`,
       false
     );
   }

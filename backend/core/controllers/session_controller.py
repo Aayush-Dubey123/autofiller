@@ -445,3 +445,33 @@ class SessionController:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to retrieve session",
             )
+
+    async def delete_session(self, *, session_id: str) -> Dict[str, Any]:
+        """
+        Purge a single session from persistent storage.
+        """
+        try:
+            logging.info(f"Executing SessionController.delete_session for {session_id}")
+            await self.crud_session.delete(session_id=session_id)
+            return {"success": True}
+        except Exception as error:
+            logging.error(f"Error in SessionController.delete_session: {error}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to delete session",
+            )
+
+    async def purge_all_sessions(self) -> Dict[str, Any]:
+        """
+        Purge all sessions from persistent storage.
+        """
+        try:
+            logging.info("Executing SessionController.purge_all_sessions")
+            await self.crud_session.delete_all()
+            return {"success": True}
+        except Exception as error:
+            logging.error(f"Error in SessionController.purge_all_sessions: {error}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to purge sessions",
+            )

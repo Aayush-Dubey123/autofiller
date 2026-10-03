@@ -306,3 +306,52 @@ async def append_session_events(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal Server Error",
         )
+
+
+@session_router.delete(
+    "/v1/sessions/{session_id}",
+    status_code=status.HTTP_200_OK,
+)
+async def delete_session(
+    session_id: str,
+    user: dict = Depends(require_operator),
+):
+    """
+    Purge a single session from persistent storage.
+    """
+    try:
+        logging.info(f"Calling DELETE /v1/sessions/{session_id} endpoint")
+        controller = SessionController()
+        return await controller.delete_session(session_id=session_id)
+    except HTTPException as httperror:
+        raise httperror
+    except Exception as error:
+        logging.error(f"Error in DELETE /v1/sessions/{session_id}: {error}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal Server Error",
+        )
+
+
+@session_router.delete(
+    "/v1/sessions",
+    status_code=status.HTTP_200_OK,
+)
+async def delete_all_sessions(
+    user: dict = Depends(require_operator),
+):
+    """
+    Purge all active sessions from persistent storage.
+    """
+    try:
+        logging.info("Calling DELETE /v1/sessions endpoint")
+        controller = SessionController()
+        return await controller.purge_all_sessions()
+    except HTTPException as httperror:
+        raise httperror
+    except Exception as error:
+        logging.error(f"Error in DELETE /v1/sessions: {error}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal Server Error",
+        )

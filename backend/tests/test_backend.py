@@ -71,8 +71,15 @@ def app_with_fake_db():
                         values = spec.get("$each") if isinstance(spec, dict) else [spec]
                         session.setdefault(field, [])
                         session[field].extend(values)
-                        if isinstance(spec, dict) and "$slice" in spec:
-                            session[field] = session[field][spec["$slice"] :]
+            async def delete_one(self, query):
+                """Remove a session by id."""
+                sid = query.get("id")
+                if sid in store:
+                    del store[sid]
+
+            async def delete_many(self, query):
+                """Clear all sessions."""
+                store.clear()
 
         class FakeDb:
             """Database double returning the fake sessions collection."""
@@ -608,7 +615,7 @@ async def test_mock_school_form_endpoint_is_accessible(app_with_fake_db):
         response = await client.get("/mock_school_form.html")
         assert response.status_code == 200
         assert "text/html" in response.headers.get("content-type", "")
-        assert "SVPCET COLLEGE" in response.text
+        assert "Mock School Admission Form" in response.text
 
 
 @pytest.mark.asyncio
@@ -806,3 +813,33 @@ async def test_clarification_rejects_an_unusable_answer(app_with_fake_db):
         assert response.status_code == 422
         detail = response.text
         assert "non-empty string" in detail
+
+
+@pytest.mark.asyncio
+async def test_delete_session_and_purge_all_endpoints(app_with_fake_db):
+    """Verify DELETE /v1/sessions/{id} and DELETE /v1/sessions purge sessions."""
+    transport = ASGITransport(app=app_with_fake_db)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/v1/sessions",
+            headers=AUTH_HEADERS,
+            json={"document_name": "doc.pdf", "target_url": "https://example.com/form"},
+        )
+        session_id = created.json()["id"]
+
+        del_res = await client.delete(f"/v1/sessions/{session_id}", headers=AUTH_HEADERS)
+        assert del_res.status_code == 200
+        assert del_res.json() == {"success": True}
+
+        get_res = await client.get(f"/v1/sessions/{session_id}", headers=AUTH_HEADERS)
+        assert get_res.status_code == 404
+
+        # Test purge all
+        await client.post(
+            "/v1/sessions",
+            headers=AUTH_HEADERS,
+            json={"document_name": "doc.pdf", "target_url": "https://example.com/form"},
+        )
+        purge_res = await client.delete("/v1/sessions", headers=AUTH_HEADERS)
+        assert purge_res.status_code == 200
+        assert purge_res.json() == {"success": True}

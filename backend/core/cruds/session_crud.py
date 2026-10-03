@@ -251,3 +251,42 @@ class CRUDSession:
         except Exception as error:
             logging.error(f"Error in CRUDSession.count_events function: {error}")
             raise
+
+    async def delete(self, *, session_id: str) -> bool:
+        """
+        Purge a single session record from database and memory.
+        """
+        try:
+            logging.info(f"Executing CRUDSession.delete for {session_id}")
+            if self.db is not None:
+                try:
+                    collection = self.db[SESSIONS_COLLECTION]
+                    await collection.delete_one({"id": session_id})
+                except Exception as db_err:
+                    logging.warning(f"MongoDB delete failed: {db_err}")
+
+            if session_id in _in_memory_sessions:
+                del _in_memory_sessions[session_id]
+            return True
+        except Exception as error:
+            logging.error(f"Error in CRUDSession.delete: {error}")
+            raise
+
+    async def delete_all(self) -> bool:
+        """
+        Purge all session records from database and memory.
+        """
+        try:
+            logging.info("Executing CRUDSession.delete_all")
+            if self.db is not None:
+                try:
+                    collection = self.db[SESSIONS_COLLECTION]
+                    await collection.delete_many({})
+                except Exception as db_err:
+                    logging.warning(f"MongoDB delete_all failed: {db_err}")
+
+            _in_memory_sessions.clear()
+            return True
+        except Exception as error:
+            logging.error(f"Error in CRUDSession.delete_all: {error}")
+            raise

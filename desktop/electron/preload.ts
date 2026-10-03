@@ -17,8 +17,10 @@ import type {
   DocumentRecord,
   DocumentSelection,
   EngineStatus,
+  ProfileRecord,
   SessionRecord,
   StartSessionOptions,
+  VaultStatus,
   WorkflowState,
 } from './shared/types';
 
@@ -43,6 +45,29 @@ export interface AutoFillerAPI {
   backendHealth: () => Promise<BackendHealth>;
   getEngineStatus: () => Promise<EngineStatus>;
   appVersion: () => Promise<string>;
+  vaultStatus: () => Promise<VaultStatus>;
+  vaultCreate: (payload: {
+    privacyKey: string;
+    useRecoveryCode?: boolean;
+  }) => Promise<{ success: boolean; recoveryCode?: string; error?: string }>;
+  vaultUnlock: (payload: {
+    privacyKey?: string;
+    recoveryCode?: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+  vaultLock: () => Promise<{ success: boolean }>;
+  vaultGetProfiles: () => Promise<ProfileRecord[]>;
+  vaultSaveProfile: (profile: ProfileRecord) => Promise<{ success: boolean; error?: string }>;
+  vaultDeleteProfile: (profileId: string) => Promise<{ success: boolean; error?: string }>;
+  vaultDeleteField: (payload: {
+    profileId: string;
+    sectionId: string;
+    fieldKey: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+  vaultChangeKey: (payload: {
+    currentPrivacyKey: string;
+    newPrivacyKey: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+  vaultEraseAll: () => Promise<{ success: boolean }>;
   onAgentEvent: (callback: (event: AgentEventPayload) => void) => () => void;
   onClarificationRequest: (callback: (prompt: ClarificationPromptPayload) => void) => () => void;
   onStateChange: (
@@ -70,6 +95,16 @@ const api: AutoFillerAPI = {
   backendHealth: () => ipcRenderer.invoke('autofiller:backend-health'),
   getEngineStatus: () => ipcRenderer.invoke('autofiller:get-engine-status'),
   appVersion: () => ipcRenderer.invoke('autofiller:app-version'),
+  vaultStatus: () => ipcRenderer.invoke('vault:status'),
+  vaultCreate: (payload) => ipcRenderer.invoke('vault:create', payload),
+  vaultUnlock: (payload) => ipcRenderer.invoke('vault:unlock', payload),
+  vaultLock: () => ipcRenderer.invoke('vault:lock'),
+  vaultGetProfiles: () => ipcRenderer.invoke('vault:get-profiles'),
+  vaultSaveProfile: (profile) => ipcRenderer.invoke('vault:save-profile', profile),
+  vaultDeleteProfile: (profileId) => ipcRenderer.invoke('vault:delete-profile', profileId),
+  vaultDeleteField: (payload) => ipcRenderer.invoke('vault:delete-field', payload),
+  vaultChangeKey: (payload) => ipcRenderer.invoke('vault:change-key', payload),
+  vaultEraseAll: () => ipcRenderer.invoke('vault:erase-all'),
 
   onAgentEvent: (callback) => {
     const subscription = (_event: unknown, payload: AgentEventPayload) => callback(payload);

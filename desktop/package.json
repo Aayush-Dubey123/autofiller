@@ -11,7 +11,7 @@
     "electron": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
-    "test": "npm run build && node tests/policy_test.js && node tests/tool_registry_test.js && node tests/scanner_test.js && node tests/e2e_integration_test.js"
+    "test": "npm run build && node tests/policy_test.js && node tests/tool_registry_test.js && node tests/scanner_test.js && node tests/vault_test.js && node tests/e2e_integration_test.js"
   },
   "dependencies": {
     "lucide-react": "0.474.0",

@@ -129,6 +129,35 @@ export interface BackendHealth {
   geminiConfigured: boolean;
 }
 
+/** Vault operational status surfaced to the UI. */
+export interface VaultStatus {
+  exists: boolean;
+  unlocked: boolean;
+  recoveryAvailable: boolean;
+}
+
+/** Individual stored field within a vault section. */
+export interface VaultField {
+  key: string;
+  label: string;
+  value: string;
+  sensitive?: boolean;
+}
+
+/** Section grouping related vault fields (Personal, Contact, Address, etc.). */
+export interface VaultSection {
+  id: string;
+  title: string;
+  fields: VaultField[];
+}
+
+/** Complete user profile record inside the encrypted vault. */
+export interface ProfileRecord {
+  id: string;
+  name: string;
+  sections: VaultSection[];
+}
+
 /** Engine operational status surfaced to the renderer. */
 export interface EngineStatus {
   ready: boolean;

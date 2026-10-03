@@ -174,11 +174,16 @@ function spawnBackend(): void {
   }
 }
 
+import { VaultService } from './services/VaultService';
+
+let vaultService: VaultService | null = null;
+
 /**
  * Create the main application window and wire the agent controller.
  */
 async function createWindow(): Promise<void> {
   secretStore = new SecretStore();
+  vaultService = new VaultService(app.getPath('userData'));
   const operatorToken = resolveOperatorToken();
   const backendClient = new BackendClient(operatorToken, BACKEND_BASE_URL);
 
@@ -206,6 +211,7 @@ async function createWindow(): Promise<void> {
     mainWindow,
     agentController,
     new HistoryStore(app.getPath('userData')),
+    vaultService,
     () => currentEngineStatus
   );
 

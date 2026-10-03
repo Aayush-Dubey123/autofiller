@@ -15,8 +15,10 @@ import type {
   DocumentSelection,
   EngineStatus,
   ExtractedFact,
+  ProfileRecord,
   SessionRecord,
   StartSessionOptions,
+  VaultStatus,
   WorkflowState,
 } from '../types/autofiller';
 
@@ -41,6 +43,29 @@ export interface AutoFillerAPI {
   backendHealth: () => Promise<BackendHealth>;
   getEngineStatus: () => Promise<EngineStatus>;
   appVersion: () => Promise<string>;
+  vaultStatus: () => Promise<VaultStatus>;
+  vaultCreate: (payload: {
+    privacyKey: string;
+    useRecoveryCode?: boolean;
+  }) => Promise<{ success: boolean; recoveryCode?: string; error?: string }>;
+  vaultUnlock: (payload: {
+    privacyKey?: string;
+    recoveryCode?: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+  vaultLock: () => Promise<{ success: boolean }>;
+  vaultGetProfiles: () => Promise<ProfileRecord[]>;
+  vaultSaveProfile: (profile: ProfileRecord) => Promise<{ success: boolean; error?: string }>;
+  vaultDeleteProfile: (profileId: string) => Promise<{ success: boolean; error?: string }>;
+  vaultDeleteField: (payload: {
+    profileId: string;
+    sectionId: string;
+    fieldKey: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+  vaultChangeKey: (payload: {
+    currentPrivacyKey: string;
+    newPrivacyKey: string;
+  }) => Promise<{ success: boolean; error?: string }>;
+  vaultEraseAll: () => Promise<{ success: boolean }>;
   onAgentEvent: (callback: (event: AgentEventPayload) => void) => () => void;
   onClarificationRequest: (callback: (prompt: ClarificationPromptPayload) => void) => () => void;
   onStateChange: (
@@ -99,6 +124,25 @@ const browserFallback: AutoFillerAPI = {
     return { ready: true };
   },
   appVersion: async () => '1.0.0 (Browser Preview)',
+  vaultStatus: async () => ({ exists: false, unlocked: true, recoveryAvailable: false }),
+  vaultCreate: async () => ({ success: true }),
+  vaultUnlock: async () => ({ success: true }),
+  vaultLock: async () => ({ success: true }),
+  vaultGetProfiles: async () => [
+    {
+      id: 'profile_preview',
+      name: 'Primary Profile (Preview)',
+      sections: [
+        { id: 'sec_personal', title: 'Personal Information', fields: [{ key: 'student_name', label: 'Student Name', value: 'Aarav Sharma' }] },
+        { id: 'sec_contact', title: 'Contact Details', fields: [{ key: 'email', label: 'Email Address', value: 'aarav.sharma@example.com' }] },
+      ],
+    },
+  ],
+  vaultSaveProfile: async () => ({ success: true }),
+  vaultDeleteProfile: async () => ({ success: true }),
+  vaultDeleteField: async () => ({ success: true }),
+  vaultChangeKey: async () => ({ success: true }),
+  vaultEraseAll: async () => ({ success: true }),
   onAgentEvent: () => () => undefined,
   onClarificationRequest: () => () => undefined,
   onStateChange: () => () => undefined,

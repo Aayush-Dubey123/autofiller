@@ -13,7 +13,8 @@ import path from 'path';
 import { AgentController } from '../agent/AgentController';
 import { BackendClient } from '../services/BackendClient';
 import { HistoryStore } from '../services/HistoryStore';
-import { DocumentSelection, EngineStatus, StartSessionOptions } from '../shared/types';
+import { VaultService } from '../services/VaultService';
+import { DocumentSelection, EngineStatus, ProfileRecord, StartSessionOptions, VaultStatus } from '../shared/types';
 
 /** Return an error message when the URL is not a usable http(s) URL, otherwise null. */
 function validateTargetUrl(value: unknown): string | null {
@@ -31,6 +32,7 @@ export function registerIpcHandlers(
   mainWindow: BrowserWindow,
   agentController: AgentController,
   historyStore: HistoryStore,
+  vaultService: VaultService,
   getEngineStatus: () => EngineStatus = () => ({ ready: true })
 ): void {
   const backendClient: BackendClient = agentController.getBackendClient();
@@ -171,9 +173,65 @@ export function registerIpcHandlers(
   ipcMain.handle('autofiller:history-list', async () => historyStore.listSessions());
   ipcMain.handle('autofiller:documents-list', async () => historyStore.listDocuments());
 
-  // Backend reachability and Gemini key presence (boolean only) for status indicators.
-  ipcMain.handle('autofiller:backend-health', async () => backendClient.healthStatus());
-  ipcMain.handle('autofiller:get-engine-status', async () => getEngineStatus());
+  // Encrypted Vault IPC Channels
+  ipcMain.handle('vault:status', async (): Promise<VaultStatus> => vaultService.getStatus());
+
+  ipcMain.handle('vault:create', async (_event, payload) =>
+    vaultService.createVault(payload?.privacyKey, payload?.useRecoveryCode)
+  );
+
+  ipcMain.handle('vault:unlock', async (_event, payload) =>
+    vaultService.unlock({ privacyKey: payload?.privacyKey, recoveryCode: payload?.recoveryCode })
+  );
+
+  ipcMain.handle('vault:lock', async () => {
+    vaultService.lock();
+    return { success: true };
+  });
+
+  ipcMain.handle('vault:get-profiles', async (): Promise<ProfileRecord[]> => {
+    try {
+      return vaultService.getProfiles();
+    } catch {
+      return [];
+    }
+  });
+
+  ipcMain.handle('vault:save-profile', async (_event, profile: ProfileRecord) => {
+    try {
+      vaultService.saveProfile(profile);
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Could not save profile.' };
+    }
+  });
+
+  ipcMain.handle('vault:delete-profile', async (_event, profileId: string) => {
+    try {
+      vaultService.deleteProfile(profileId);
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Could not delete profile.' };
+    }
+  });
+
+  ipcMain.handle('vault:delete-field', async (_event, payload) => {
+    try {
+      vaultService.deleteField(payload?.profileId, payload?.sectionId, payload?.fieldKey);
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Could not delete field.' };
+    }
+  });
+
+  ipcMain.handle('vault:change-key', async (_event, payload) =>
+    vaultService.changePrivacyKey(payload?.currentPrivacyKey, payload?.newPrivacyKey)
+  );
+
+  ipcMain.handle('vault:erase-all', async () => {
+    vaultService.eraseAll();
+    return { success: true };
+  });
 
   ipcMain.handle('autofiller:app-version', async () => app.getVersion());
 

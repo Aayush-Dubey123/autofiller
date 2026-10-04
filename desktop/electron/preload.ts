@@ -54,6 +54,13 @@ export interface AutoFillerAPI {
     privacyKey: string;
     useRecoveryCode?: boolean;
   }) => Promise<{ success: boolean; recoveryCode?: string; error?: string }>;
+  vaultEnableExtra: (payload: {
+    privacyKey: string;
+    wantRecovery?: boolean;
+  }) => Promise<{ success: boolean; recoveryCode?: string; error?: string }>;
+  vaultDisableExtra: (payload: {
+    privacyKey: string;
+  }) => Promise<{ success: boolean; error?: string }>;
   vaultUnlock: (payload: {
     privacyKey?: string;
     recoveryCode?: string;
@@ -105,6 +112,8 @@ const api: AutoFillerAPI = {
   appVersion: () => ipcRenderer.invoke('autofiller:app-version'),
   vaultStatus: () => ipcRenderer.invoke('vault:status'),
   vaultCreate: (payload) => ipcRenderer.invoke('vault:create', payload),
+  vaultEnableExtra: (payload) => ipcRenderer.invoke('vault:enable-extra', payload),
+  vaultDisableExtra: (payload) => ipcRenderer.invoke('vault:disable-extra', payload),
   vaultUnlock: (payload) => ipcRenderer.invoke('vault:unlock', payload),
   vaultLock: () => ipcRenderer.invoke('vault:lock'),
   vaultGetProfiles: () => ipcRenderer.invoke('vault:get-profiles'),

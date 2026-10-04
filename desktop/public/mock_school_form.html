@@ -2,128 +2,149 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Mock School Admission Form</title>
   <style>
-    body { font-family: system-ui, sans-serif; background: #f4f6f8; color: #1e293b; padding: 24px; max-width: 680px; margin: 0 auto; }
-    h1 { font-size: 1.4rem; color: #0f2e23; margin-bottom: 6px; }
-    p { font-size: 0.85rem; color: #64748b; margin-bottom: 20px; }
-    .form-group { margin-bottom: 16px; display: flex; flex-direction: column; gap: 4px; }
-    label { font-size: 0.875rem; font-weight: 600; color: #334155; }
-    input, select, textarea { padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.9rem; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f4f8; color: #1e293b; padding: 24px 16px; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; }
+    .card { background: #ffffff; border-radius: 12px; border: 1px solid #cbd5e1; box-shadow: 0 10px 25px rgba(0,0,0,0.05); max-width: 680px; width: 100%; padding: 28px; }
+    .header { text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 16px; margin-bottom: 24px; }
+    .header h1 { font-size: 1.5rem; color: #0f2e23; font-weight: 800; }
+    .header p { font-size: 0.875rem; color: #64748b; margin-top: 4px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+    .full-width { grid-column: 1 / -1; }
+    .form-group { display: flex; flexDirection: column; gap: 6px; }
+    label { font-size: 0.8125rem; font-weight: 700; color: #334155; }
+    label span.req { color: #dc2626; margin-left: 2px; }
+    input[type="text"], input[type="email"], input[type="tel"], input[type="date"], select, textarea { width: 100%; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.875rem; color: #0f172a; transition: border-color 0.2s, box-shadow 0.2s; }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: #16654e; box-shadow: 0 0 0 3px rgba(22, 101, 78, 0.15); }
     .radio-group, .checkbox-group { display: flex; gap: 16px; align-items: center; margin-top: 4px; }
-    .radio-group label, .checkbox-group label { font-weight: normal; font-size: 0.85rem; }
-    button[type="submit"] { background: #16654e; color: #fff; padding: 10px 20px; border: none; border-radius: 6px; font-weight: 700; cursor: pointer; margin-top: 12px; }
+    .radio-group label, .checkbox-group label { font-weight: normal; font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+    button[type="submit"] { width: 100%; background: #16654e; color: #ffffff; padding: 12px; border: none; border-radius: 6px; font-size: 0.9375rem; font-weight: 700; cursor: pointer; transition: background 0.2s; margin-top: 20px; }
+    button[type="submit"]:hover { background: #0f4c3a; }
+    #submitted-confirmation { display: none; background: #f0fdf4; border: 1.5px solid #86efac; border-radius: 8px; padding: 16px; margin-top: 20px; text-align: center; color: #16654e; font-weight: 700; }
   </style>
 </head>
 <body>
-  <h1>Student Admission Form</h1>
-  <p>Please enter student and parent details accurately for processing.</p>
-
-  <form id="admissionForm" onsubmit="handleFormSubmit(event)">
-    <div class="form-group">
-      <label for="student_name">Student Full Name *</label>
-      <input type="text" id="student_name" name="student_name" required placeholder="Aarav Sharma">
+  <div class="card">
+    <div class="header">
+      <h1>Greenwood Academy</h1>
+      <p>Student Admission Application Form</p>
     </div>
 
-    <div class="form-group">
-      <label for="dob">Date of Birth *</label>
-      <input type="date" id="dob" name="dob" required>
-    </div>
+    <form id="admissionForm" onsubmit="handleFormSubmit(event)">
+      <div class="grid">
+        <div class="form-group full-width">
+          <label for="student_name">Student Full Name<span class="req">*</span></label>
+          <input type="text" id="student_name" name="student_name" required placeholder="Aarav Sharma">
+        </div>
 
-    <div class="form-group">
-      <label for="gender">Gender *</label>
-      <select id="gender" name="gender" required>
-        <option value="">Select Gender</option>
-        <option value="Male">Male</option>
-        <option value="Female">Female</option>
-        <option value="Other">Other</option>
-      </select>
-    </div>
+        <div class="form-group">
+          <label for="dob">Date of Birth<span class="req">*</span></label>
+          <input type="date" id="dob" name="dob" required>
+        </div>
 
-    <div class="form-group">
-      <label for="email">Student Email Address *</label>
-      <input type="email" id="email" name="email" required placeholder="student@example.com">
-    </div>
+        <div class="form-group">
+          <label for="gender">Gender<span class="req">*</span></label>
+          <select id="gender" name="gender" required>
+            <option value="">Select Gender</option>
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
 
-    <div class="form-group">
-      <label for="phone">Contact Phone Number *</label>
-      <input type="tel" id="phone" name="phone" required placeholder="+91 9876543210">
-    </div>
+        <div class="form-group">
+          <label for="email">Student Email Address<span class="req">*</span></label>
+          <input type="email" id="email" name="email" required placeholder="student@example.com">
+        </div>
 
-    <div class="form-group">
-      <label for="address">Residential Address *</label>
-      <textarea id="address" name="address" rows="2" required placeholder="123 Park Street"></textarea>
-    </div>
+        <div class="form-group">
+          <label for="phone">Contact Phone Number<span class="req">*</span></label>
+          <input type="tel" id="phone" name="phone" required placeholder="+91 9876543210">
+        </div>
 
-    <div class="form-group">
-      <label for="city">City *</label>
-      <input type="text" id="city" name="city" required placeholder="Mumbai">
-    </div>
+        <div class="form-group full-width">
+          <label for="address">Residential Address<span class="req">*</span></label>
+          <textarea id="address" name="address" rows="2" required placeholder="123 Park Street"></textarea>
+        </div>
 
-    <div class="form-group">
-      <label for="state">State *</label>
-      <input type="text" id="state" name="state" required placeholder="Maharashtra">
-    </div>
+        <div class="form-group">
+          <label for="city">City<span class="req">*</span></label>
+          <input type="text" id="city" name="city" required placeholder="Mumbai">
+        </div>
 
-    <div class="form-group">
-      <label for="pincode">Pincode / Zip Code *</label>
-      <input type="text" id="pincode" name="pincode" required placeholder="400001">
-    </div>
+        <div class="form-group">
+          <label for="state">State<span class="req">*</span></label>
+          <input type="text" id="state" name="state" required placeholder="Maharashtra">
+        </div>
 
-    <div class="form-group">
-      <label for="father_name">Father's Name *</label>
-      <input type="text" id="father_name" name="father_name" required placeholder="Vikram Sharma">
-    </div>
+        <div class="form-group">
+          <label for="pincode">Pincode / Zip Code<span class="req">*</span></label>
+          <input type="text" id="pincode" name="pincode" required placeholder="400001">
+        </div>
 
-    <div class="form-group">
-      <label for="mother_name">Mother's Name *</label>
-      <input type="text" id="mother_name" name="mother_name" required placeholder="Sunita Sharma">
-    </div>
+        <div class="form-group">
+          <label for="father_name">Father's Name<span class="req">*</span></label>
+          <input type="text" id="father_name" name="father_name" required placeholder="Vikram Sharma">
+        </div>
 
-    <div class="form-group">
-      <label for="previous_school">Previous School Attended</label>
-      <input type="text" id="previous_school" name="previous_school" placeholder="Greenwood High">
-    </div>
+        <div class="form-group">
+          <label for="mother_name">Mother's Name<span class="req">*</span></label>
+          <input type="text" id="mother_name" name="mother_name" required placeholder="Sunita Sharma">
+        </div>
 
-    <div class="form-group">
-      <label for="grade">Applying Grade / Class *</label>
-      <select id="grade" name="grade" required>
-        <option value="">Select Grade</option>
-        <option value="Grade 1">Grade 1</option>
-        <option value="Grade 5">Grade 5</option>
-        <option value="Grade 10">Grade 10</option>
-      </select>
-    </div>
+        <div class="form-group">
+          <label for="previous_school">Previous School Attended</label>
+          <input type="text" id="previous_school" name="previous_school" placeholder="Greenwood High">
+        </div>
 
-    <div class="form-group">
-      <label>Does student have allergies?</label>
-      <div class="radio-group">
-        <label><input type="radio" name="allergies" value="Yes"> Yes</label>
-        <label><input type="radio" name="allergies" value="No" checked> No</label>
+        <div class="form-group">
+          <label for="grade">Applying Grade / Class<span class="req">*</span></label>
+          <select id="grade" name="grade" required>
+            <option value="">Select Grade</option>
+            <option value="Grade 1">Grade 1</option>
+            <option value="Grade 5">Grade 5</option>
+            <option value="Grade 10">Grade 10</option>
+          </select>
+        </div>
+
+        <div class="form-group full-width">
+          <label>Does student have allergies?</label>
+          <div class="radio-group">
+            <label><input type="radio" name="allergies" value="Yes"> Yes</label>
+            <label><input type="radio" name="allergies" value="No" checked> No</label>
+          </div>
+        </div>
+
+        <div class="form-group full-width">
+          <label>Does student require transport?</label>
+          <div class="radio-group">
+            <label><input type="radio" name="transport" value="Yes"> Yes</label>
+            <label><input type="radio" name="transport" value="No" checked> No</label>
+          </div>
+        </div>
+
+        <div class="form-group full-width checkbox-group">
+          <label><input type="checkbox" id="terms" name="terms" required> I agree to the school admission terms and conditions<span class="req">*</span></label>
+        </div>
       </div>
-    </div>
 
-    <div class="form-group">
-      <label>Does student require transport?</label>
-      <div class="radio-group">
-        <label><input type="radio" name="transport" value="Yes"> Yes</label>
-        <label><input type="radio" name="transport" value="No" checked> No</label>
-      </div>
-    </div>
+      <button type="submit" id="submitBtn">Submit Application</button>
+    </form>
 
-    <div class="form-group checkbox-group">
-      <label><input type="checkbox" id="terms" name="terms" required> I agree to the school admission terms and conditions *</label>
+    <div id="submitted-confirmation">
+      ✓ Application Submitted Successfully!
     </div>
-
-    <button type="submit" id="submitBtn">Submit Application</button>
-  </form>
+  </div>
 
   <script>
     function handleFormSubmit(e) {
       e.preventDefault();
       window.dispatchEvent(new CustomEvent('autofiller:submitted'));
       window.dispatchEvent(new CustomEvent('formpilot:submitted'));
-      alert('Form submitted successfully!');
+      document.getElementById('submitted-confirmation').style.display = 'block';
     }
   </script>
 </body>

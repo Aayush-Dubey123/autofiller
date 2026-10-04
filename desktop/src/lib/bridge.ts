@@ -52,6 +52,13 @@ export interface AutoFillerAPI {
     privacyKey: string;
     useRecoveryCode?: boolean;
   }) => Promise<{ success: boolean; recoveryCode?: string; error?: string }>;
+  vaultEnableExtra: (payload: {
+    privacyKey: string;
+    wantRecovery?: boolean;
+  }) => Promise<{ success: boolean; recoveryCode?: string; error?: string }>;
+  vaultDisableExtra: (payload: {
+    privacyKey: string;
+  }) => Promise<{ success: boolean; error?: string }>;
   vaultUnlock: (payload: {
     privacyKey?: string;
     recoveryCode?: string;
@@ -134,6 +141,8 @@ const browserFallback: AutoFillerAPI = {
   appVersion: async () => '1.0.0 (Browser Preview)',
   vaultStatus: async () => ({ exists: false, unlocked: true, recoveryAvailable: false }),
   vaultCreate: async () => ({ success: true }),
+  vaultEnableExtra: async () => ({ success: true }),
+  vaultDisableExtra: async () => ({ success: true }),
   vaultUnlock: async () => ({ success: true }),
   vaultLock: async () => ({ success: true }),
   vaultGetProfiles: async () => [

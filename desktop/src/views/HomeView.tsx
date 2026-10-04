@@ -39,110 +39,63 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-      {/* Hero Banner */}
+      {/* First-Run / No Details Card */}
       <div
         style={{
-          background: 'linear-gradient(135deg, #0F2E23 0%, #16654E 100%)',
+          background: 'var(--bg-card)',
           borderRadius: 'var(--radius-lg)',
-          padding: '28px 32px',
-          color: '#FFFFFF',
+          border: '1.5px solid #A5DCB4',
+          padding: '24px 28px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          boxShadow: '0 10px 30px -5px rgba(15, 46, 35, 0.3)',
+          flexWrap: 'wrap',
+          gap: '16px',
+          boxShadow: '0 4px 16px rgba(22, 101, 78, 0.08)',
         }}
       >
-        <div style={{ maxWidth: '600px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <div
             style={{
-              fontSize: '0.75rem',
-              fontWeight: 700,
-              letterSpacing: '0.08em',
-              color: '#A5DCB4',
-              textTransform: 'uppercase',
-              marginBottom: '6px',
+              width: '44px',
+              height: '44px',
+              borderRadius: '12px',
+              background: '#D9EFE0',
+              color: '#0F4C3A',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
             }}
           >
-            AUTOFILLER.AI DASHBOARD
+            <User size={24} />
           </div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 800, lineHeight: 1.2, color: '#FFFFFF' }}>
-            From Documents to Opportunities
-          </h1>
-          <p style={{ fontSize: '0.9375rem', color: '#CBD5E1', marginTop: '8px', lineHeight: 1.5 }}>
-            Automate form filling safely. AI extracts facts from your documents and populates web forms under human supervision. Final submission is strictly yours.
-          </p>
-          <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
-            <button
-              onClick={onNewSession}
-              style={{
-                background: '#A5DCB4',
-                color: '#0F2E23',
-                border: 'none',
-                borderRadius: 'var(--radius-md)',
-                padding: '10px 20px',
-                fontWeight: 800,
-                fontSize: '0.875rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                cursor: 'pointer',
-              }}
-            >
-              <PlusCircle size={18} />
-              <span>Start New Session</span>
-            </button>
-            <button
-              onClick={onOpenDocuments}
-              style={{
-                background: 'rgba(255, 255, 255, 0.1)',
-                color: '#FFFFFF',
-                border: '1px solid rgba(255, 255, 255, 0.2)',
-                borderRadius: 'var(--radius-md)',
-                padding: '10px 18px',
-                fontWeight: 600,
-                fontSize: '0.875rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                cursor: 'pointer',
-              }}
-            >
-              <User size={18} />
-              <span>My Details & Vault</span>
-            </button>
+          <div>
+            <h2 style={{ fontSize: '1.125rem', fontWeight: 800, color: '#0F2E23' }}>
+              Add your details once, reuse them on any form
+            </h2>
+            <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+              Save your personal information, address, and contact details encrypted on this device. AutoFiller will map and fill them into any form link.
+            </p>
           </div>
         </div>
 
-        <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div
-            style={{
-              background: 'rgba(255, 255, 255, 0.1)',
-              backdropFilter: 'blur(10px)',
-              borderRadius: 'var(--radius-md)',
-              padding: '12px 20px',
-              border: '1px solid rgba(255, 255, 255, 0.15)',
-            }}
-          >
-            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#A5DCB4' }}>
-              {completedCount}
-            </div>
-            <div style={{ fontSize: '0.75rem', color: '#E2E8F0' }}>Sessions Completed</div>
-          </div>
-          <div
-            style={{
-              background: 'rgba(255, 255, 255, 0.1)',
-              backdropFilter: 'blur(10px)',
-              borderRadius: 'var(--radius-md)',
-              padding: '12px 20px',
-              border: '1px solid rgba(255, 255, 255, 0.15)',
-            }}
-          >
-            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#A5DCB4' }}>
-              {totalFields}
-            </div>
-            <div style={{ fontSize: '0.75rem', color: '#E2E8F0' }}>Fields Auto-filled</div>
-          </div>
-        </div>
+        <button
+          onClick={onOpenDocuments}
+          style={{
+            background: '#16654E',
+            color: '#FFFFFF',
+            border: 'none',
+            borderRadius: 'var(--radius-md)',
+            padding: '10px 20px',
+            fontSize: '0.875rem',
+            fontWeight: 700,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Add Your Details
+        </button>
       </div>
 
       {/* 2-Column Split: Recent Documents & Recent History */}

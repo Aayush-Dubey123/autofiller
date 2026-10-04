@@ -133,6 +133,9 @@ export interface BackendHealth {
 export interface VaultStatus {
   exists: boolean;
   unlocked: boolean;
+  hasOsSlot: boolean;
+  hasPassphraseSlot: boolean;
+  hasRecoverySlot: boolean;
   recoveryAvailable: boolean;
 }
 

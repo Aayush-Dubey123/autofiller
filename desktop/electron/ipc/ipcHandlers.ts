@@ -204,6 +204,14 @@ export function registerIpcHandlers(
     vaultService.createVault(payload?.privacyKey, payload?.useRecoveryCode)
   );
 
+  ipcMain.handle('vault:enable-extra', async (_event, payload) =>
+    vaultService.enableExtraProtection(payload?.privacyKey, payload?.wantRecovery)
+  );
+
+  ipcMain.handle('vault:disable-extra', async (_event, payload) =>
+    vaultService.disableExtraProtection(payload?.privacyKey)
+  );
+
   ipcMain.handle('vault:unlock', async (_event, payload) =>
     vaultService.unlock({ privacyKey: payload?.privacyKey, recoveryCode: payload?.recoveryCode })
   );
@@ -215,6 +223,7 @@ export function registerIpcHandlers(
 
   ipcMain.handle('vault:get-profiles', async (): Promise<ProfileRecord[]> => {
     try {
+      await vaultService.ensureVaultInitialized();
       return vaultService.getProfiles();
     } catch {
       return [];
@@ -223,7 +232,7 @@ export function registerIpcHandlers(
 
   ipcMain.handle('vault:save-profile', async (_event, profile: ProfileRecord) => {
     try {
-      vaultService.saveProfile(profile);
+      await vaultService.saveProfile(profile);
       return { success: true };
     } catch (error: any) {
       return { success: false, error: error?.message || 'Could not save profile.' };

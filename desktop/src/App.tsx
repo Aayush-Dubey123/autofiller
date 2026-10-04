@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
-  ChevronDown,
+  ChevronRight,
   HelpCircle,
   History,
   Home,
   Moon,
   Play,
+  Settings,
+  ShieldCheck,
   Sprout,
   Sun,
   User,
@@ -22,6 +24,7 @@ import { HistoryView } from './views/HistoryView';
 import { HomeView } from './views/HomeView';
 import { MyDetailsView } from './views/MyDetailsView';
 import { NewSessionView } from './views/NewSessionView';
+import { SettingsView } from './views/SettingsView';
 
 export const App: React.FC = () => {
   const [activeNav, setActiveNav] = useState<string>('Home');
@@ -34,14 +37,19 @@ export const App: React.FC = () => {
   });
   const [copiedDetails, setCopiedDetails] = useState<boolean>(false);
 
-  // Vault Lock/Setup state
+  // Tip banner state
+  const [showExtraTip, setShowExtraTip] = useState<boolean>(false);
+
+  // Vault Lock state
   const [vaultState, setVaultState] = useState<VaultStatus>({
     exists: false,
-    unlocked: false,
+    unlocked: true,
+    hasOsSlot: true,
+    hasPassphraseSlot: false,
+    hasRecoverySlot: false,
     recoveryAvailable: false,
   });
   const [showVaultModal, setShowVaultModal] = useState<boolean>(false);
-  const [vaultModalMode, setVaultModalMode] = useState<'setup' | 'unlock'>('unlock');
 
   const session = useFormSession();
 
@@ -49,7 +57,7 @@ export const App: React.FC = () => {
     localStorage.setItem('autofiller_theme', theme);
   }, [theme]);
 
-  // Check vault status periodically to detect auto-lock and handle startup
+  // Check vault status periodically to detect auto-lock
   useEffect(() => {
     checkVaultStatus();
     const interval = setInterval(checkVaultStatus, 5000);
@@ -61,14 +69,19 @@ export const App: React.FC = () => {
       const st = await bridge.vaultStatus();
       setVaultState(st);
 
-      if (!st.exists) {
-        setVaultModalMode('setup');
-        setShowVaultModal(true);
-      } else if (!st.unlocked) {
-        setVaultModalMode('unlock');
+      // Only show unlock modal if Extra Protection is enabled (hasPassphraseSlot) and vault is locked
+      if (st.hasPassphraseSlot && !st.unlocked) {
         setShowVaultModal(true);
       } else {
         setShowVaultModal(false);
+      }
+
+      // Check one-time extra protection tip
+      const tipDismissed = localStorage.getItem('autofiller_tip_dismissed') === 'true';
+      if (!st.hasPassphraseSlot && !tipDismissed && st.exists) {
+        setShowExtraTip(true);
+      } else {
+        setShowExtraTip(false);
       }
     } catch (err) {
       console.error('Error checking vault status', err);
@@ -120,17 +133,19 @@ export const App: React.FC = () => {
   const handleVaultUnlocked = () => {
     setShowVaultModal(false);
     checkVaultStatus();
-    if (vaultModalMode === 'setup') {
-      setActiveNav('My Details');
-    }
   };
 
   const handleResetVault = async () => {
-    if (confirm('Are you sure you want to erase all vault data and reset your privacy key? This cannot be undone.')) {
+    if (confirm('Are you sure you want to erase all vault data and reset? This cannot be undone.')) {
       await bridge.vaultEraseAll();
       setShowVaultModal(false);
       await checkVaultStatus();
     }
+  };
+
+  const handleDismissTip = () => {
+    localStorage.setItem('autofiller_tip_dismissed', 'true');
+    setShowExtraTip(false);
   };
 
   return (
@@ -156,13 +171,15 @@ export const App: React.FC = () => {
         }}
       >
         <div>
-          {/* Top Brand Logo */}
+          {/* Top Brand Logo -> Opens Home */}
           <div
+            onClick={() => setActiveNav('Home')}
             style={{
               padding: '24px 20px 20px 20px',
               display: 'flex',
               alignItems: 'center',
               gap: '12px',
+              cursor: 'pointer',
             }}
           >
             <div
@@ -195,7 +212,7 @@ export const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Navigation Links */}
+          {/* Navigation Links: Home, New Session, My Details, History, Settings, Help */}
           <nav
             style={{
               padding: '16px 12px',
@@ -209,6 +226,7 @@ export const App: React.FC = () => {
               { id: 'New Session', label: 'New Session', icon: <Play size={18} /> },
               { id: 'My Details', label: 'My Details', icon: <User size={18} /> },
               { id: 'History', label: 'History', icon: <History size={18} /> },
+              { id: 'Settings', label: 'Settings', icon: <Settings size={18} /> },
               { id: 'Help', label: 'Help', icon: <HelpCircle size={18} /> },
             ].map((item) => {
               const isActive = activeNav === item.id;
@@ -240,7 +258,7 @@ export const App: React.FC = () => {
           </nav>
         </div>
 
-        {/* Sidebar Footer Artwork & Profile */}
+        {/* Sidebar Footer */}
         <div>
           <div style={{ padding: '0 20px 20px 20px', textAlign: 'center' }}>
             <div
@@ -253,15 +271,6 @@ export const App: React.FC = () => {
             >
               Empowering Education with AI
             </div>
-            <svg
-              viewBox="0 0 100 40"
-              style={{ width: '100%', height: '32px', marginTop: '6px', opacity: 0.6 }}
-            >
-              <path
-                fill="#2D5A46"
-                d="M10,40 L15,25 L20,40 Z M30,40 L38,18 L46,40 Z M60,40 L68,22 L76,40 Z M80,40 L85,28 L90,40 Z"
-              />
-            </svg>
           </div>
 
           <div
@@ -270,36 +279,33 @@ export const App: React.FC = () => {
               borderTop: '1px solid rgba(255,255,255,0.1)',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'space-between',
+              gap: '10px',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div
-                style={{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '50%',
-                  background: '#A5DCB4',
-                  color: '#0F2E23',
-                  fontWeight: 700,
-                  fontSize: '0.75rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                AD
+            <div
+              style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: '50%',
+                background: '#A5DCB4',
+                color: '#0F2E23',
+                fontWeight: 700,
+                fontSize: '0.75rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              AD
+            </div>
+            <div>
+              <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#FFFFFF' }}>
+                AutoFiller AI
               </div>
-              <div>
-                <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#FFFFFF' }}>
-                  Aayush Dubey
-                </div>
-                <div style={{ fontSize: '0.65rem', color: '#94A3B8' }}>
-                  Build. Automate. Elevate.
-                </div>
+              <div style={{ fontSize: '0.65rem', color: '#94A3B8' }}>
+                Safe Local Storage
               </div>
             </div>
-            <ChevronDown size={14} color="#94A3B8" />
           </div>
         </div>
       </aside>
@@ -314,7 +320,7 @@ export const App: React.FC = () => {
           overflowX: 'hidden',
         }}
       >
-        {/* Top Navigation Bar */}
+        {/* Top Header */}
         <header
           style={{
             height: '64px',
@@ -327,38 +333,22 @@ export const App: React.FC = () => {
             minWidth: 0,
           }}
         >
-          {/* Left Title */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Sprout size={22} color="#0F4C3A" />
-              <span style={{ fontWeight: 800, fontSize: '1.25rem', color: '#0F2E23' }}>
-                AutoFiller <span style={{ color: '#16654E' }}>AI</span>
-              </span>
-              <span
-                style={{
-                  fontSize: '0.75rem',
-                  color: 'var(--text-muted)',
-                  marginLeft: '4px',
-                  display: 'inline-block',
-                }}
-              >
-                From Documents to Opportunities
-              </span>
-            </div>
+          {/* Left Logo / Title -> Opens Home */}
+          <div
+            onClick={() => setActiveNav('Home')}
+            style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', minWidth: 0 }}
+          >
+            <Sprout size={22} color="#0F4C3A" />
+            <span style={{ fontWeight: 800, fontSize: '1.25rem', color: '#0F2E23' }}>
+              AutoFiller <span style={{ color: '#16654E' }}>AI</span>
+            </span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              From Documents to Opportunities
+            </span>
           </div>
 
-          {/* Right Options */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexShrink: 0 }}>
-            <div
-              style={{
-                fontFamily: 'var(--font-handwriting)',
-                fontSize: '1.25rem',
-                color: '#8B5A2B',
-                fontWeight: 700,
-              }}
-            >
-              Less Manual Work, More Opportunities ~
-            </div>
+          {/* Right Header Options */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexShrink: 0 }}>
             <button
               onClick={toggleTheme}
               title={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
@@ -378,15 +368,36 @@ export const App: React.FC = () => {
             >
               {theme === 'light' ? <Sun size={18} /> : <Moon size={18} />}
             </button>
+
             <button
-              onClick={() => setActiveNav('Help')}
+              onClick={() => setActiveNav('Settings')}
+              title="Settings"
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
                 background: 'transparent',
                 border: 'none',
-                color: 'var(--text-secondary)',
+                color: activeNav === 'Settings' ? '#16654E' : 'var(--text-secondary)',
+                fontSize: '0.875rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              <Settings size={18} />
+              <span>Settings</span>
+            </button>
+
+            <button
+              onClick={() => setActiveNav('Help')}
+              title="Help"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                background: 'transparent',
+                border: 'none',
+                color: activeNav === 'Help' ? '#16654E' : 'var(--text-secondary)',
                 fontSize: '0.875rem',
                 fontWeight: 600,
                 cursor: 'pointer',
@@ -420,9 +431,7 @@ export const App: React.FC = () => {
               <AlertTriangle size={20} color="#DC2626" />
               <span>AutoFiller couldn't start its AI engine. Restart the app.</span>
               {copiedDetails ? (
-                <span style={{ fontSize: '0.75rem', color: '#16654E', marginLeft: '8px' }}>
-                  Copied!
-                </span>
+                <span style={{ fontSize: '0.75rem', color: '#16654E', marginLeft: '8px' }}>Copied!</span>
               ) : (
                 <button
                   onClick={handleCopyErrorDetails}
@@ -443,15 +452,54 @@ export const App: React.FC = () => {
             </div>
             <button
               onClick={() => setEngineError((prev) => ({ ...prev, show: false }))}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: '#991B1B',
-                cursor: 'pointer',
-                padding: '4px',
-              }}
+              style={{ background: 'transparent', border: 'none', color: '#991B1B', cursor: 'pointer', padding: '4px' }}
             >
               <X size={18} />
+            </button>
+          </div>
+        )}
+
+        {/* One-Time Extra Protection Tip Banner */}
+        {showExtraTip && (
+          <div
+            style={{
+              margin: '16px 32px 0 32px',
+              padding: '12px 20px',
+              background: '#F0FDF4',
+              border: '1px solid #86EFAC',
+              borderRadius: 'var(--radius-md)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              color: '#16654E',
+              fontSize: '0.84375rem',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <ShieldCheck size={18} />
+              <span>
+                <strong>Want extra protection?</strong> You can lock your details with a privacy key in Settings.
+              </span>
+              <button
+                onClick={() => setActiveNav('Settings')}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#0F2E23',
+                  fontWeight: 700,
+                  textDecoration: 'underline',
+                  cursor: 'pointer',
+                  marginLeft: '4px',
+                }}
+              >
+                Go to Settings
+              </button>
+            </div>
+            <button
+              onClick={handleDismissTip}
+              style={{ background: 'transparent', border: 'none', color: '#16654E', cursor: 'pointer' }}
+            >
+              <X size={16} />
             </button>
           </div>
         )}
@@ -498,9 +546,17 @@ export const App: React.FC = () => {
             />
           )}
 
-          {activeNav === 'My Details' && <MyDetailsView />}
+          {activeNav === 'My Details' && <MyDetailsView onProfileSaved={checkVaultStatus} />}
 
           {activeNav === 'History' && <HistoryView />}
+
+          {activeNav === 'Settings' && (
+            <SettingsView
+              theme={theme}
+              onToggleTheme={toggleTheme}
+              onLockVault={checkVaultStatus}
+            />
+          )}
 
           {activeNav === 'Help' && <HelpView />}
         </main>
@@ -522,36 +578,15 @@ export const App: React.FC = () => {
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span
-                style={{
-                  width: '8px',
-                  height: '8px',
-                  borderRadius: '50%',
-                  background: '#16654E',
-                }}
-              />
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#16654E' }} />
               <span style={{ fontWeight: 600, color: '#0F2E23' }}>Backend Operational</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span
-                style={{
-                  width: '8px',
-                  height: '8px',
-                  borderRadius: '50%',
-                  background: '#16654E',
-                }}
-              />
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#16654E' }} />
               <span style={{ fontWeight: 600, color: '#0F2E23' }}>Playwright Ready</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span
-                style={{
-                  width: '8px',
-                  height: '8px',
-                  borderRadius: '50%',
-                  background: '#16654E',
-                }}
-              />
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#16654E' }} />
               <span style={{ fontWeight: 600, color: '#0F2E23' }}>Never-Submit Policy Guard</span>
             </div>
           </div>
@@ -576,10 +611,10 @@ export const App: React.FC = () => {
         onSubmitAnswer={session.handleAnswerClarification}
       />
 
-      {/* Encrypted Vault Setup & Unlock Modal */}
+      {/* Vault Unlock Modal (shows only when Extra protection is on and vault is locked) */}
       <VaultLockModal
         isOpen={showVaultModal}
-        mode={vaultModalMode}
+        mode="unlock"
         onUnlocked={handleVaultUnlocked}
         onResetVault={handleResetVault}
       />

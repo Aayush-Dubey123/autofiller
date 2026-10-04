@@ -3,6 +3,7 @@
  */
 
 const assert = require('assert');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -120,6 +121,7 @@ async function runVaultTests() {
   assert.strictEqual(status.hasPassphraseSlot, false, 'passphrase slot must be removed');
 
   // 12. Test opening V1 vault file format
+  const v1Dir = fs.mkdtempSync(path.join(os.tmpdir(), 'v1-vault-test-'));
   const v1Content = {
     version: 1,
     kdf: { algorithm: 'scrypt', N: 16384, r: 8, p: 1, salt: crypto.randomBytes(16).toString('hex') },
@@ -128,8 +130,8 @@ async function runVaultTests() {
     vaultAuthTag: '00',
     ciphertext: '00',
   };
-  fs.writeFileSync(path.join(tmpDir, 'v1_vault.enc'), JSON.stringify(v1Content));
-  const v1Service = new VaultService(tmpDir, fakeProtector);
+  fs.writeFileSync(path.join(v1Dir, 'vault.enc'), JSON.stringify(v1Content));
+  const v1Service = new VaultService(v1Dir, fakeProtector);
   // File exists and parses V1
   const v1Status = v1Service.getStatus();
   assert.strictEqual(v1Status.hasPassphraseSlot, true, 'V1 files must be reported as passphrase protected');
@@ -137,6 +139,7 @@ async function runVaultTests() {
   // Cleanup
   vaultService.eraseAll();
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  fs.rmSync(v1Dir, { recursive: true, force: true });
   console.log('✓ All VaultService V2 encryption, key slots, and security tests passed cleanly!');
 }
 

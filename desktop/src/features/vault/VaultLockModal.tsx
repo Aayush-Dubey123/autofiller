@@ -17,6 +17,9 @@ export const VaultLockModal: React.FC<VaultLockModalProps> = ({
   const [privacyKey, setPrivacyKey] = useState('');
   const [useRecoveryMode, setUseRecoveryMode] = useState(false);
   const [recoveryInput, setRecoveryInput] = useState('');
+  const [mustSetNewKey, setMustSetNewKey] = useState(false);
+  const [newKey, setNewKey] = useState('');
+  const [confirmNewKey, setConfirmNewKey] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -29,6 +32,29 @@ export const VaultLockModal: React.FC<VaultLockModalProps> = ({
     setIsProcessing(true);
 
     try {
+      if (mustSetNewKey) {
+        if (newKey.length < 10) {
+          setErrorMsg('New privacy key must be at least 10 characters long.');
+          setIsProcessing(false);
+          return;
+        }
+        if (newKey !== confirmNewKey) {
+          setErrorMsg('Privacy keys do not match.');
+          setIsProcessing(false);
+          return;
+        }
+        const res = await bridge.vaultEnableExtra({ privacyKey: newKey, wantRecovery: false });
+        if (res.success) {
+          setMustSetNewKey(false);
+          setNewKey('');
+          setConfirmNewKey('');
+          onUnlocked();
+        } else {
+          setErrorMsg(res.error || 'Failed to save new privacy key.');
+        }
+        return;
+      }
+
       const payload = useRecoveryMode
         ? { recoveryCode: recoveryInput.trim() }
         : { privacyKey };
@@ -36,7 +62,11 @@ export const VaultLockModal: React.FC<VaultLockModalProps> = ({
       if (res.success) {
         setPrivacyKey('');
         setRecoveryInput('');
-        onUnlocked();
+        if (res.unlockedViaRecovery || useRecoveryMode) {
+          setMustSetNewKey(true);
+        } else {
+          onUnlocked();
+        }
       } else {
         setErrorMsg(res.error || 'Incorrect key or recovery code.');
       }
@@ -93,10 +123,12 @@ export const VaultLockModal: React.FC<VaultLockModalProps> = ({
           </div>
           <div>
             <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0F2E23' }}>
-              Unlock AutoFiller Vault
+              {mustSetNewKey ? 'Set New Privacy Key' : 'Unlock AutoFiller Vault'}
             </h2>
             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-              Enter your privacy key to access your details
+              {mustSetNewKey
+                ? 'Emergency unlock successful. Please set a new privacy key now.'
+                : 'Enter your privacy key to access your details'}
             </div>
           </div>
         </div>
@@ -118,7 +150,49 @@ export const VaultLockModal: React.FC<VaultLockModalProps> = ({
         )}
 
         <form onSubmit={handleUnlock} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          {!useRecoveryMode ? (
+          {mustSetNewKey ? (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#0F2E23' }}>
+                  New Privacy Key (min 10 characters)
+                </label>
+                <input
+                  type="password"
+                  value={newKey}
+                  onChange={(e) => setNewKey(e.target.value)}
+                  placeholder="Enter new privacy key..."
+                  required
+                  autoFocus
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--border-subtle)',
+                    fontSize: '0.875rem',
+                  }}
+                />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#0F2E23' }}>
+                  Confirm New Privacy Key
+                </label>
+                <input
+                  type="password"
+                  value={confirmNewKey}
+                  onChange={(e) => setConfirmNewKey(e.target.value)}
+                  placeholder="Confirm new privacy key..."
+                  required
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--border-subtle)',
+                    fontSize: '0.875rem',
+                  }}
+                />
+              </div>
+            </>
+          ) : !useRecoveryMode ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#0F2E23' }}>
                 Privacy Key

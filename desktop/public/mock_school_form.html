@@ -8,21 +8,28 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f4f8; color: #1e293b; padding: 24px 16px; min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; }
     .card { background: #ffffff; border-radius: 12px; border: 1px solid #cbd5e1; box-shadow: 0 10px 25px rgba(0,0,0,0.05); max-width: 680px; width: 100%; padding: 28px; }
-    .header { text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 16px; margin-bottom: 24px; }
+    .header { text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 16px; margin-bottom: 20px; }
     .header h1 { font-size: 1.5rem; color: #0f2e23; font-weight: 800; }
     .header p { font-size: 0.875rem; color: #64748b; margin-top: 4px; }
+    .step-info { margin-bottom: 20px; }
+    .step-title { font-size: 0.9375rem; font-weight: 700; color: #16654e; margin-bottom: 8px; }
+    .progress-track { background: #e2e8f0; height: 6px; border-radius: 3px; overflow: hidden; }
+    .progress-fill { background: #16654e; height: 100%; width: 20%; transition: width 0.3s ease; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+    @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
     .full-width { grid-column: 1 / -1; }
-    .form-group { display: flex; flexDirection: column; gap: 6px; }
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
     label { font-size: 0.8125rem; font-weight: 700; color: #334155; }
     label span.req { color: #dc2626; margin-left: 2px; }
     input[type="text"], input[type="email"], input[type="tel"], input[type="date"], select, textarea { width: 100%; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.875rem; color: #0f172a; transition: border-color 0.2s, box-shadow 0.2s; }
     input:focus, select:focus, textarea:focus { outline: none; border-color: #16654e; box-shadow: 0 0 0 3px rgba(22, 101, 78, 0.15); }
+    input.invalid, select.invalid, textarea.invalid { border-color: #dc2626; background-color: #fef2f2; }
+    .error-msg { font-size: 0.75rem; color: #dc2626; font-weight: 500; display: none; }
+    .form-group.has-error .error-msg { display: block; }
     .radio-group, .checkbox-group { display: flex; gap: 16px; align-items: center; margin-top: 4px; }
     .radio-group label, .checkbox-group label { font-weight: normal; font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; gap: 6px; }
-    button[type="submit"] { width: 100%; background: #16654e; color: #ffffff; padding: 12px; border: none; border-radius: 6px; font-size: 0.9375rem; font-weight: 700; cursor: pointer; transition: background 0.2s; margin-top: 20px; }
-    button[type="submit"]:hover { background: #0f4c3a; }
+    .btn-primary, button[type="submit"] { width: 100%; background: #16654e; color: #ffffff; padding: 12px; border: none; border-radius: 6px; font-size: 0.9375rem; font-weight: 700; cursor: pointer; transition: background 0.2s; margin-top: 20px; }
+    .btn-primary:hover, button[type="submit"]:hover { background: #0f4c3a; }
     #submitted-confirmation { display: none; background: #f0fdf4; border: 1.5px solid #86efac; border-radius: 8px; padding: 16px; margin-top: 20px; text-align: center; color: #16654e; font-weight: 700; }
   </style>
 </head>
@@ -33,105 +40,140 @@
       <p>Student Admission Application Form</p>
     </div>
 
-    <form id="admissionForm" onsubmit="handleFormSubmit(event)">
-      <div class="grid">
-        <div class="form-group full-width">
-          <label for="student_name">Student Full Name<span class="req">*</span></label>
-          <input type="text" id="student_name" name="student_name" required placeholder="Aarav Sharma">
-        </div>
+    <div class="step-info">
+      <div class="step-title" id="stepTitle">Step 1 of 5 - Student Details</div>
+      <div class="progress-track">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+    </div>
 
-        <div class="form-group">
-          <label for="dob">Date of Birth<span class="req">*</span></label>
-          <input type="date" id="dob" name="dob" required>
-        </div>
-
-        <div class="form-group">
-          <label for="gender">Gender<span class="req">*</span></label>
-          <select id="gender" name="gender" required>
-            <option value="">Select Gender</option>
-            <option value="Male">Male</option>
-            <option value="Female">Female</option>
-            <option value="Other">Other</option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label for="email">Student Email Address<span class="req">*</span></label>
-          <input type="email" id="email" name="email" required placeholder="student@example.com">
-        </div>
-
-        <div class="form-group">
-          <label for="phone">Contact Phone Number<span class="req">*</span></label>
-          <input type="tel" id="phone" name="phone" required placeholder="+91 9876543210">
-        </div>
-
-        <div class="form-group full-width">
-          <label for="address">Residential Address<span class="req">*</span></label>
-          <textarea id="address" name="address" rows="2" required placeholder="123 Park Street"></textarea>
-        </div>
-
-        <div class="form-group">
-          <label for="city">City<span class="req">*</span></label>
-          <input type="text" id="city" name="city" required placeholder="Mumbai">
-        </div>
-
-        <div class="form-group">
-          <label for="state">State<span class="req">*</span></label>
-          <input type="text" id="state" name="state" required placeholder="Maharashtra">
-        </div>
-
-        <div class="form-group">
-          <label for="pincode">Pincode / Zip Code<span class="req">*</span></label>
-          <input type="text" id="pincode" name="pincode" required placeholder="400001">
-        </div>
-
-        <div class="form-group">
-          <label for="father_name">Father's Name<span class="req">*</span></label>
-          <input type="text" id="father_name" name="father_name" required placeholder="Vikram Sharma">
-        </div>
-
-        <div class="form-group">
-          <label for="mother_name">Mother's Name<span class="req">*</span></label>
-          <input type="text" id="mother_name" name="mother_name" required placeholder="Sunita Sharma">
-        </div>
-
-        <div class="form-group">
-          <label for="previous_school">Previous School Attended</label>
-          <input type="text" id="previous_school" name="previous_school" placeholder="Greenwood High">
-        </div>
-
-        <div class="form-group">
-          <label for="grade">Applying Grade / Class<span class="req">*</span></label>
-          <select id="grade" name="grade" required>
-            <option value="">Select Grade</option>
-            <option value="Grade 1">Grade 1</option>
-            <option value="Grade 5">Grade 5</option>
-            <option value="Grade 10">Grade 10</option>
-          </select>
-        </div>
-
-        <div class="form-group full-width">
-          <label>Does student have allergies?</label>
-          <div class="radio-group">
-            <label><input type="radio" name="allergies" value="Yes"> Yes</label>
-            <label><input type="radio" name="allergies" value="No" checked> No</label>
+    <form id="admissionForm" onsubmit="handleFormSubmit(event)" novalidate>
+      <!-- Section 1: Student Details -->
+      <div class="form-section" id="section-1">
+        <div class="grid">
+          <div class="form-group full-width">
+            <label for="student_name">Student Full Name<span class="req">*</span></label>
+            <input type="text" id="student_name" name="student_name" required placeholder="Aarav Sharma">
+            <span class="error-msg">Please enter student full name.</span>
+          </div>
+          <div class="form-group">
+            <label for="dob">Date of Birth<span class="req">*</span></label>
+            <input type="date" id="dob" name="dob" required>
+            <span class="error-msg">Please select date of birth.</span>
+          </div>
+          <div class="form-group">
+            <label for="gender">Gender<span class="req">*</span></label>
+            <select id="gender" name="gender" required>
+              <option value="">Select Gender</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+              <option value="Other">Other</option>
+            </select>
+            <span class="error-msg">Please select gender.</span>
           </div>
         </div>
-
-        <div class="form-group full-width">
-          <label>Does student require transport?</label>
-          <div class="radio-group">
-            <label><input type="radio" name="transport" value="Yes"> Yes</label>
-            <label><input type="radio" name="transport" value="No" checked> No</label>
-          </div>
-        </div>
-
-        <div class="form-group full-width checkbox-group">
-          <label><input type="checkbox" id="terms" name="terms" required> I agree to the school admission terms and conditions<span class="req">*</span></label>
-        </div>
+        <button type="button" class="btn-primary" onclick="nextSection(1)">Continue</button>
       </div>
 
-      <button type="submit" id="submitBtn">Submit Application</button>
+      <!-- Section 2: Contact -->
+      <div class="form-section" id="section-2" hidden>
+        <div class="grid">
+          <div class="form-group">
+            <label for="email">Student Email Address<span class="req">*</span></label>
+            <input type="email" id="email" name="email" required placeholder="student@example.com">
+            <span class="error-msg">Please enter a valid email address.</span>
+          </div>
+          <div class="form-group">
+            <label for="phone">Contact Phone Number<span class="req">*</span></label>
+            <input type="tel" id="phone" name="phone" required placeholder="+91 9876543210">
+            <span class="error-msg">Please enter a 10-digit phone number.</span>
+          </div>
+        </div>
+        <button type="button" class="btn-primary" onclick="nextSection(2)">Continue</button>
+      </div>
+
+      <!-- Section 3: Address -->
+      <div class="form-section" id="section-3" hidden>
+        <div class="grid">
+          <div class="form-group full-width">
+            <label for="address">Residential Address<span class="req">*</span></label>
+            <textarea id="address" name="address" rows="2" required placeholder="123 Park Street"></textarea>
+            <span class="error-msg">Please enter residential address.</span>
+          </div>
+          <div class="form-group">
+            <label for="city">City<span class="req">*</span></label>
+            <input type="text" id="city" name="city" required placeholder="Mumbai">
+            <span class="error-msg">Please enter city.</span>
+          </div>
+          <div class="form-group">
+            <label for="state">State<span class="req">*</span></label>
+            <input type="text" id="state" name="state" required placeholder="Maharashtra">
+            <span class="error-msg">Please enter state.</span>
+          </div>
+          <div class="form-group">
+            <label for="pincode">Pincode / Zip Code<span class="req">*</span></label>
+            <input type="text" id="pincode" name="pincode" required placeholder="400001">
+            <span class="error-msg">Please enter a 6-digit pincode.</span>
+          </div>
+        </div>
+        <button type="button" class="btn-primary" onclick="nextSection(3)">Continue</button>
+      </div>
+
+      <!-- Section 4: Family -->
+      <div class="form-section" id="section-4" hidden>
+        <div class="grid">
+          <div class="form-group">
+            <label for="father_name">Father's Name<span class="req">*</span></label>
+            <input type="text" id="father_name" name="father_name" required placeholder="Vikram Sharma">
+            <span class="error-msg">Please enter father's name.</span>
+          </div>
+          <div class="form-group">
+            <label for="mother_name">Mother's Name<span class="req">*</span></label>
+            <input type="text" id="mother_name" name="mother_name" required placeholder="Sunita Sharma">
+            <span class="error-msg">Please enter mother's name.</span>
+          </div>
+        </div>
+        <button type="button" class="btn-primary" onclick="nextSection(4)">Continue</button>
+      </div>
+
+      <!-- Section 5: Previous School & Admission -->
+      <div class="form-section" id="section-5" hidden>
+        <div class="grid">
+          <div class="form-group">
+            <label for="previous_school">Previous School Attended</label>
+            <input type="text" id="previous_school" name="previous_school" placeholder="Greenwood High">
+          </div>
+          <div class="form-group">
+            <label for="grade">Applying Grade / Class<span class="req">*</span></label>
+            <select id="grade" name="grade" required>
+              <option value="">Select Grade</option>
+              <option value="Grade 1">Grade 1</option>
+              <option value="Grade 5">Grade 5</option>
+              <option value="Grade 10">Grade 10</option>
+            </select>
+            <span class="error-msg">Please select grade applied.</span>
+          </div>
+          <div class="form-group full-width">
+            <label>Does student have allergies?</label>
+            <div class="radio-group">
+              <label><input type="radio" name="allergies" value="Yes"> Yes</label>
+              <label><input type="radio" name="allergies" value="No" checked> No</label>
+            </div>
+          </div>
+          <div class="form-group full-width">
+            <label>Does student require transport?</label>
+            <div class="radio-group">
+              <label><input type="radio" name="transport" value="Yes"> Yes</label>
+              <label><input type="radio" name="transport" value="No" checked> No</label>
+            </div>
+          </div>
+          <div class="form-group full-width checkbox-group">
+            <label><input type="checkbox" id="terms" name="terms" required> I agree to the school admission terms and conditions<span class="req">*</span></label>
+            <span class="error-msg">You must accept the terms.</span>
+          </div>
+        </div>
+        <button type="submit" id="submitBtn">Submit Application</button>
+      </div>
     </form>
 
     <div id="submitted-confirmation">
@@ -140,8 +182,78 @@
   </div>
 
   <script>
+    const TITLES = [
+      'Student Details',
+      'Contact',
+      'Address',
+      'Family',
+      'Previous School & Admission'
+    ];
+
+    // Validate inputs within a given section container element
+    function validateSection(sectionEl) {
+      let isValid = true;
+      let firstInvalid = null;
+      const inputs = sectionEl.querySelectorAll('input, select, textarea');
+
+      inputs.forEach(input => {
+        const group = input.closest('.form-group') || input.parentElement;
+        let fieldValid = true;
+
+        if (input.required) {
+          if (input.type === 'checkbox' && !input.checked) fieldValid = false;
+          else if (input.type !== 'checkbox' && input.type !== 'radio' && !input.value.trim()) fieldValid = false;
+        }
+
+        if (fieldValid && input.value.trim()) {
+          if (input.type === 'email' || input.id === 'email') {
+            fieldValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.value.trim());
+          } else if (input.id === 'phone') {
+            const digits = input.value.replace(/\D/g, '');
+            fieldValid = digits.length === 10;
+          } else if (input.id === 'pincode') {
+            const digits = input.value.replace(/\D/g, '');
+            fieldValid = digits.length === 6;
+          }
+        }
+
+        if (!fieldValid) {
+          isValid = false;
+          input.classList.add('invalid');
+          if (group) group.classList.add('has-error');
+          if (!firstInvalid) firstInvalid = input;
+        } else {
+          input.classList.remove('invalid');
+          if (group) group.classList.remove('has-error');
+        }
+      });
+
+      if (firstInvalid) firstInvalid.focus();
+      return isValid;
+    }
+
+    // Advance to next section if current section passes validation
+    function nextSection(currentStep) {
+      const currentEl = document.getElementById('section-' + currentStep);
+      if (!validateSection(currentEl)) return;
+
+      currentEl.hidden = true;
+      const nextStep = currentStep + 1;
+      const nextEl = document.getElementById('section-' + nextStep);
+      if (nextEl) {
+        nextEl.hidden = false;
+        document.getElementById('stepTitle').textContent = `Step ${nextStep} of 5 - ${TITLES[nextStep - 1]}`;
+        document.getElementById('progressFill').style.width = (nextStep * 20) + '%';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    }
+
+    // Handle final form submission after section 5 validation
     function handleFormSubmit(e) {
       e.preventDefault();
+      const section5 = document.getElementById('section-5');
+      if (!validateSection(section5)) return;
+
       window.dispatchEvent(new CustomEvent('autofiller:submitted'));
       window.dispatchEvent(new CustomEvent('formpilot:submitted'));
       document.getElementById('submitted-confirmation').style.display = 'block';

@@ -358,7 +358,7 @@ export class VaultService {
   }
 
   /** Unlock vault using privacy key, recovery code, or OS slot. */
-  public async unlock(options: { privacyKey?: string; recoveryCode?: string }): Promise<{ success: boolean; error?: string }> {
+  public async unlock(options: { privacyKey?: string; recoveryCode?: string }): Promise<{ success: boolean; unlockedViaRecovery?: boolean; error?: string }> {
     if (!fs.existsSync(this.vaultPath)) {
       await this.ensureVaultInitialized();
       if (this.activeDek !== null) return { success: true };
@@ -403,7 +403,7 @@ export class VaultService {
         this.activeDek = dek;
         this.failedAttempts = 0;
         this.touchActivity();
-        return { success: true };
+        return { success: true, unlockedViaRecovery: Boolean(options.recoveryCode) };
       } else {
         // V1 Format handling
         const v1Data = data as EncryptedVaultFormatV1;
@@ -429,7 +429,7 @@ export class VaultService {
         this.activeDek = dek;
         this.failedAttempts = 0;
         this.touchActivity();
-        return { success: true };
+        return { success: true, unlockedViaRecovery: Boolean(options.recoveryCode) };
       }
     } catch {
       this.failedAttempts += 1;

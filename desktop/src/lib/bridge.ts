@@ -62,7 +62,7 @@ export interface AutoFillerAPI {
   vaultUnlock: (payload: {
     privacyKey?: string;
     recoveryCode?: string;
-  }) => Promise<{ success: boolean; error?: string }>;
+  }) => Promise<{ success: boolean; unlockedViaRecovery?: boolean; error?: string }>;
   vaultLock: () => Promise<{ success: boolean }>;
   vaultGetProfiles: () => Promise<ProfileRecord[]>;
   vaultSaveProfile: (profile: ProfileRecord) => Promise<{ success: boolean; error?: string }>;

@@ -29,8 +29,10 @@ async function runScannerTest() {
   await browserManager.navigateTo(fileUrl);
 
   const snapshot = await browserManager.scanActiveForm();
-  console.log(`Discovered ${snapshot.fields.length} form fields in FormSnapshot.`);
-  assert.ok(snapshot.fields.length >= 10, 'Expected at least 10 form fields');
+  const visibleCount = snapshot.fields.filter((f) => f.visible).length;
+  const hiddenCount = snapshot.fields.filter((f) => !f.visible).length;
+  console.log(`Discovered ${snapshot.fields.length} form fields in FormSnapshot (${visibleCount} visible, ${hiddenCount} hidden).`);
+  assert.strictEqual(snapshot.fields.length, 16, 'Expected exactly 16 form fields');
 
   // Verify Student Name
   const nameField = snapshot.fields.find((f) => /student.*name|full.*name/i.test(f.label));
@@ -42,6 +44,11 @@ async function runScannerTest() {
     (f) => f.type === 'submit' || f.ref === 'submitBtn' || /^submit(\s+application)?$/i.test(f.label.trim())
   );
   assert.strictEqual(submitInFields, undefined, 'Submit button must NOT be in FormSnapshot fields');
+
+  // Unhide all sections so scanSubmissionControls can discover controls across step sections
+  await browserManager.page.evaluate(() => {
+    document.querySelectorAll('[hidden]').forEach((el) => el.removeAttribute('hidden'));
+  });
 
   // Verify BrowserManager detects real submit controls separately from fillable fields
   const submissionControls = await browserManager.scanSubmissionControls();

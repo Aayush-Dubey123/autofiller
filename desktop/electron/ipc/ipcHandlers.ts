@@ -8,6 +8,7 @@
 
 import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { AgentController } from '../agent/AgentController';
@@ -25,6 +26,62 @@ function validateTargetUrl(value: unknown): string | null {
       : 'Target URL must start with http:// or https://';
   } catch {
     return 'Target URL is not a valid URL';
+  }
+}
+
+const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024; // 25 MB ceiling matching backend
+const UPLOAD_DIR = path.join(os.tmpdir(), 'autofiller-uploads');
+const MAX_STORED_UPLOAD_COPIES = 5;
+
+/** Ensure the designated upload directory exists. */
+function ensureUploadDir(): string {
+  if (!fs.existsSync(UPLOAD_DIR)) {
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  }
+  return UPLOAD_DIR;
+}
+
+/**
+ * Prune copied upload files to cap total stored copies and avoid unbounded accumulation.
+ */
+function pruneUploadDir(maxKeep: number = MAX_STORED_UPLOAD_COPIES): void {
+  try {
+    if (!fs.existsSync(UPLOAD_DIR)) return;
+    const entries = fs
+      .readdirSync(UPLOAD_DIR)
+      .map((name) => {
+        const fullPath = path.join(UPLOAD_DIR, name);
+        try {
+          const stat = fs.statSync(fullPath);
+          return { name, fullPath, mtimeMs: stat.mtimeMs };
+        } catch {
+          return null;
+        }
+      })
+      .filter((e): e is { name: string; fullPath: string; mtimeMs: number } => e !== null);
+
+    if (entries.length > maxKeep) {
+      entries.sort((a, b) => a.mtimeMs - b.mtimeMs); // oldest first
+      const toDelete = entries.slice(0, entries.length - maxKeep);
+      for (const item of toDelete) {
+        try {
+          fs.unlinkSync(item.fullPath);
+        } catch {}
+      }
+    }
+  } catch (err) {
+    console.warn('Could not prune upload directory:', err);
+  }
+}
+
+/** Clean up all upload copies (for erase-all-my-data or shutdown). */
+function clearUploadDir(): void {
+  try {
+    if (fs.existsSync(UPLOAD_DIR)) {
+      fs.rmSync(UPLOAD_DIR, { recursive: true, force: true });
+    }
+  } catch (err) {
+    console.warn('Could not clear upload directory:', err);
   }
 }
 
@@ -49,7 +106,9 @@ export function registerIpcHandlers(
     }
   };
 
-  // Native document selection dialog. Returns the real file name and size.
+  let activeSessionUploadPath: string | null = null;
+
+  // Native document selection dialog. Returns the safe file path inside designated upload directory.
   ipcMain.handle('autofiller:select-document', async (): Promise<DocumentSelection> => {
     try {
       const result = await dialog.showOpenDialog(mainWindow, {
@@ -68,12 +127,37 @@ export function registerIpcHandlers(
         return { canceled: true };
       }
 
-      const filePath = result.filePaths[0];
+      const originalPath = result.filePaths[0];
+
+      // Enforce the size cap before copying so a huge file fails fast
+      const stat = fs.statSync(originalPath);
+      if (stat.size > MAX_DOCUMENT_BYTES) {
+        return {
+          canceled: false,
+          error: `Document exceeds the maximum supported size of ${MAX_DOCUMENT_BYTES / (1024 * 1024)} MB.`,
+        };
+      }
+
+      // Prune older upload copies to keep storage capped
+      pruneUploadDir(MAX_STORED_UPLOAD_COPIES - 1);
+
+      // Copy file into the app's designated upload directory with a generated safe filename
+      const uploadDir = ensureUploadDir();
+      const ext = path.extname(originalPath);
+      const originalBase = path.basename(originalPath, ext).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const safeFileName = `doc_${Date.now()}_${originalBase.slice(0, 32)}${ext}`;
+      const safeFilePath = path.join(uploadDir, safeFileName);
+
+      fs.copyFileSync(originalPath, safeFilePath);
+
+      // Track active copied upload file for cleanup on session end
+      activeSessionUploadPath = safeFilePath;
+
       return {
         canceled: false,
-        filePath,
-        fileName: path.basename(filePath),
-        fileSize: fs.statSync(filePath).size,
+        filePath: safeFilePath,
+        fileName: path.basename(originalPath),
+        fileSize: stat.size,
       };
     } catch (error: any) {
       return { canceled: false, error: error?.message || 'Could not open the selected file.' };
@@ -125,7 +209,8 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle('autofiller:stop-agent', async () => {
-    agentController.stop();
+    await agentController.stop();
+    return { success: true };
   });
 
   ipcMain.handle('autofiller:submit-form', async () => {
@@ -180,6 +265,8 @@ export function registerIpcHandlers(
     try {
       vaultService.eraseAll();
       historyStore.clearAllSessions();
+      clearUploadDir();
+      activeSessionUploadPath = null;
       const logsDir = path.join(app.getPath('userData'), 'logs');
       if (fs.existsSync(logsDir)) {
         fs.rmSync(logsDir, { recursive: true, force: true });
@@ -281,5 +368,15 @@ export function registerIpcHandlers(
   agentController.getStateMachine().onTransition((state, previousState) => {
     historyStore.noteState(state);
     sendToRenderer('autofiller:state-change', { state, previousState });
+    if (state === 'COMPLETED' || state === 'ERROR' || state === 'IDLE') {
+      if (activeSessionUploadPath) {
+        try {
+          if (fs.existsSync(activeSessionUploadPath)) {
+            fs.unlinkSync(activeSessionUploadPath);
+          }
+        } catch {}
+        activeSessionUploadPath = null;
+      }
+    }
   });
 }

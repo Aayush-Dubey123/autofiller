@@ -43,6 +43,7 @@ interface NewSessionViewProps {
   onSetFacts: React.Dispatch<React.SetStateAction<ExtractedFact[]>>;
   onSetTargetUrl: (url: string) => void;
   onSetInstruction: (inst: string) => void;
+  onStopSession?: () => void;
 }
 
 export const NewSessionView: React.FC<NewSessionViewProps> = ({
@@ -55,16 +56,21 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
   inlineError: propInlineError,
   isExtracting: propIsExtracting,
   onSetTargetUrl,
+  onSetFacts,
+  onStopSession,
 }) => {
-  const [dataSourceMode, setDataSourceMode] = useState<DataSourceMode>('profile');
+  const [dataSourceMode, setDataSourceMode] = useState<DataSourceMode>(() => {
+    if (propFacts && propFacts.length > 0) return 'document';
+    return 'profile';
+  });
   const [profiles, setProfiles] = useState<ProfileRecord[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string>('');
 
   // Uploaded Document state
-  const [uploadedDocName, setUploadedDocName] = useState<string>('');
+  const [uploadedDocName, setUploadedDocName] = useState<string>(propDocumentName || '');
   const [uploadedDocPath, setUploadedDocPath] = useState<string>('');
-  const [uploadedDocSize, setUploadedDocSize] = useState<number>(0);
-  const [docFacts, setDocFacts] = useState<ExtractedFact[]>([]);
+  const [uploadedDocSize, setUploadedDocSize] = useState<number>(propDocumentSize || 0);
+  const [docFacts, setDocFacts] = useState<ExtractedFact[]>(propFacts || []);
   const [isExtractingDoc, setIsExtractingDoc] = useState<boolean>(false);
 
   // ID fields permission
@@ -78,6 +84,14 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
   useEffect(() => {
     loadVaultProfiles();
   }, []);
+
+  useEffect(() => {
+    if (propFacts && propFacts.length > 0 && docFacts.length === 0) {
+      setDocFacts(propFacts);
+      if (propDocumentName && !uploadedDocName) setUploadedDocName(propDocumentName);
+      if (propDocumentSize && !uploadedDocSize) setUploadedDocSize(propDocumentSize);
+    }
+  }, [propFacts, propDocumentName, propDocumentSize]);
 
   const loadVaultProfiles = async () => {
     try {
@@ -190,8 +204,11 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
       if ('error' in res) {
         setLocalError(res.error);
         setDocFacts([]);
+        onSetFacts([]);
       } else {
-        setDocFacts(res.facts || []);
+        const extracted = res.facts || [];
+        setDocFacts(extracted);
+        onSetFacts(extracted);
       }
     } catch (err: any) {
       setLocalError(err?.message || 'Document selection error');
@@ -208,6 +225,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
     state === 'EXTRACTING_DOC' ||
     state === 'SCANNING_FORM' ||
     state === 'MAPPING_FIELDS' ||
+    state === 'CLARIFICATION_REQUIRED' ||
     state === 'FILLING_FORM' ||
     state === 'VERIFYING';
 
@@ -238,6 +256,8 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
       targetUrl,
       fillIdFields,
     });
+
+    onSetFacts(finalFacts);
 
     if (!res.success && res.error) {
       setLocalError(res.error);
@@ -553,36 +573,59 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
             )}
           </div>
 
-          <button
-            onClick={handleStart}
-            disabled={!canStart || isRunning}
-            style={{
-              padding: '12px 28px',
-              borderRadius: 'var(--radius-md)',
-              border: 'none',
-              background: canStart && !isRunning ? '#16654E' : '#94A3B8',
-              color: '#FFFFFF',
-              fontWeight: 800,
-              fontSize: '0.9375rem',
-              cursor: canStart && !isRunning ? 'pointer' : 'not-allowed',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              boxShadow: canStart ? '0 4px 14px rgba(22, 101, 78, 0.3)' : 'none',
-            }}
-          >
-            {isRunning ? (
-              <>
-                <RotateCw size={18} className="animate-spin" />
-                <span>Session Active...</span>
-              </>
-            ) : (
-              <>
-                <Play size={18} />
-                <span>Start Automation</span>
-              </>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            {(isRunning || state === 'REVIEW_READY' || state === 'PAUSED' || state === 'USER_TAKEOVER') && onStopSession && (
+              <button
+                onClick={onStopSession}
+                style={{
+                  padding: '12px 20px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid #DC2626',
+                  background: '#FEF2F2',
+                  color: '#DC2626',
+                  fontWeight: 700,
+                  fontSize: '0.875rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <span>Stop Session</span>
+              </button>
             )}
-          </button>
+
+            <button
+              onClick={handleStart}
+              disabled={!canStart || isRunning}
+              style={{
+                padding: '12px 28px',
+                borderRadius: 'var(--radius-md)',
+                border: 'none',
+                background: canStart && !isRunning ? '#16654E' : '#94A3B8',
+                color: '#FFFFFF',
+                fontWeight: 800,
+                fontSize: '0.9375rem',
+                cursor: canStart && !isRunning ? 'pointer' : 'not-allowed',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                boxShadow: canStart ? '0 4px 14px rgba(22, 101, 78, 0.3)' : 'none',
+              }}
+            >
+              {isRunning ? (
+                <>
+                  <RotateCw size={18} className="animate-spin" />
+                  <span>Session Active...</span>
+                </>
+              ) : (
+                <>
+                  <Play size={18} />
+                  <span>Start Automation</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>

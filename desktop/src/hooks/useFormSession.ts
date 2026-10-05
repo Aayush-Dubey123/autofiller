@@ -24,6 +24,7 @@ export function useFormSession() {
   );
   const [inlineError, setInlineError] = useState<string | null>(null);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
+  const [isAnsweringClarification, setIsAnsweringClarification] = useState<boolean>(false);
 
   useEffect(() => {
     const unsubEvents = bridge.onAgentEvent((evt: AgentEventPayload) => {
@@ -38,12 +39,14 @@ export function useFormSession() {
 
     const unsubClarify = bridge.onClarificationRequest((prompt: ClarificationPromptPayload) => {
       setClarificationPrompt(prompt);
+      setIsAnsweringClarification(false);
     });
 
     const unsubState = bridge.onStateChange((update) => {
       setState(update.state);
       if (update.state !== 'CLARIFICATION_REQUIRED') {
         setClarificationPrompt(null);
+        setIsAnsweringClarification(false);
       }
     });
 
@@ -116,11 +119,24 @@ export function useFormSession() {
     }
   };
 
-  const handleAnswerClarification = async (clarificationId: string, answer: string) => {
-    setClarificationPrompt(null);
-    const res = await bridge.answerClarification(clarificationId, answer);
-    if (!res.success) {
-      setInlineError('Could not deliver clarification answer.');
+  const handleAnswerClarification = async (
+    clarificationId: string,
+    answer: string
+  ): Promise<boolean> => {
+    // Keep clarificationPrompt mounted throughout CLARIFICATION_REQUIRED to prevent modal unmount/flash
+    setIsAnsweringClarification(true);
+    try {
+      const res = await bridge.answerClarification(clarificationId, answer);
+      if (!res.success) {
+        setInlineError('Could not deliver clarification answer.');
+        setIsAnsweringClarification(false);
+        return false;
+      }
+      return true;
+    } catch (err: any) {
+      setInlineError(err?.message || 'Could not deliver clarification answer.');
+      setIsAnsweringClarification(false);
+      return false;
     }
   };
 
@@ -142,8 +158,48 @@ export function useFormSession() {
     setInstruction('Fill out the form using the extracted document facts.');
     setEvents([]);
     setClarificationPrompt(null);
+    setIsAnsweringClarification(false);
     setInlineError(null);
   };
+
+  const stopSession = async () => {
+    try {
+      await bridge.stopAgent();
+    } catch (err) {
+      console.warn('Could not stop agent cleanly:', err);
+    }
+    setState('IDLE');
+    setClarificationPrompt(null);
+    setIsAnsweringClarification(false);
+  };
+
+  // Derive dynamic clarification stepper counts truthfully from session state and events
+  const totalFromEvents = (() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i];
+      if (typeof e.metadata?.totalClarifications === 'number') {
+        return e.metadata.totalClarifications as number;
+      }
+      const match = e.description?.match(/(\d+)\s+clarifications?\s+needed/i);
+      if (match) {
+        return parseInt(match[1], 10);
+      }
+    }
+    return undefined;
+  })();
+
+  const answeredClarificationsCount = events.filter(
+    (e) => e.tool === 'request_clarification' && e.type === 'TOOL_COMPLETED'
+  ).length;
+
+  const totalClarifications =
+    clarificationPrompt?.total ??
+    totalFromEvents ??
+    (clarificationPrompt ? 1 : 0);
+
+  const currentClarificationIndex =
+    clarificationPrompt?.currentIndex ??
+    Math.min(answeredClarificationsCount + 1, Math.max(totalClarifications, 1));
 
   const isValidUrl = Boolean(
     targetUrl.trim() && (targetUrl.startsWith('http://') || targetUrl.startsWith('https://'))
@@ -166,6 +222,9 @@ export function useFormSession() {
     instruction,
     events,
     clarificationPrompt,
+    isAnsweringClarification,
+    totalClarifications,
+    currentClarificationIndex,
     inlineError,
     isExtracting,
     canStart,
@@ -178,6 +237,7 @@ export function useFormSession() {
     setInstruction,
     useDocumentRecord,
     resetSession,
+    stopSession,
     setInlineError,
   };
 }

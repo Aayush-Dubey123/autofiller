@@ -7,6 +7,7 @@ NLP heuristics, with strict path containment and size limits.
 
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -118,20 +119,19 @@ def _allowed_roots() -> List[Path]:
     """
     Resolve the set of directories documents may be read from.
 
-    Always includes the per-user home directory and the system temp directory, and
-    honors an explicit override list for packaged deployments.
+    Restricted strictly to the designated system/app upload/temp directory and
+    explicit test fixture directories. Broad home directory and workspace roots
+    are excluded to prevent reading arbitrary user files.
 
     Returns:
         List[Path]: Canonical allowed root directories.
     """
     roots: List[Path] = [
-        Path.home().resolve(),
-        Path(os.getenv("TEMP", "/tmp")).resolve(),
+        Path(tempfile.gettempdir()).resolve(),
+        Path(os.getenv("TEMP", os.getenv("TMP", "/tmp"))).resolve(),
     ]
     # Allow bundled test fixtures directory for local runs and demonstration
     workspace_dir = Path(__file__).resolve().parents[3]
-    if workspace_dir.exists() and workspace_dir.is_dir():
-        roots.append(workspace_dir.resolve())
     fixtures_dir = workspace_dir / "test-fixtures"
     if fixtures_dir.exists() and fixtures_dir.is_dir():
         roots.append(fixtures_dir.resolve())

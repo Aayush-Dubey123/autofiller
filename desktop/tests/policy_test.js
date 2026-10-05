@@ -66,6 +66,30 @@ function runPolicyTests() {
     );
   });
 
+  test('blocks extended checkout and submission buttons', () => {
+    const forbiddenLabels = [
+      'Place Order',
+      'place order',
+      'Finish Application',
+      'finish application',
+      'Register Now',
+      'register now',
+      'Continue to Payment',
+      'Complete Order',
+      'Complete Registration',
+      'Proceed to Payment',
+    ];
+    for (const label of forbiddenLabels) {
+      const result = policy.validateBrowserAction('click', label);
+      assert.strictEqual(result.allowed, false, `${label} must be blocked`);
+      assert.strictEqual(
+        result.code,
+        'DENIED_FINAL_SUBMISSION',
+        `${label} must return DENIED_FINAL_SUBMISSION`
+      );
+    }
+  });
+
   test('never treats a submission control as pagination', () => {
     assert.strictEqual(policy.isPaginationButton('Submit'), false);
     assert.strictEqual(policy.isFinalSubmissionButton('Submit Application'), true);

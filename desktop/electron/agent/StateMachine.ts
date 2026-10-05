@@ -54,4 +54,8 @@ export class StateMachine {
   public isTerminal(): boolean {
     return this.currentState === 'REVIEW_READY' || this.currentState === 'COMPLETED' || this.currentState === 'ERROR';
   }
+
+  public reset(): void {
+    this.transition('IDLE');
+  }
 }

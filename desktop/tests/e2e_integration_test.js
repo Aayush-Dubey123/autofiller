@@ -329,6 +329,238 @@ async function runE2E() {
     await controller.cleanup();
   });
 
+  await test('persisted/queued event objects contain no fact_value, actualValue, or expectedValue keys across a full fill-and-verify cycle', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    const persistedEvents = [];
+    const origAppendEventSafe = backend.appendEventSafe;
+    backend.appendEventSafe = async (sessionId, event) => {
+      persistedEvents.push(JSON.parse(JSON.stringify(event)));
+      return origAppendEventSafe(sessionId, event);
+    };
+
+    const controller = new AgentController(backend);
+    await controller.startSession({
+      documentText: 'Student Name: Aarav Sharma',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+    });
+
+    assert.ok(persistedEvents.length > 0, 'agent events must be queued for persistence');
+
+    // Confirm that fill and verify tools executed
+    const toolEvents = persistedEvents.filter(
+      (e) => e.tool === 'fill_text' || e.tool === 'verify_field'
+    );
+    assert.ok(toolEvents.length > 0, 'fill_text or verify_field events must have executed');
+
+    // Verify that across all persisted event objects, metadata contains no sensitive keys
+    for (const evt of persistedEvents) {
+      const serialized = JSON.stringify(evt);
+      assert.strictEqual(
+        serialized.includes('"fact_value"'),
+        false,
+        `Persisted event ${evt.type} (${evt.tool || ''}) must not contain fact_value: ${serialized}`
+      );
+      assert.strictEqual(
+        serialized.includes('"actualValue"'),
+        false,
+        `Persisted event ${evt.type} (${evt.tool || ''}) must not contain actualValue: ${serialized}`
+      );
+      assert.strictEqual(
+        serialized.includes('"expectedValue"'),
+        false,
+        `Persisted event ${evt.type} (${evt.tool || ''}) must not contain expectedValue: ${serialized}`
+      );
+    }
+
+    await controller.cleanup();
+  });
+
+  await test('agent delivers sequential clarification prompts with truthful stepper counts (total and currentIndex) throughout CLARIFICATION_REQUIRED', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    const origMapForm = backend.mapForm;
+    backend.mapForm = async (sessionId, snapshot) => {
+      const res = await origMapForm(sessionId, snapshot);
+      const nameField = snapshot.fields.find((f) => /name/i.test(f.label));
+      const genderField = snapshot.fields.find((f) => /gender/i.test(f.label));
+      res.clarifications_required = [
+        {
+          clarification_id: 'clarify_test_1',
+          field_ref: nameField ? nameField.ref : 'field_001',
+          field_label: 'Student Full Name',
+          question: 'Please confirm student full name',
+          options: ['Aarav Sharma', 'Aarav S.'],
+        },
+        {
+          clarification_id: 'clarify_test_2',
+          field_ref: genderField ? genderField.ref : 'field_002',
+          field_label: 'Gender',
+          question: 'Please select gender',
+          options: ['Male', 'Female', 'Other'],
+        },
+      ];
+      return res;
+    };
+
+    const controller = new AgentController(backend);
+    const receivedPrompts = [];
+    const stateTransitions = [];
+
+    controller.getStateMachine().onTransition((state) => {
+      stateTransitions.push(state);
+    });
+
+    controller.onClarificationRequest((prompt) => {
+      receivedPrompts.push(prompt);
+      // Asynchronously answer the clarification to simulate user interaction with the persistent stepper
+      setTimeout(() => {
+        const answer = prompt.clarificationId === 'clarify_test_1' ? 'Aarav Sharma' : 'Male';
+        controller.answerClarification(prompt.clarificationId, answer);
+      }, 50);
+    });
+
+    await controller.startSession({
+      documentText: 'Student Name: Aarav Sharma',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+    });
+
+    assert.strictEqual(receivedPrompts.length, 2, 'should receive exactly 2 clarification prompts');
+    assert.strictEqual(receivedPrompts[0].total, 2, 'prompt 1 should have total = 2');
+    assert.strictEqual(receivedPrompts[0].currentIndex, 1, 'prompt 1 should have currentIndex = 1');
+    assert.strictEqual(receivedPrompts[1].total, 2, 'prompt 2 should have total = 2');
+    assert.strictEqual(receivedPrompts[1].currentIndex, 2, 'prompt 2 should have currentIndex = 2');
+
+    assert.ok(
+      stateTransitions.includes('CLARIFICATION_REQUIRED'),
+      'state machine must have visited CLARIFICATION_REQUIRED'
+    );
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      'agent should finish all clarifications and reach REVIEW_READY'
+    );
+
+    await controller.cleanup();
+  });
+
+  await test('agreement checkbox is filled and verified without timeout and Never-Submit remains intact', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    const controller = new AgentController(backend);
+    const origMapForm = backend.mapForm;
+    backend.mapForm = async (sessionId, snapshot) => {
+      // TODO: extend when section-by-section flow exists
+      // Unhide sections so section-5 checkbox is interactable in this test
+      if (controller.getBrowserManager()?.page) {
+        await controller.getBrowserManager().page.evaluate(() => {
+          document.querySelectorAll('[hidden]').forEach((el) => el.removeAttribute('hidden'));
+        }).catch(() => {});
+      }
+      const res = await origMapForm(sessionId, snapshot);
+      const checkboxField = snapshot.fields.find((f) => f.type === 'checkbox');
+      assert.ok(checkboxField, 'terms checkbox should be detected in snapshot');
+      res.mappings.push({
+        field_ref: checkboxField.ref,
+        field_label: checkboxField.label,
+        fact_key: 'terms',
+        fact_value: 'agree',
+        confidence: 1.0,
+        status: 'PENDING',
+      });
+      return res;
+    };
+
+    const events = [];
+    controller.onEvent((e) => events.push(e));
+
+    const startTime = Date.now();
+    await controller.startSession({
+      documentText: 'Student Name: Aarav Sharma',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+    });
+
+    const elapsed = Date.now() - startTime;
+    assert.ok(elapsed < 10000, `Checkbox flow took ${elapsed}ms; must not exceed 10s`);
+
+    assert.strictEqual(controller.getStateMachine().getState(), 'REVIEW_READY');
+
+    const verifiedCheckbox = events.find(
+      (e) => e.type === 'TOOL_COMPLETED' && /Verified '.*terms/i.test(e.description)
+    );
+    assert.ok(verifiedCheckbox, 'terms checkbox must be verified');
+
+    const submitBlocked = events.find((e) => e.type === 'POLICY_BLOCKED');
+    assert.ok(submitBlocked, 'Never-Submit policy must block autonomous submission');
+
+    await controller.cleanup();
+  });
+
+  await test('stopping active session cleanly closes browser, purges session, and transitions to IDLE', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    backend.mapForm = async (sessionId, snapshot) => {
+      return {
+        session_id: sessionId,
+        mappings: [],
+        clarifications_required: [
+          {
+            clarification_id: 'clarify_stop_test',
+            field_ref: 'field_001',
+            field_label: 'Student Name',
+            question: 'What is student name?',
+            options: ['Aarav', 'Other'],
+          },
+        ],
+        unmapped_fields: [],
+      };
+    };
+
+    const controller = new AgentController(backend);
+    let clarificationReceived = false;
+
+    const unsubscribe = controller.onClarificationRequest(async () => {
+      clarificationReceived = true;
+      unsubscribe();
+      // Stop session while waiting in CLARIFICATION_REQUIRED
+      await controller.stop();
+    });
+
+    await controller.startSession({
+      documentText: 'Test text',
+      documentName: 'test.pdf',
+      targetUrl: FORM_URL,
+    });
+
+    assert.ok(clarificationReceived, 'clarification should have been reached');
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'IDLE',
+      'state machine must be returned to IDLE'
+    );
+
+    // Ensure subsequent session can be started cleanly
+    let secondSessionStarted = false;
+    try {
+      // Re-map without clarifications to complete cleanly
+      backend.mapForm = async (sessionId) => ({
+        session_id: sessionId,
+        mappings: [],
+        clarifications_required: [],
+        unmapped_fields: [],
+      });
+      await controller.startSession({
+        documentText: 'Aarav Sharma',
+        documentName: 'test2.pdf',
+        targetUrl: FORM_URL,
+      });
+      secondSessionStarted = true;
+      assert.strictEqual(controller.getStateMachine().getState(), 'REVIEW_READY');
+    } finally {
+      await controller.cleanup();
+    }
+    assert.ok(secondSessionStarted, 'should be able to start second session after stop');
+  });
+
   console.log(`\nAll ${passed} end-to-end assertions passed.`);
 }
 

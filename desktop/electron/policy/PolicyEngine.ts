@@ -49,7 +49,7 @@ export class PolicyEngine {
     ]);
 
     this.forbiddenButtonTerms =
-      /^(submit|submit\s+application|submit\s+form|submit\s+registration|submit\s+now|register|apply\s+now|complete\s+submission|send\s+application|finish|confirm\s+submission)$/i;
+      /^(submit|submit\s+application|submit\s+form|submit\s+registration|submit\s+now|register|register\s+now|apply\s+now|complete|complete\s+order|complete\s+registration|complete\s+submission|send\s+application|finish|finish\s+application|confirm\s+submission|place\s+order|continue\s+to\s+payment)$/i;
 
     this.allowedPaginationTerms =
       /^(next|next\s+step|continue|save\s*&\s*continue|proceed|go\s+to\s+step\s+\d+|step\s+\d+)$/i;
@@ -125,7 +125,11 @@ export class PolicyEngine {
    */
   public isFinalSubmissionButton(targetText: string): boolean {
     const clean = targetText.trim().toLowerCase();
-    return this.forbiddenButtonTerms.test(clean) || clean.includes('submit');
+    return (
+      this.forbiddenButtonTerms.test(clean) ||
+      clean.includes('submit') ||
+      /\bpayment\b/i.test(clean)
+    );
   }
 
   /**

@@ -51,6 +51,10 @@ export const App: React.FC = () => {
   });
   const [showVaultModal, setShowVaultModal] = useState<boolean>(false);
 
+  // Active Session Navigation Interception state
+  const [pendingNav, setPendingNav] = useState<string | null>(null);
+  const [showLeaveModal, setShowLeaveModal] = useState<boolean>(false);
+
   const session = useFormSession();
 
   useEffect(() => {
@@ -104,18 +108,50 @@ export const App: React.FC = () => {
     return unsubscribe;
   }, []);
 
+  const isAutomationActive = (state: string): boolean => {
+    return (
+      state === 'SCANNING_FORM' ||
+      state === 'MAPPING_FIELDS' ||
+      state === 'CLARIFICATION_REQUIRED' ||
+      state === 'FILLING_FORM' ||
+      state === 'VERIFYING' ||
+      state === 'REVIEW_READY' ||
+      state === 'PAUSED' ||
+      state === 'USER_TAKEOVER'
+    );
+  };
+
+  const handleNavigate = (targetNav: string) => {
+    if (activeNav === 'New Session' && isAutomationActive(session.state)) {
+      setPendingNav(targetNav);
+      setShowLeaveModal(true);
+      return;
+    }
+    setActiveNav(targetNav);
+  };
+
+  const handleStay = () => {
+    setShowLeaveModal(false);
+    setPendingNav(null);
+  };
+
+  const handleLeaveAndStop = async () => {
+    const dest = pendingNav;
+    setShowLeaveModal(false);
+    setPendingNav(null);
+    await session.stopSession();
+    if (dest) {
+      setActiveNav(dest);
+    }
+  };
+
   const handleUseDocument = (doc: DocumentRecord) => {
     session.useDocumentRecord(doc);
-    setActiveNav('New Session');
+    handleNavigate('New Session');
   };
 
   const handleNavClick = (id: string) => {
-    if (id === 'New Session') {
-      session.resetSession();
-      setActiveNav('New Session');
-    } else {
-      setActiveNav(id);
-    }
+    handleNavigate(id);
   };
 
   const handleCopyErrorDetails = () => {
@@ -173,7 +209,7 @@ export const App: React.FC = () => {
         <div>
           {/* Top Brand Logo -> Opens Home */}
           <div
-            onClick={() => setActiveNav('Home')}
+            onClick={() => handleNavigate('Home')}
             style={{
               padding: '24px 20px 20px 20px',
               display: 'flex',
@@ -233,7 +269,7 @@ export const App: React.FC = () => {
               return (
                 <button
                   key={item.id}
-                  onClick={() => handleNavClick(item.id)}
+                  onClick={() => handleNavigate(item.id)}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -335,7 +371,7 @@ export const App: React.FC = () => {
         >
           {/* Left Logo / Title -> Opens Home */}
           <div
-            onClick={() => setActiveNav('Home')}
+            onClick={() => handleNavigate('Home')}
             style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', minWidth: 0 }}
           >
             <Sprout size={22} color="#0F4C3A" />
@@ -370,7 +406,7 @@ export const App: React.FC = () => {
             </button>
 
             <button
-              onClick={() => setActiveNav('Settings')}
+              onClick={() => handleNavigate('Settings')}
               title="Settings"
               style={{
                 display: 'flex',
@@ -389,7 +425,7 @@ export const App: React.FC = () => {
             </button>
 
             <button
-              onClick={() => setActiveNav('Help')}
+              onClick={() => handleNavigate('Help')}
               title="Help"
               style={{
                 display: 'flex',
@@ -481,7 +517,7 @@ export const App: React.FC = () => {
                 <strong>Want extra protection?</strong> You can lock your details with a privacy key in Settings.
               </span>
               <button
-                onClick={() => setActiveNav('Settings')}
+                onClick={() => handleNavigate('Settings')}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -515,12 +551,9 @@ export const App: React.FC = () => {
         >
           {activeNav === 'Home' && (
             <HomeView
-              onNewSession={() => {
-                session.resetSession();
-                setActiveNav('New Session');
-              }}
-              onOpenDocuments={() => setActiveNav('My Details')}
-              onOpenHistory={() => setActiveNav('History')}
+              onNewSession={() => handleNavigate('New Session')}
+              onOpenDocuments={() => handleNavigate('My Details')}
+              onOpenHistory={() => handleNavigate('History')}
               onUseDocument={handleUseDocument}
             />
           )}
@@ -543,6 +576,7 @@ export const App: React.FC = () => {
               onSetFacts={session.setFacts}
               onSetTargetUrl={session.setTargetUrl}
               onSetInstruction={session.setInstruction}
+              onStopSession={session.stopSession}
             />
           )}
 
@@ -609,6 +643,13 @@ export const App: React.FC = () => {
       <ClarificationModal
         prompt={session.clarificationPrompt}
         onSubmitAnswer={session.handleAnswerClarification}
+        onCancel={() => {
+          setPendingNav('Home');
+          setShowLeaveModal(true);
+        }}
+        isSubmitting={session.isAnsweringClarification}
+        totalClarifications={session.totalClarifications}
+        currentClarificationIndex={session.currentClarificationIndex}
       />
 
       {/* Vault Unlock Modal (shows only when Extra protection is on and vault is locked) */}
@@ -618,6 +659,99 @@ export const App: React.FC = () => {
         onUnlocked={handleVaultUnlocked}
         onResetVault={handleResetVault}
       />
+
+      {/* Active Session Interruption Confirmation Modal */}
+      {showLeaveModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 46, 35, 0.45)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            padding: '20px',
+          }}
+        >
+          <div
+            style={{
+              background: 'var(--bg-card, #FFFFFF)',
+              borderRadius: '12px',
+              border: '1px solid var(--border-subtle, #E2E8F0)',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+              width: '100%',
+              maxWidth: '440px',
+              padding: '24px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '16px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+              <div
+                style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '10px',
+                  background: '#FEF3C7',
+                  color: '#D97706',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <AlertTriangle size={22} />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: '#0F2E23' }}>
+                  Automation is still in progress. Leaving will stop this session.
+                </h3>
+                <p style={{ margin: '6px 0 0 0', fontSize: '0.875rem', color: '#64748B', lineHeight: '1.4' }}>
+                  Your prepared facts will remain available to restart when you return.
+                </p>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px' }}>
+              <button
+                type="button"
+                onClick={handleStay}
+                style={{
+                  padding: '8px 18px',
+                  borderRadius: '6px',
+                  border: '1px solid #CBD5E1',
+                  background: '#FFFFFF',
+                  color: '#475569',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Stay
+              </button>
+              <button
+                type="button"
+                onClick={handleLeaveAndStop}
+                style={{
+                  padding: '8px 18px',
+                  borderRadius: '6px',
+                  border: 'none',
+                  background: '#DC2626',
+                  color: '#FFFFFF',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Leave & Stop
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

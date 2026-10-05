@@ -285,8 +285,11 @@ export class BrowserManager {
     const trimmed = (value || '').trim();
     if (!trimmed) return trimmed;
 
+    // Clean commas from date strings (e.g. "March 23, 2005")
+    const cleaned = trimmed.replace(/,/g, '');
+
     // Split on slashes, dashes, dots, or spaces
-    const parts = trimmed.split(/[-/.\s]+/);
+    const parts = cleaned.split(/[-/.\s]+/);
     if (parts.length === 3) {
       let [first, middle, last] = parts;
       const monthMap: Record<string, string> = {
@@ -453,7 +456,7 @@ export class BrowserManager {
     }
 
     await this.highlightField(locator);
-    await this.withCancellation(signal, locator.scrollIntoViewIfNeeded());
+    await this.withCancellation(signal, locator.scrollIntoViewIfNeeded({ timeout: 2500 }));
     if (inputType === 'date') {
       // Use fill() for HTML5 date inputs to set the ISO YYYY-MM-DD value directly.
       // With locale: 'en-IN' configured on the browser context, Chromium displays it as dd/mm/yyyy.
@@ -503,7 +506,7 @@ export class BrowserManager {
     }
 
     await this.highlightField(locator);
-    await this.withCancellation(signal, locator.scrollIntoViewIfNeeded());
+    await this.withCancellation(signal, locator.scrollIntoViewIfNeeded({ timeout: 2500 }));
 
     // Bounded attempt: an option that does not exist must produce an honest failure
     // result, not a long Playwright timeout that stalls the whole workflow.
@@ -619,7 +622,8 @@ export class BrowserManager {
     }
 
     await this.highlightField(target);
-    await this.withCancellation(signal, target.check());
+    await this.withCancellation(signal, target.scrollIntoViewIfNeeded({ timeout: 2500 }).catch(() => {}));
+    await this.withCancellation(signal, target.check({ timeout: 2500 }));
     const isChecked = await target.isChecked();
     const selectedValue = (await target.getAttribute('value')) || '';
     await this.clearHighlight();
@@ -653,8 +657,47 @@ export class BrowserManager {
     const { locator } = this.resolveField(fieldRef);
 
     await this.highlightField(locator);
-    await this.withCancellation(signal, locator.scrollIntoViewIfNeeded());
-    await this.withCancellation(signal, locator.setChecked(checked));
+
+    let done = false;
+    try {
+      await this.withCancellation(signal, locator.scrollIntoViewIfNeeded({ timeout: 2500 }));
+      await this.withCancellation(signal, locator.setChecked(checked, { timeout: 2500 }));
+      done = (await locator.isChecked()) === checked;
+    } catch {
+      done = false;
+    }
+
+    if (!done) {
+      // Fallback: check via associated label element if direct input interaction timed out
+      // (common in styled checkboxes where <input> is visually hidden by CSS)
+      const id = await locator.getAttribute('id').catch(() => null);
+      let labelLoc: Locator | null = null;
+      if (id && this.page) {
+        const forLabel = this.page.locator(`label[for="${CSS.escape(id)}"]`).first();
+        if ((await forLabel.count()) > 0) {
+          labelLoc = forLabel;
+        }
+      }
+      if (!labelLoc) {
+        const parentLabel = locator.locator('xpath=ancestor::label[1]').first();
+        if ((await parentLabel.count()) > 0) {
+          labelLoc = parentLabel;
+        }
+      }
+
+      if (labelLoc && (await labelLoc.count()) > 0) {
+        try {
+          await this.withCancellation(signal, labelLoc.scrollIntoViewIfNeeded({ timeout: 2500 }));
+          const curChecked = await locator.isChecked();
+          if (curChecked !== checked) {
+            await this.withCancellation(signal, labelLoc.click({ timeout: 2500 }));
+          }
+        } catch {
+          // If label interaction fails, fall through to final check
+        }
+      }
+    }
+
     const isChecked = await locator.isChecked();
     await this.clearHighlight();
     return { success: isChecked === checked, isChecked, expectedChecked: checked };
@@ -669,7 +712,7 @@ export class BrowserManager {
   public async scrollToField(fieldRef: string, signal?: AbortSignal): Promise<void> {
     const locator = this.scanner.getLocator(fieldRef);
     if (locator) {
-      await this.withCancellation(signal, locator.scrollIntoViewIfNeeded());
+      await this.withCancellation(signal, locator.scrollIntoViewIfNeeded({ timeout: 2500 }));
     }
   }
 
@@ -689,9 +732,31 @@ export class BrowserManager {
       throw new Error(`Field reference '${fieldRef}' not found.`);
     }
 
+    const inputType = ((await locator.getAttribute('type').catch(() => '')) || '').toLowerCase();
+
+    // Checkbox read-back verification: evaluate checked state against affirmative/negative tokens
+    if (inputType === 'checkbox') {
+      const isChecked = await locator.isChecked().catch(() => false);
+      const affirmative = new Set(['true', 'yes', 'y', '1', 'on', 'checked', 'agree', 'accepted']);
+      const negative = new Set(['false', 'no', 'n', '0', 'off', 'unchecked', 'declined']);
+      const normalizedExpected = expectedValue.trim().toLowerCase();
+
+      const expectedBool = affirmative.has(normalizedExpected)
+        ? true
+        : negative.has(normalizedExpected)
+          ? false
+          : Boolean(expectedValue.trim());
+
+      const verified = isChecked === expectedBool;
+      return {
+        verified,
+        actualValue: isChecked ? 'checked' : 'unchecked',
+        expectedValue,
+      };
+    }
+
     const actualValue = (await locator.inputValue().catch(() => '')) || '';
     const normalize = (raw: string) => raw.trim().toLowerCase().replace(/\s+/g, ' ');
-    const inputType = ((await locator.getAttribute('type').catch(() => '')) || '').toLowerCase();
 
     let verified = normalize(actualValue) === normalize(expectedValue);
     if (!verified && (inputType === 'date' || this.isDateField(fieldRef))) {

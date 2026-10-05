@@ -65,6 +65,8 @@ export interface ClarificationPromptPayload {
   fieldLabel: string;
   question: string;
   options: string[];
+  total?: number;
+  currentIndex?: number;
 }
 
 /** Workflow lifecycle states. */

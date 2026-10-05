@@ -91,6 +91,15 @@ export class AgentController {
   }
 
   /**
+   * Access the browser manager instance bound to this controller.
+   *
+   * @returns The browser manager instance.
+   */
+  public getBrowserManager(): BrowserManager {
+    return this.browserManager;
+  }
+
+  /**
    * Report whether a session is currently executing.
    *
    * @returns True while the agent loop is running.
@@ -134,13 +143,42 @@ export class AgentController {
   }
 
   /**
+   * Deeply sanitize an event payload or metadata object to remove sensitive raw values
+   * (fact_value, actualValue, expectedValue) before persistence or long-term retention.
+   *
+   * @param obj Target object, array, or primitive.
+   * @returns Sanitized copy with sensitive raw value keys stripped.
+   */
+  private sanitizeForPersistence(obj: any): any {
+    if (obj === null || obj === undefined) return obj;
+    if (Array.isArray(obj)) {
+      return obj.map((item) => this.sanitizeForPersistence(item));
+    }
+    if (typeof obj === 'object') {
+      const sanitized: Record<string, any> = {};
+      for (const [key, value] of Object.entries(obj)) {
+        if (key === 'fact_value' || key === 'actualValue' || key === 'expectedValue') {
+          continue;
+        }
+        sanitized[key] = this.sanitizeForPersistence(value);
+      }
+      return sanitized;
+    }
+    return obj;
+  }
+
+  /**
    * Emit and persist a structured execution event.
    *
-   * Events are pushed to the session audit timeline so the timeline is durable.
+   * Splits the IPC payload and persisted payload:
+   * - Emits the full payload to renderer listeners for live review display.
+   * - Strips fact_value, actualValue, and expectedValue before queueing for backend persistence
+   *   so that persisted audit logs contain no raw values.
    *
    * @param event Event payload to emit.
    */
   private emitEvent(event: AgentEventPayload): void {
+    // 1. Full payload for renderer's live display over IPC
     this.eventListeners.forEach((listener) => {
       try {
         listener(event);
@@ -149,11 +187,13 @@ export class AgentController {
       }
     });
 
+    // 2. Sanitized payload for backend audit persistence
     if (this.sessionId && event.type !== 'STATE_CHANGED') {
+      const sanitizedEvent = this.sanitizeForPersistence(event);
       // Fire-and-forget persistence; a logging failure must not break the workflow.
       // Queued locally so the backend always receives events in creation order
       // instead of racing multiple concurrent writes against each other.
-      this.enqueuePersistence(event as unknown as Record<string, unknown>);
+      this.enqueuePersistence(sanitizedEvent as unknown as Record<string, unknown>);
     }
   }
 
@@ -247,9 +287,9 @@ export class AgentController {
   }
 
   /**
-   * Stop the workflow, cancelling in-flight operations and pending clarifications.
+   * Stop the workflow, cancelling in-flight operations, closing the browser, and cleaning up.
    */
-  public stop(): void {
+  public async stop(): Promise<void> {
     this.isStoppedState = true;
     this.isPausedState = false;
     this.isTakeoverState = false;
@@ -259,12 +299,23 @@ export class AgentController {
       this.abortController = null;
     }
 
+    // Close and release the Playwright browser
+    await this.browserManager.close().catch(() => {});
+
+    // Purge the active backend session using the existing lifecycle
+    if (this.sessionId) {
+      await this.backendClient.purgeSession(this.sessionId).catch(() => {});
+      this.sessionId = '';
+    }
+
+    // Cancel any pending clarification waits so promises don't hang
     for (const [clarificationId, pending] of this.pendingClarifications.entries()) {
       clearTimeout(pending.timer);
       pending.reject(new OperationCancelledError());
       this.pendingClarifications.delete(clarificationId);
     }
 
+    this.isRunning = false;
     this.stateMachine.transition('IDLE');
     this.emitEvent(this.buildEvent('STATE_CHANGED', 'Workflow stopped by user.'));
   }
@@ -442,19 +493,22 @@ export class AgentController {
         this.buildEvent(
           'STATE_CHANGED',
           `Mapped ${mappings.length} fields (${clarifications.length} clarifications needed).`,
-          { metadata: { mappings, factCount: facts.length } }
+          {
+            metadata: {
+              mappings,
+              factCount: facts.length,
+              totalClarifications: clarifications.length,
+            },
+          }
         )
       );
 
       // Step 4: Resolve clarifications.
       if (clarifications.length > 0) {
         this.stateMachine.transition('CLARIFICATION_REQUIRED');
-        for (const prompt of clarifications) {
+        for (let i = 0; i < clarifications.length; i++) {
+          const prompt = clarifications[i];
           await this.checkPauseOrStop();
-          await this.emitToolStarted(
-            'request_clarification',
-            `Awaiting human clarification for '${prompt.field_label}'...`
-          );
 
           // The tool resolves to `{ fieldRef, selectedValue }`, which is not a string.
           // Normalize it before it reaches the API, whose contract requires a string
@@ -467,8 +521,10 @@ export class AgentController {
               fieldLabel: prompt.field_label,
               question: prompt.question,
               options: prompt.options,
+              total: clarifications.length,
+              currentIndex: i + 1,
             },
-            `Requesting clarification for '${prompt.field_label}'...`,
+            `Awaiting human clarification for '${prompt.field_label}' (${i + 1}/${clarifications.length})...`,
             () => `Human confirmed a value for '${prompt.field_label}'.`
           );
 
@@ -615,7 +671,10 @@ export class AgentController {
         )
       );
     } catch (error: any) {
-      if (error?.name === 'OperationCancelledError' || error?.message === 'WORKFLOW_STOPPED_BY_USER') {
+      if (error?.name === 'OperationCancelledError' || error?.message === 'WORKFLOW_STOPPED_BY_USER' || this.isStoppedState) {
+        if (this.stateMachine.getState() !== 'IDLE') {
+          this.stateMachine.transition('IDLE');
+        }
         this.emitEvent(this.buildEvent('STATE_CHANGED', 'Session stopped by operator.'));
       } else if (error?.message === 'CLARIFICATION_TIMEOUT') {
         this.stateMachine.transition('ERROR');
@@ -638,9 +697,13 @@ export class AgentController {
     } finally {
       if (this.sessionId) {
         this.backendClient.purgeSession(this.sessionId).catch(() => {});
+        this.sessionId = '';
       }
       this.isRunning = false;
       this.abortController = null;
+      if (this.isStoppedState && this.stateMachine.getState() !== 'IDLE') {
+        this.stateMachine.transition('IDLE');
+      }
     }
   }
 

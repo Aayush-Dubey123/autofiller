@@ -153,6 +153,8 @@ export class ToolRegistry {
           fieldLabel: input.fieldLabel || input.fieldRef,
           question: input.question,
           options: input.options || [],
+          total: typeof input.total === 'number' ? input.total : undefined,
+          currentIndex: typeof input.currentIndex === 'number' ? input.currentIndex : undefined,
         });
         return { fieldRef: input.fieldRef, selectedValue: answer };
       },

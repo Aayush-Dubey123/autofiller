@@ -7,6 +7,7 @@ database double, so no live MongoDB instance or Gemini credentials are required.
 
 import json
 import os
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -131,6 +132,39 @@ def test_document_service_blocks_path_outside_allowed_roots():
     service = DocumentService()
     with pytest.raises(DocumentAccessError):
         service._resolve_safe_path(os.path.join(os.sep, "etc", "passwd"))
+
+    # Paths under home directory outside allowed upload roots must be rejected
+    env_path = str(Path(__file__).resolve().parents[2] / "backend" / ".env")
+    with pytest.raises(DocumentAccessError):
+        service._resolve_safe_path(env_path)
+
+    documents_path = str(Path.home() / "Documents" / "confidential.pdf")
+    with pytest.raises(DocumentAccessError):
+        service._resolve_safe_path(documents_path)
+
+
+@pytest.mark.asyncio
+async def test_extract_document_endpoint_rejects_home_dir_and_env_with_403(app_with_fake_db):
+    """Assert /v1/documents/extract returns HTTP 403 for backend/.env and files under home directory."""
+    transport = ASGITransport(app=app_with_fake_db)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        env_path = str(Path(__file__).resolve().parents[2] / "backend" / ".env")
+        response = await client.post(
+            "/v1/documents/extract",
+            headers=AUTH_HEADERS,
+            json={"file_path": env_path},
+        )
+        assert response.status_code == 403
+        assert "outside the permitted directories" in response.json()["detail"]
+
+        home_file = str(Path.home() / "Desktop" / "student_notes.pdf")
+        home_res = await client.post(
+            "/v1/documents/extract",
+            headers=AUTH_HEADERS,
+            json={"file_path": home_file},
+        )
+        assert home_res.status_code == 403
+        assert "outside the permitted directories" in home_res.json()["detail"]
 
 
 def test_internal_token_uses_constant_time_comparison():

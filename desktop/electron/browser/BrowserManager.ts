@@ -121,14 +121,14 @@ export class BrowserManager {
    * @throws Error when the navigation policy denies the host.
    */
   public async navigateTo(url: string, signal?: AbortSignal): Promise<void> {
-    if (!this.page) {
-      await this.launch();
-    }
-
     const currentHost = this.page ? new URL(this.page.url() || 'about:blank').host : '';
     const policy = this.policyEngine.validateNavigation(currentHost, url);
     if (!policy.allowed) {
       throw new Error(`[PolicyEngine] ${policy.code}: ${policy.reason}`);
+    }
+
+    if (!this.page) {
+      await this.launch();
     }
 
     // Resilient navigation: If user or preset targeted an unreachable local mock URL,

@@ -53,6 +53,13 @@ def main() -> None:
             events=[{**EVENT, "event_id": EVENT["eventId"]}], verifications=[]
         ),
     )
+    check(
+        "verifications: safe metadata",
+        lambda: SessionEventAppendRequest(
+            events=[],
+            verifications=[{"field_ref": "f1", "field_label": "Name", "verified": True}],
+        ),
+    )
 
     def clarification(out_key: str, value):
         ids = (

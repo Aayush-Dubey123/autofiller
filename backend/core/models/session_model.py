@@ -96,11 +96,12 @@ class ClarificationRequest(BaseModel):
 
 
 class VerificationRecord(BaseModel):
-    """Audit verification of a populated form field."""
+    """Audit verification of a populated form field (safe metadata only)."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
     field_ref: str = Field(description="Field reference")
     field_label: str = Field(description="Field label")
-    expected_value: str = Field(description="Expected mapped value")
-    actual_value: str = Field(description="Actual value read back from DOM")
     verified: bool = Field(description="Whether expected matched actual")
 
 

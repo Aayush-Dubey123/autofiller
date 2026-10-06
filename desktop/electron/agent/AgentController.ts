@@ -147,23 +147,39 @@ export class AgentController {
 
   /**
    * Deeply sanitize an event payload or metadata object to remove sensitive raw values
-   * (fact_value, actualValue, expectedValue) before persistence or long-term retention.
+   * (fact_value, actualValue, expectedValue, etc.) before IPC emission or persistence.
    *
    * @param obj Target object, array, or primitive.
    * @returns Sanitized copy with sensitive raw value keys stripped.
    */
-  private sanitizeForPersistence(obj: any): any {
+  private sanitizePayload(obj: any): any {
     if (obj === null || obj === undefined) return obj;
     if (Array.isArray(obj)) {
-      return obj.map((item) => this.sanitizeForPersistence(item));
+      return obj.map((item) => this.sanitizePayload(item));
     }
     if (typeof obj === 'object') {
       const sanitized: Record<string, any> = {};
       for (const [key, value] of Object.entries(obj)) {
-        if (key === 'fact_value' || key === 'actualValue' || key === 'expectedValue') {
+        if (
+          key === 'fact_value' ||
+          key === 'factValue' ||
+          key === 'actualValue' ||
+          key === 'actual_value' ||
+          key === 'expectedValue' ||
+          key === 'expected_value' ||
+          key === 'selectedValue' ||
+          key === 'selected_value' ||
+          key === 'selectedOption' ||
+          key === 'selected_option' ||
+          key === 'expectedOption' ||
+          key === 'expected_option' ||
+          key === 'currentValue' ||
+          key === 'current_value' ||
+          key === 'value'
+        ) {
           continue;
         }
-        sanitized[key] = this.sanitizeForPersistence(value);
+        sanitized[key] = this.sanitizePayload(value);
       }
       return sanitized;
     }
@@ -173,26 +189,28 @@ export class AgentController {
   /**
    * Emit and persist a structured execution event.
    *
-   * Splits the IPC payload and persisted payload:
-   * - Emits the full payload to renderer listeners for live review display.
-   * - Strips fact_value, actualValue, and expectedValue before queueing for backend persistence
-   *   so that persisted audit logs contain no raw values.
+   * Enforces the zero-value contract across both boundaries:
+   * - Strips fact_value, actualValue, expectedValue, and other raw values before emitting to
+   *   renderer listeners over IPC (live UI display and history store).
+   * - Strips raw values before queueing for backend persistence so that persisted audit logs
+   *   contain no raw personal values.
    *
    * @param event Event payload to emit.
    */
   private emitEvent(event: AgentEventPayload): void {
-    // 1. Full payload for renderer's live display over IPC
+    const sanitizedEvent = this.sanitizePayload(event) as AgentEventPayload;
+
+    // 1. Sanitized payload for renderer's live display over IPC
     this.eventListeners.forEach((listener) => {
       try {
-        listener(event);
+        listener(sanitizedEvent);
       } catch (error) {
         console.error('Error emitting event:', error);
       }
     });
 
     // 2. Sanitized payload for backend audit persistence
-    if (this.sessionId && event.type !== 'STATE_CHANGED') {
-      const sanitizedEvent = this.sanitizeForPersistence(event);
+    if (this.sessionId && sanitizedEvent.type !== 'STATE_CHANGED') {
       // Fire-and-forget persistence; a logging failure must not break the workflow.
       // Queued locally so the backend always receives events in creation order
       // instead of racing multiple concurrent writes against each other.
@@ -709,8 +727,6 @@ export class AgentController {
         verifications.push({
           field_ref: mapping.field_ref,
           field_label: mapping.field_label,
-          expected_value: result.expectedValue,
-          actual_value: result.actualValue,
           verified: result.verified,
         });
       }
@@ -856,11 +872,16 @@ export class AgentController {
         return result;
       }
 
+      const eventMetadata =
+        toolName === 'extract_document_facts'
+          ? { factCount: Array.isArray(result) ? (result as any[]).length : 0 }
+          : (result as unknown as Record<string, unknown>);
+
       this.emitEvent(
         this.buildEvent('TOOL_COMPLETED', successDescription(result), {
           tool: toolName,
           success: true,
-          metadata: result as unknown as Record<string, unknown>,
+          metadata: eventMetadata,
         })
       );
       return result;
@@ -896,7 +917,7 @@ export class AgentController {
         (result: any) =>
           result.success
             ? `Selected option for '${label}'.`
-            : `Could not select option for '${label}'. ${result.reason || ''}`.trim(),
+            : `Could not select option for '${label}'.`,
         false
       );
       return;

@@ -889,3 +889,70 @@ async def test_delete_session_and_purge_all_endpoints(app_with_fake_db):
         purge_res = await client.delete("/v1/sessions", headers=AUTH_HEADERS)
         assert purge_res.status_code == 200
         assert purge_res.json() == {"success": True}
+
+
+@pytest.mark.asyncio
+async def test_verifications_persist_safe_metadata_only_without_values(app_with_fake_db):
+    """
+    Verify verification persistence enforces the zero-value contract.
+
+    Persists only safe metadata (field_ref, field_label, verified),
+    dropping any raw expected_value or actual_value.
+    """
+    transport = ASGITransport(app=app_with_fake_db)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        created = await client.post(
+            "/v1/sessions",
+            headers=AUTH_HEADERS,
+            json={"document_name": "student.pdf", "target_url": "https://example.com/form"},
+        )
+        assert created.status_code == 201
+        session_id = created.json()["id"]
+
+        # Append verifications: one standard safe payload and one with legacy/extra values
+        verifications_payload = [
+            {
+                "field_ref": "field_name",
+                "field_label": "Student Name",
+                "verified": True,
+                # Even if raw values are sent, backend must not persist them
+                "expected_value": "Aarav Sharma",
+                "actual_value": "Aarav Sharma",
+            },
+            {
+                "field_ref": "field_email",
+                "field_label": "Email Address",
+                "verified": False,
+            },
+        ]
+
+        appended = await client.post(
+            f"/v1/sessions/{session_id}/events",
+            headers=AUTH_HEADERS,
+            json={"events": [], "verifications": verifications_payload},
+        )
+        assert appended.status_code == 200, appended.text
+        assert appended.json()["success"] is True
+
+        # Fetch session record and verify persisted shape
+        fetched = await client.get(f"/v1/sessions/{session_id}", headers=AUTH_HEADERS)
+        assert fetched.status_code == 200
+        persisted = fetched.json().get("verifications", [])
+        assert len(persisted) == 2
+
+        # 1. First record verified
+        v1 = persisted[0]
+        assert v1["field_ref"] == "field_name"
+        assert v1["field_label"] == "Student Name"
+        assert v1["verified"] is True
+        assert "expected_value" not in v1, f"expected_value must not be persisted: {v1}"
+        assert "actual_value" not in v1, f"actual_value must not be persisted: {v1}"
+
+        # 2. Second record unverified
+        v2 = persisted[1]
+        assert v2["field_ref"] == "field_email"
+        assert v2["field_label"] == "Email Address"
+        assert v2["verified"] is False
+        assert "expected_value" not in v2
+        assert "actual_value" not in v2
+

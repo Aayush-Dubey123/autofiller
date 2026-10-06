@@ -325,8 +325,6 @@ export class BackendClient {
     const safeVerifications = (verifications || []).map((v) => ({
       field_ref: String(v.field_ref || v.fieldRef || ''),
       field_label: String(v.field_label || v.fieldLabel || ''),
-      expected_value: String(v.expected_value || v.expectedValue || ''),
-      actual_value: String(v.actual_value || v.actualValue || ''),
       verified: Boolean(v.verified),
     }));
 

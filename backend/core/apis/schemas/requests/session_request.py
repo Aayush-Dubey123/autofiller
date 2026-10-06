@@ -94,14 +94,12 @@ class CreateSessionRequest(BaseModel):
 
 
 class VerificationRecordInput(BaseModel):
-    """Verification outcome for a single populated form field."""
+    """Verification outcome for a single populated form field (safe metadata only)."""
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     field_ref: str = Field(default="", description="Field reference")
     field_label: str = Field(default="", description="Field label")
-    expected_value: str = Field(default="", description="Expected mapped value")
-    actual_value: str = Field(default="", description="Actual value read back from DOM")
     verified: bool = Field(default=False, description="Whether expected matched actual")
 
 

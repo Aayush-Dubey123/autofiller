@@ -70,12 +70,10 @@ export interface ClarificationRequest {
   selected_value?: string | null;
 }
 
-/** Verification outcome for a populated field. */
+/** Verification outcome for a populated field (safe metadata only, no values). */
 export interface VerificationRecord {
   field_ref: string;
   field_label: string;
-  expected_value: string;
-  actual_value: string;
   verified: boolean;
 }
 

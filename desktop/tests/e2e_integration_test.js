@@ -125,9 +125,9 @@ function makeStubBackend(url) {
     async answerClarification() {
       calls.push(['answerClarification']);
     },
-    async appendEvents(sessionId, events) {
-      calls.push(['appendEvents', sessionId, events.length]);
-      return { success: true, appended: events.length, event_count: events.length };
+    async appendEvents(sessionId, events, verifications) {
+      calls.push(['appendEvents', sessionId, (events || []).length, verifications || []]);
+      return { success: true, appended: (events || []).length, event_count: (events || []).length };
     },
     async appendEventSafe(sessionId, event) {
       calls.push(['appendEventSafe', sessionId, event.type]);
@@ -329,16 +329,29 @@ async function runE2E() {
     await controller.cleanup();
   });
 
-  await test('persisted/queued event objects contain no fact_value, actualValue, or expectedValue keys across a full fill-and-verify cycle', async () => {
+  await test('zero-value contract: IPC events, persisted events, and verifications contain no raw values across fill-and-verify', async () => {
     const backend = makeStubBackend(FORM_URL);
     const persistedEvents = [];
+    const ipcEvents = [];
+    let persistedVerifications = [];
     const origAppendEventSafe = backend.appendEventSafe;
     backend.appendEventSafe = async (sessionId, event) => {
       persistedEvents.push(JSON.parse(JSON.stringify(event)));
       return origAppendEventSafe(sessionId, event);
     };
+    const origAppendEvents = backend.appendEvents;
+    backend.appendEvents = async (sessionId, events, verifications) => {
+      if (verifications && verifications.length > 0) {
+        persistedVerifications.push(...JSON.parse(JSON.stringify(verifications)));
+      }
+      return origAppendEvents(sessionId, events, verifications);
+    };
 
     const controller = new AgentController(backend);
+    controller.onEvent((event) => {
+      ipcEvents.push(JSON.parse(JSON.stringify(event)));
+    });
+
     await controller.startSession({
       documentText: 'Student Name: Aarav Sharma',
       documentName: 'student.pdf',
@@ -346,6 +359,7 @@ async function runE2E() {
     });
 
     assert.ok(persistedEvents.length > 0, 'agent events must be queued for persistence');
+    assert.ok(ipcEvents.length > 0, 'agent events must be emitted over IPC');
 
     // Confirm that fill and verify tools executed
     const toolEvents = persistedEvents.filter(
@@ -353,25 +367,73 @@ async function runE2E() {
     );
     assert.ok(toolEvents.length > 0, 'fill_text or verify_field events must have executed');
 
-    // Verify that across all persisted event objects, metadata contains no sensitive keys
-    for (const evt of persistedEvents) {
+    const forbiddenKeys = [
+      'fact_value',
+      'factValue',
+      'actualValue',
+      'actual_value',
+      'expectedValue',
+      'expected_value',
+      'selectedValue',
+      'selected_value',
+    ];
+
+    // 1. Verify that across all IPC event objects, no sensitive keys or raw personal values exist
+    for (const evt of ipcEvents) {
       const serialized = JSON.stringify(evt);
+      for (const key of forbiddenKeys) {
+        assert.strictEqual(
+          serialized.includes(`"${key}"`),
+          false,
+          `IPC event ${evt.type} (${evt.tool || ''}) must not contain "${key}": ${serialized}`
+        );
+      }
       assert.strictEqual(
-        serialized.includes('"fact_value"'),
+        serialized.includes('Aarav Sharma'),
         false,
-        `Persisted event ${evt.type} (${evt.tool || ''}) must not contain fact_value: ${serialized}`
-      );
-      assert.strictEqual(
-        serialized.includes('"actualValue"'),
-        false,
-        `Persisted event ${evt.type} (${evt.tool || ''}) must not contain actualValue: ${serialized}`
-      );
-      assert.strictEqual(
-        serialized.includes('"expectedValue"'),
-        false,
-        `Persisted event ${evt.type} (${evt.tool || ''}) must not contain expectedValue: ${serialized}`
+        `IPC event ${evt.type} (${evt.tool || ''}) must not contain raw field value 'Aarav Sharma': ${serialized}`
       );
     }
+
+    // 2. Verify that across all persisted event objects, metadata contains no sensitive keys
+    for (const evt of persistedEvents) {
+      const serialized = JSON.stringify(evt);
+      for (const key of forbiddenKeys) {
+        assert.strictEqual(
+          serialized.includes(`"${key}"`),
+          false,
+          `Persisted event ${evt.type} (${evt.tool || ''}) must not contain "${key}": ${serialized}`
+        );
+      }
+      assert.strictEqual(
+        serialized.includes('Aarav Sharma'),
+        false,
+        `Persisted event ${evt.type} (${evt.tool || ''}) must not contain raw field value 'Aarav Sharma': ${serialized}`
+      );
+    }
+
+    // 3. Verify that verification persistence contains only safe metadata and no raw values
+    assert.ok(persistedVerifications.length > 0, 'verifications must be persisted to session');
+    for (const verif of persistedVerifications) {
+      const serialized = JSON.stringify(verif);
+      assert.ok(verif.field_ref, 'verification must have field_ref');
+      assert.ok(verif.field_label, 'verification must have field_label');
+      assert.strictEqual(typeof verif.verified, 'boolean', 'verification must have boolean verified');
+      for (const key of forbiddenKeys) {
+        assert.strictEqual(
+          serialized.includes(`"${key}"`),
+          false,
+          `Persisted verification must not contain "${key}": ${serialized}`
+        );
+      }
+      assert.strictEqual(
+        serialized.includes('Aarav Sharma'),
+        false,
+        `Persisted verification must not contain raw field value 'Aarav Sharma': ${serialized}`
+      );
+    }
+
+    assert.strictEqual(controller.getStateMachine().getState(), 'REVIEW_READY');
 
     await controller.cleanup();
   });

@@ -214,6 +214,21 @@ function runPolicyTests() {
     assert.strictEqual(fileAllowed.code, 'NAVIGATION_ALLOWED');
   });
 
+  test('AgentController and BrowserManager do not provide programmatic submit execution', () => {
+    const { AgentController } = require(path.join(DIST, 'agent/AgentController'));
+    const { BrowserManager } = require(path.join(DIST, 'browser/BrowserManager'));
+    assert.strictEqual(
+      typeof AgentController.prototype.submitFormAsOperator,
+      'undefined',
+      'AgentController must not expose submitFormAsOperator'
+    );
+    assert.strictEqual(
+      typeof BrowserManager.prototype.submitFormManually,
+      'undefined',
+      'BrowserManager must not expose submitFormManually'
+    );
+  });
+
   console.log(`\nAll ${passed} PolicyEngine assertions passed.`);
 }
 

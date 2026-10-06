@@ -982,29 +982,6 @@ export class AgentController {
     }
   }
 
-  /**
-   * Submit the active form upon explicit instruction from the human operator.
-   *
-   * Enforces the core safety rule: autonomous submission is forbidden; this method
-   * can only be invoked by operator action when in REVIEW_READY or USER_TAKEOVER.
-   */
-  public async submitFormAsOperator(): Promise<{ success: boolean; message: string }> {
-    const currentState = this.stateMachine.getState();
-    if (currentState !== 'REVIEW_READY' && currentState !== 'USER_TAKEOVER') {
-      throw new Error(`Cannot submit form in state: ${currentState}. Workflow must be in REVIEW_READY.`);
-    }
-
-    const result = await this.browserManager.submitFormManually();
-    this.stateMachine.transition('COMPLETED');
-    this.emitEvent(
-      this.buildEvent(
-        'STATE_CHANGED',
-        'Application submitted successfully by human operator.',
-        { success: true }
-      )
-    );
-    return result;
-  }
 
   /**
    * Close the browser and release resources.

@@ -213,14 +213,6 @@ export function registerIpcHandlers(
     return { success: true };
   });
 
-  ipcMain.handle('autofiller:submit-form', async () => {
-    try {
-      const result = await agentController.submitFormAsOperator();
-      return { success: true, message: result.message };
-    } catch (error: any) {
-      return { success: false, error: error?.message || String(error) };
-    }
-  });
 
   ipcMain.handle('autofiller:answer-clarification', async (_event, { clarificationId, answer }) => {
     const delivered = agentController.answerClarification(clarificationId, answer);

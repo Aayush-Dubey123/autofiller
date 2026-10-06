@@ -775,44 +775,6 @@ export class BrowserManager {
     return { verified, actualValue, expectedValue };
   }
 
-  /**
-   * Submit the active form upon explicit instruction from the human operator.
-   *
-   * This is strictly an operator-initiated action, never called autonomously by the agent.
-   */
-  public async submitFormManually(): Promise<{ success: boolean; message: string }> {
-    if (!this.page) {
-      throw new Error('Browser is not initialized or page is not open.');
-    }
-
-    // Auto-check declaration and invoke handleFormSubmit directly if present in page
-    await this.page.evaluate(() => {
-      const decl = document.getElementById('declaration') as HTMLInputElement | null;
-      if (decl && !decl.checked) {
-        decl.checked = true;
-      }
-      if (typeof (window as any).handleFormSubmit === 'function') {
-        (window as any).handleFormSubmit();
-      }
-    }).catch(() => {});
-
-    // Click the submission button
-    const submitBtn = this.page.locator('#submitBtn, button[type="submit"], input[type="submit"]').first();
-    if ((await submitBtn.count()) > 0) {
-      await submitBtn.click({ force: true }).catch(() => {});
-      return { success: true, message: 'Application submitted successfully by human operator.' };
-    }
-
-    // Fallback: request form submit
-    await this.page.evaluate(() => {
-      const form = document.querySelector('form');
-      if (form) {
-        form.requestSubmit();
-      }
-    }).catch(() => {});
-
-    return { success: true, message: 'Application submitted successfully by human operator.' };
-  }
 
   /**
    * Close the Playwright browser and clear cached state.

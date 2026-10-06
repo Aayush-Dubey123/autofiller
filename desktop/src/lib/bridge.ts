@@ -31,7 +31,6 @@ export interface AutoFillerAPI {
   resumeAgent: () => Promise<void>;
   takeOver: () => Promise<void>;
   stopAgent: () => Promise<void>;
-  submitForm: () => Promise<{ success: boolean; error?: string; message?: string }>;
   answerClarification: (clarificationId: string, answer: string) => Promise<{ success: boolean }>;
   extractDocument: (payload: {
     filePath?: string;
@@ -118,7 +117,6 @@ const browserFallback: AutoFillerAPI = {
   resumeAgent: async () => undefined,
   takeOver: async () => undefined,
   stopAgent: async () => undefined,
-  submitForm: async () => ({ success: false, error: 'Desktop bridge unavailable' }),
   answerClarification: async () => ({ success: false }),
   extractDocument: async () => ({ error: 'Desktop bridge unavailable' }),
   listSessions: async () => [],

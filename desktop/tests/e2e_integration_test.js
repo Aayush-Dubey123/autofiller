@@ -704,6 +704,22 @@ async function runE2E() {
     await controller.cleanup();
   });
 
+  await test('programmatic form submission mechanisms are removed from AgentController and BrowserManager', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    const controller = new AgentController(backend);
+    assert.strictEqual(
+      typeof controller.submitFormAsOperator,
+      'undefined',
+      'AgentController must not expose submitFormAsOperator'
+    );
+    const browser = controller.getBrowserManager();
+    assert.strictEqual(
+      typeof browser.submitFormManually,
+      'undefined',
+      'BrowserManager must not expose submitFormManually'
+    );
+  });
+
   console.log(`\nAll ${passed} end-to-end assertions passed.`);
 }
 

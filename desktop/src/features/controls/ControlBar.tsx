@@ -8,7 +8,6 @@ interface ControlBarProps {
   onResume: () => void;
   onTakeOver: () => void;
   onStop: () => void;
-  onSubmitForm?: () => void;
 }
 
 export const ControlBar: React.FC<ControlBarProps> = ({
@@ -17,7 +16,6 @@ export const ControlBar: React.FC<ControlBarProps> = ({
   onResume,
   onTakeOver,
   onStop,
-  onSubmitForm,
 }) => {
   const isRunning =
     state === 'EXTRACTING_DOC' ||
@@ -113,24 +111,6 @@ export const ControlBar: React.FC<ControlBarProps> = ({
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        {/* Operator Submit Application */}
-        {(isReviewReady || isTakeover) && onSubmitForm && (
-          <Button
-            size="sm"
-            variant="primary"
-            style={{
-              background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-              border: 'none',
-              boxShadow: '0 0 14px rgba(16, 185, 129, 0.4)',
-              fontWeight: 700,
-              padding: '6px 16px',
-            }}
-            icon={<CheckCircle2 size={15} />}
-            onClick={onSubmitForm}
-          >
-            Submit Application
-          </Button>
-        )}
 
         {/* Pause / Resume */}
         {isRunning && (

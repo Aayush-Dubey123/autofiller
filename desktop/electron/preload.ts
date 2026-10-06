@@ -33,7 +33,6 @@ export interface AutoFillerAPI {
   resumeAgent: () => Promise<void>;
   takeOver: () => Promise<void>;
   stopAgent: () => Promise<void>;
-  submitForm: () => Promise<{ success: boolean; error?: string; message?: string }>;
   answerClarification: (clarificationId: string, answer: string) => Promise<{ success: boolean }>;
   extractDocument: (payload: {
     filePath?: string;
@@ -97,7 +96,6 @@ const api: AutoFillerAPI = {
   resumeAgent: () => ipcRenderer.invoke('autofiller:resume-agent'),
   takeOver: () => ipcRenderer.invoke('autofiller:takeover-agent'),
   stopAgent: () => ipcRenderer.invoke('autofiller:stop-agent'),
-  submitForm: () => ipcRenderer.invoke('autofiller:submit-form'),
   answerClarification: (clarificationId, answer) =>
     ipcRenderer.invoke('autofiller:answer-clarification', { clarificationId, answer }),
   extractDocument: (payload) => ipcRenderer.invoke('autofiller:extract-document', payload),

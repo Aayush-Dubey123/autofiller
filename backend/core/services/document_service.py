@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 
+from fastapi import HTTPException, status
 import pymupdf
 from commons.logger import logger
 from core.models.session_model import ExtractedFact
@@ -18,8 +19,11 @@ from core.services.gemini_service import get_gemini_service
 
 logging = logger(__name__)
 
+# Whitelist of permitted document and image extensions, matching the native desktop file picker.
+SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".txt"}
+
 # Supported image file extensions for direct vision-based fact extraction.
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 MIME_TYPE_MAP = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -85,8 +89,19 @@ KEY_ALIASES = {
     "allergies": "allergies",
     "does_student_require_transport?": "transport",
     "does_student_require_transport": "transport",
-    "transport": "transport",
     "emergency_contact_person": "emergency_contact",
+    # Demographics and geography aliases (Finding 8)
+    "sex": "gender",
+    "gender": "gender",
+    "biological_sex": "gender",
+    "town": "city",
+    "city": "city",
+    "municipality": "city",
+    "district": "city",
+    "province": "state",
+    "state": "state",
+    "region": "state",
+    "state_province": "state",
 }
 
 CANONICAL_LABELS = {
@@ -113,6 +128,20 @@ CANONICAL_LABELS = {
 
 class DocumentAccessError(Exception):
     """Raised when a requested document path violates access policy."""
+
+
+class DocumentEmptyError(HTTPException):
+    """Raised when digital text extraction yields empty text and vision is unavailable or fails."""
+
+    def __init__(self, detail: str = "No readable text found in this document"):
+        super().__init__(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail)
+
+
+class UnsupportedDocumentTypeError(HTTPException):
+    """Raised when a document's file extension is not permitted."""
+
+    def __init__(self, detail: str = "Unsupported document type"):
+        super().__init__(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=detail)
 
 
 def _allowed_roots() -> List[Path]:
@@ -260,7 +289,13 @@ class DocumentService:
                 safe_path = self._resolve_safe_path(file_path)
                 ext = safe_path.suffix.lower()
 
-                # 1. Native image files (PNG, JPG, JPEG, WEBP, BMP)
+                # Whitelist permitted document formats (Finding 7)
+                if ext not in SUPPORTED_EXTENSIONS:
+                    raise UnsupportedDocumentTypeError(
+                        f"Unsupported document file extension '{ext}'. Permitted extensions: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+                    )
+
+                # 1. Native image files (PNG, JPG, JPEG, WEBP)
                 if ext in IMAGE_EXTENSIONS:
                     image_bytes = safe_path.read_bytes()
                     mime_type = MIME_TYPE_MAP.get(ext, "image/png")
@@ -297,6 +332,8 @@ class DocumentService:
                             doc_for_render.close()
                         try:
                             gemini = get_gemini_service()
+                            if not gemini.api_key or not gemini.client:
+                                raise RuntimeError("Google Gemini API is not configured or failed extraction")
                             vision_facts = await gemini.extract_facts_from_image(
                                 image_bytes=image_bytes,
                                 mime_type="image/png",
@@ -309,7 +346,13 @@ class DocumentService:
                             logging.warning(f"Gemini Vision extraction failed for {document_name}: {vision_err}")
                             if facts:
                                 return facts
+                            if not content:
+                                raise DocumentEmptyError("No readable text found in this document") from vision_err
                             raise
+
+                    # If digital text extraction yields empty text and vision was unavailable or yielded no facts (Finding 5)
+                    if not content:
+                        raise DocumentEmptyError("No readable text found in this document")
 
                     # Try Gemini Text Extraction if client is configured and text is substantial
                     if content and len(content) > 50:
@@ -340,8 +383,10 @@ class DocumentService:
 
                     content = content[:MAX_EXTRACTED_CHARS]
                 else:
-                    # 3. Text and structured plain documents
+                    # 3. Text and structured plain documents (.txt)
                     content = safe_path.read_text(encoding="utf-8", errors="ignore")[:MAX_EXTRACTED_CHARS]
+                    if not content.strip():
+                        raise DocumentEmptyError("No readable text found in this document")
             else:
                 logging.warning("No file path or raw text provided to DocumentService")
                 raise ValueError("Either file_path or raw_text must be provided")
@@ -366,7 +411,7 @@ class DocumentService:
 
             logging.info(f"Extracted {len(facts)} facts from {document_name}")
             return facts
-        except (DocumentAccessError, FileNotFoundError, ValueError):
+        except (DocumentAccessError, FileNotFoundError, ValueError, HTTPException):
             raise
         except Exception as error:
             logging.error(f"Error in DocumentService.extract_facts: {error}")

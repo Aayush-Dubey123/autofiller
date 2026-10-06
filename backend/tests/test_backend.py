@@ -877,3 +877,128 @@ async def test_delete_session_and_purge_all_endpoints(app_with_fake_db):
         purge_res = await client.delete("/v1/sessions", headers=AUTH_HEADERS)
         assert purge_res.status_code == 200
         assert purge_res.json() == {"success": True}
+
+
+@pytest.mark.asyncio
+async def test_finding_4_cors_preflight_for_delete_session(app_with_fake_db):
+    """Finding 4: Verify OPTIONS preflight for DELETE /v1/sessions/{id} returns success."""
+    transport = ASGITransport(app=app_with_fake_db)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.options(
+            "/v1/sessions/test-session-id",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "DELETE",
+                "Access-Control-Request-Headers": "Authorization, Content-Type",
+            },
+        )
+        assert response.status_code == 200
+        allowed_methods = response.headers.get("access-control-allow-methods", "")
+        assert "DELETE" in allowed_methods
+
+
+@pytest.mark.asyncio
+async def test_finding_5_empty_and_scanned_pdf_error_handling(app_with_fake_db, tmp_path, monkeypatch):
+    """Finding 5: Verify blank and scanned PDFs return HTTP 422 when digital text is empty and Gemini Vision is unavailable or fails."""
+    import pymupdf
+    from core.services.gemini_service import GeminiService
+
+    transport = ASGITransport(app=app_with_fake_db)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Case 1: Blank PDF (1 page with no digital text) when Gemini vision is unavailable (missing API key)
+        blank_doc = pymupdf.open()
+        blank_doc.new_page()
+        blank_pdf_path = str(tmp_path / "blank_doc.pdf")
+        blank_doc.save(blank_pdf_path)
+        blank_doc.close()
+
+        unconfigured_service = GeminiService()
+        unconfigured_service.api_key = ""
+        unconfigured_service.client = None
+        monkeypatch.setattr("core.services.document_service.get_gemini_service", lambda: unconfigured_service)
+
+        response = await client.post(
+            "/v1/documents/extract",
+            headers=AUTH_HEADERS,
+            json={"file_path": blank_pdf_path},
+        )
+        assert response.status_code == 422
+        assert "No readable text found in this document" in response.json()["detail"]
+
+        # Case 2: Scanned PDF (no digital text) when Gemini Vision fails
+        scanned_doc = pymupdf.open()
+        scanned_doc.new_page()
+        scanned_pdf_path = str(tmp_path / "scanned_doc.pdf")
+        scanned_doc.save(scanned_pdf_path)
+        scanned_doc.close()
+
+        async def fake_vision_failure(*args, **kwargs):
+            raise RuntimeError("Gemini Vision API quota exceeded or network failed")
+
+        failing_service = GeminiService()
+        failing_service.api_key = "test-key"
+        failing_service.client = MagicMock()
+        failing_service.extract_facts_from_image = fake_vision_failure
+        monkeypatch.setattr("core.services.document_service.get_gemini_service", lambda: failing_service)
+
+        scanned_response = await client.post(
+            "/v1/documents/extract",
+            headers=AUTH_HEADERS,
+            json={"file_path": scanned_pdf_path},
+        )
+        assert scanned_response.status_code == 422
+        assert "No readable text found in this document" in scanned_response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_finding_7_whitelist_extensions_rejects_exe_and_bin_with_415(app_with_fake_db, tmp_path):
+    """Finding 7: Whitelist extensions (.pdf, .png, .jpg, .jpeg, .webp, .txt); reject .exe and .bin with 415."""
+    transport = ASGITransport(app=app_with_fake_db)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        exe_file = tmp_path / "payload.exe"
+        exe_file.write_bytes(b"MZ\x90\x00\x03\x00\x00\x00")
+
+        exe_res = await client.post(
+            "/v1/documents/extract",
+            headers=AUTH_HEADERS,
+            json={"file_path": str(exe_file)},
+        )
+        assert exe_res.status_code == 415
+        assert "Unsupported document file extension '.exe'" in exe_res.json()["detail"]
+
+        bin_file = tmp_path / "firmware.bin"
+        bin_file.write_bytes(b"\xde\xad\xbe\xef\x00\x01\x02\x03")
+
+        bin_res = await client.post(
+            "/v1/documents/extract",
+            headers=AUTH_HEADERS,
+            json={"file_path": str(bin_file)},
+        )
+        assert bin_res.status_code == 415
+        assert "Unsupported document file extension '.bin'" in bin_res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_finding_8_key_aliases_common_demographics():
+    """Finding 8: KEY_ALIASES maps sex->gender, town->city, province->state to canonical keys."""
+    service = DocumentService()
+    sample_text = (
+        "Sex: Female\n"
+        "Town: Springfield\n"
+        "Province: Ontario\n"
+    )
+    facts = await service.extract_facts(raw_text=sample_text, document_name="demographics.txt")
+    facts_map = {f.key: f for f in facts}
+
+    assert "gender" in facts_map
+    assert facts_map["gender"].value == "Female"
+    assert facts_map["gender"].label == "Gender"
+
+    assert "city" in facts_map
+    assert facts_map["city"].value == "Springfield"
+    assert facts_map["city"].label == "City"
+
+    assert "state" in facts_map
+    assert facts_map["state"].value == "Ontario"
+    assert facts_map["state"].label == "State"
+

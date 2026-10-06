@@ -50,6 +50,9 @@ export class AgentController {
   /** Serialized audit persistence chain so event writes never race each other. */
   private persistenceQueue: Promise<void> = Promise.resolve();
 
+  /** Active session purge promise so concurrent cleanup calls serialize and share the drain. */
+  private activePurgePromise: Promise<void> | null = null;
+
   /** Keyed clarification resolvers so concurrent prompts cannot orphan each other. */
   private pendingClarifications: Map<
     string,
@@ -204,6 +207,7 @@ export class AgentController {
    */
   private enqueuePersistence(event: Record<string, unknown>): void {
     const sessionId = this.sessionId;
+    if (!sessionId) return;
     this.persistenceQueue = this.persistenceQueue
       .then(async () => {
         await this.backendClient.appendEventSafe(sessionId, event);
@@ -211,6 +215,88 @@ export class AgentController {
       .catch((error) => {
         console.error('Could not persist agent event:', error);
       });
+  }
+
+  /**
+   * Drain any pending events in the persistence queue with a safe bounded timeout,
+   * guaranteeing that already-queued events finish persisting before session deletion.
+   * Persistence failures or delays must remain diagnostic-only and must never break or hang
+   * the automation workflow.
+   *
+   * @param timeoutMs Maximum time to wait for the queue to drain before proceeding.
+   */
+  private async drainPersistenceQueue(timeoutMs: number = 4000): Promise<void> {
+    const start = Date.now();
+    try {
+      while (Date.now() - start < timeoutMs) {
+        const currentQueue = this.persistenceQueue;
+        const remainingMs = Math.max(0, timeoutMs - (Date.now() - start));
+        let timer: NodeJS.Timeout;
+        const timeoutPromise = new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, remainingMs);
+        });
+
+        await Promise.race([
+          currentQueue.catch(() => {}),
+          timeoutPromise,
+        ]);
+        clearTimeout(timer!);
+
+        // If no new events were appended to the chain while awaiting, the queue is drained
+        if (this.persistenceQueue === currentQueue || Date.now() - start >= timeoutMs) {
+          break;
+        }
+      }
+    } catch (err) {
+      console.warn('Error while draining persistence queue:', err);
+    }
+  }
+
+  /**
+   * Safely drain queued audit persistence events before purging the backend session.
+   * Prevents DELETE /v1/sessions/:id from racing ahead of pending POST /v1/sessions/:id/events,
+   * which would otherwise cause 404 Session Not Found errors in backend logs.
+   *
+   * Reentrant and protected against concurrent calls from stop() and startSession finally.
+   *
+   * @param targetSessionId Session ID to purge. If omitted, uses this.sessionId.
+   */
+  private async purgeSessionSafely(targetSessionId?: string): Promise<void> {
+    const sessionIdToPurge = targetSessionId || this.sessionId;
+    if (!sessionIdToPurge) {
+      if (this.activePurgePromise) {
+        await this.activePurgePromise;
+      }
+      return;
+    }
+
+    if (this.activePurgePromise) {
+      await this.activePurgePromise;
+      return;
+    }
+
+    this.activePurgePromise = (async () => {
+      // Clear this.sessionId immediately so no subsequent events are enqueued for this session
+      if (this.sessionId === sessionIdToPurge) {
+        this.sessionId = '';
+      }
+
+      // 1. Await the queued audit persistence chain so all events finish persisting
+      await this.drainPersistenceQueue();
+
+      // 2. Now execute the session deletion
+      try {
+        await this.backendClient.purgeSession(sessionIdToPurge);
+      } catch (err) {
+        console.warn('Could not purge backend session cleanly:', err);
+      }
+    })();
+
+    try {
+      await this.activePurgePromise;
+    } finally {
+      this.activePurgePromise = null;
+    }
   }
 
   /**
@@ -302,11 +388,8 @@ export class AgentController {
     // Close and release the Playwright browser
     await this.browserManager.close().catch(() => {});
 
-    // Purge the active backend session using the existing lifecycle
-    if (this.sessionId) {
-      await this.backendClient.purgeSession(this.sessionId).catch(() => {});
-      this.sessionId = '';
-    }
+    // Safely drain and purge the active backend session
+    await this.purgeSessionSafely();
 
     // Cancel any pending clarification waits so promises don't hang
     for (const [clarificationId, pending] of this.pendingClarifications.entries()) {
@@ -435,6 +518,7 @@ export class AgentController {
     this.isPausedState = false;
     this.isTakeoverState = false;
     this.abortController = new AbortController();
+    this.persistenceQueue = Promise.resolve();
 
     const verifications: VerificationRecord[] = [];
     const failedFields: Array<{ field_ref: string; field_label: string; reason: string }> = [];
@@ -695,10 +779,7 @@ export class AgentController {
         throw error;
       }
     } finally {
-      if (this.sessionId) {
-        this.backendClient.purgeSession(this.sessionId).catch(() => {});
-        this.sessionId = '';
-      }
+      await this.purgeSessionSafely();
       this.isRunning = false;
       this.abortController = null;
       if (this.isStoppedState && this.stateMachine.getState() !== 'IDLE') {
@@ -913,6 +994,7 @@ export class AgentController {
       pending.reject(new OperationCancelledError());
       this.pendingClarifications.delete(clarificationId);
     }
-    await this.browserManager.close();
+    await this.browserManager.close().catch(() => {});
+    await this.purgeSessionSafely();
   }
 }

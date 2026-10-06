@@ -561,6 +561,87 @@ async function runE2E() {
     assert.ok(secondSessionStarted, 'should be able to start second session after stop');
   });
 
+  await test('audit persistence queue is fully drained before purgeSession executes and never produces post-purge 404 race condition', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    const activeSessions = new Set();
+    let postPurgeEventAttempted = false;
+
+    const origCreateSession = backend.createSession;
+    backend.createSession = async (...args) => {
+      const res = await origCreateSession(...args);
+      activeSessions.add(res.id);
+      return res;
+    };
+
+    backend.appendEventSafe = async (sessionId, event) => {
+      // Simulate network latency so events queue up
+      await new Promise((r) => setTimeout(r, 25));
+      if (!activeSessions.has(sessionId)) {
+        postPurgeEventAttempted = true;
+      }
+      return true;
+    };
+
+    const origPurge = backend.purgeSession;
+    backend.purgeSession = async (sessionId) => {
+      activeSessions.delete(sessionId);
+      return origPurge(sessionId);
+    };
+
+    const controller = new AgentController(backend);
+    await controller.startSession({
+      documentText: 'Student Name: Aarav Sharma',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+    });
+
+    assert.strictEqual(
+      postPurgeEventAttempted,
+      false,
+      'No audit event must be persisted after the session is purged (which causes 404)'
+    );
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      'Session must complete cleanly to REVIEW_READY'
+    );
+
+    await controller.cleanup();
+  });
+
+  await test('failed or hanging event persistence does not prevent browser cleanup or session stop', async () => {
+    const backend = makeStubBackend(FORM_URL);
+
+    // Deliberately simulate failing event persistence
+    backend.appendEventSafe = async () => {
+      throw new Error('Database connection failed');
+    };
+
+    const controller = new AgentController(backend);
+    let errorThrown = false;
+    try {
+      await controller.startSession({
+        documentText: 'Student Name: Aarav Sharma',
+        documentName: 'student.pdf',
+        targetUrl: FORM_URL,
+      });
+    } catch {
+      errorThrown = true;
+    }
+
+    assert.strictEqual(errorThrown, false, 'Persistence failures must not break the workflow');
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      'Workflow must proceed to REVIEW_READY despite persistence failures'
+    );
+
+    // Stop must also succeed without hanging or throwing
+    await controller.stop();
+    assert.strictEqual(controller.getStateMachine().getState(), 'IDLE');
+    await controller.cleanup();
+  });
+
   console.log(`\nAll ${passed} end-to-end assertions passed.`);
 }
 

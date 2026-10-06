@@ -19,12 +19,7 @@ from core.models.session_model import (
     FormSnapshot,
     SessionStatus,
 )
-from core.services.document_service import (
-    DocumentAccessError,
-    DocumentEmptyError,
-    DocumentService,
-    UnsupportedDocumentTypeError,
-)
+from core.services.document_service import DocumentAccessError, DocumentService
 from core.services.gemini_service import get_gemini_service
 
 logging = logger(__name__)
@@ -154,18 +149,6 @@ class SessionController:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=str(denied),
-            )
-        except DocumentEmptyError as empty_err:
-            logging.warning(f"Document empty: {empty_err}")
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=empty_err.detail,
-            )
-        except UnsupportedDocumentTypeError as type_err:
-            logging.warning(f"Unsupported document type: {type_err}")
-            raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail=type_err.detail,
             )
         except FileNotFoundError:
             logging.warning("Document file not found")

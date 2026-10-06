@@ -50,7 +50,10 @@ def _allowed_origins() -> list[str]:
     Returns:
         list[str]: Explicit permitted origins.
     """
-    configured = os.getenv("AUTOFILLER_ALLOWED_ORIGINS", "").strip() or os.getenv("FORMPILOT_ALLOWED_ORIGINS", "").strip()
+    configured = (
+        os.getenv("AUTOFILLER_ALLOWED_ORIGINS", "").strip()
+        or os.getenv("FORMPILOT_ALLOWED_ORIGINS", "").strip()
+    )
     if not configured:
         return list(DEFAULT_ALLOWED_ORIGINS)
     return [origin.strip() for origin in configured.split(",") if origin.strip()]
@@ -108,7 +111,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=_allowed_origins(),
         allow_credentials=False,
-        allow_methods=["GET", "POST", "DELETE"],
+        allow_methods=["GET", "POST"],
         allow_headers=["Authorization", "Content-Type"],
     )
 

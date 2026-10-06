@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (pytest, wire contract, live security)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Dummy value only. No test calls Gemini.
+      GEMINI_API_KEY: ci-dummy-key
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      # requirements.txt already pins pytest and pytest-asyncio.
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Run backend unit tests (pytest -v)
+        working-directory: backend
+        run: python -m pytest -v
+
+      - name: Run wire contract check
+        run: python backend/scripts/check_wire_contract.py
+
+      - name: Run live security verification (port 8123)
+        run: python verify_security_live.py
+
+  desktop:
+    name: Desktop (typecheck, build, unit + Playwright tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop dependencies (npm ci)
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit test - PolicyEngine
+        run: node tests/policy_test.js
+
+      - name: Unit test - ToolRegistry
+        run: node tests/tool_registry_test.js
+
+      - name: Unit test - Vault
+        run: node tests/vault_test.js
+
+      - name: Install Playwright Chromium (with system deps)
+        run: npx playwright install --with-deps chromium
+
+      # Both tests launch Chromium headless and use a file:// fixture. The backend is
+      # stubbed inside the e2e test, so no server is needed. xvfb is a safety net.
+      - name: Playwright test - form scanner
+        run: xvfb-run -a node tests/scanner_test.js
+
+      - name: Playwright test - agent end-to-end
+        run: xvfb-run -a node tests/e2e_integration_test.js
+
+  security:
+    name: Security (npm audit, pip-audit, gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out repository (full history for secret scan)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Non-blocking for now: Electron 34 and other pinned deps will be flagged.
+      - name: npm audit (high and above, non-blocking)
+        continue-on-error: true
+        working-directory: desktop
+        run: npm audit --audit-level=high
+
+      - name: pip-audit on backend requirements (non-blocking)
+        continue-on-error: true
+        run: |
+          python -m pip install pip-audit
+          pip-audit -r backend/requirements.txt
+
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

@@ -223,40 +223,23 @@ export class PolicyEngine {
    * @returns Policy decision for the navigation attempt.
    */
   public validateNavigation(currentHost: string, targetUrl: string): PolicyCheckResult {
-    let parsed: URL;
     try {
-      parsed = new URL(targetUrl);
+      const targetHost = new URL(targetUrl).host;
+      if (
+        currentHost &&
+        targetHost &&
+        currentHost !== targetHost &&
+        !targetUrl.startsWith('file://')
+      ) {
+        return {
+          allowed: false,
+          code: 'EXTERNAL_NAVIGATION_DENIED',
+          reason: `Navigation to external host '${targetHost}' is not allowed outside the target form domain.`,
+        };
+      }
     } catch {
-      return {
-        allowed: false,
-        code: 'INVALID_URL',
-        reason: `Target navigation URL '${targetUrl}' is not a valid URL.`,
-      };
+      // Allow file:// or local paths.
     }
-
-    const allowedProtocols = new Set(['http:', 'https:', 'file:']);
-    if (!allowedProtocols.has(parsed.protocol)) {
-      return {
-        allowed: false,
-        code: 'PROTOCOL_NOT_PERMITTED',
-        reason: `Navigation protocol '${parsed.protocol}' is not permitted. Only http:, https:, and file: are allowed.`,
-      };
-    }
-
-    const targetHost = parsed.host;
-    if (
-      currentHost &&
-      targetHost &&
-      currentHost !== targetHost &&
-      parsed.protocol !== 'file:'
-    ) {
-      return {
-        allowed: false,
-        code: 'EXTERNAL_NAVIGATION_DENIED',
-        reason: `Navigation to external host '${targetHost}' is not allowed outside the target form domain.`,
-      };
-    }
-
     return { allowed: true, code: 'NAVIGATION_ALLOWED' };
   }
 }

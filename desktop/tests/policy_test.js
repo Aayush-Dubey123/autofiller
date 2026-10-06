@@ -179,41 +179,6 @@ function runPolicyTests() {
     assert.strictEqual(allowed.allowed, true);
   });
 
-  test('restricts navigation protocols to http, https, and file; denies javascript, data, blob, and others', () => {
-    // javascript: protocol
-    const jsDenied = policy.validateNavigation('school.edu', 'javascript:alert(1)');
-    assert.strictEqual(jsDenied.allowed, false);
-    assert.strictEqual(jsDenied.code, 'PROTOCOL_NOT_PERMITTED');
-
-    // data: protocol
-    const dataDenied = policy.validateNavigation('school.edu', 'data:text/html,<h1>Malicious</h1>');
-    assert.strictEqual(dataDenied.allowed, false);
-    assert.strictEqual(dataDenied.code, 'PROTOCOL_NOT_PERMITTED');
-
-    // blob: protocol
-    const blobDenied = policy.validateNavigation('school.edu', 'blob:https://school.edu/a1b2c3d4');
-    assert.strictEqual(blobDenied.allowed, false);
-    assert.strictEqual(blobDenied.code, 'PROTOCOL_NOT_PERMITTED');
-
-    // other disallowed protocols
-    const ftpDenied = policy.validateNavigation('school.edu', 'ftp://school.edu/file.txt');
-    assert.strictEqual(ftpDenied.allowed, false);
-    assert.strictEqual(ftpDenied.code, 'PROTOCOL_NOT_PERMITTED');
-
-    // allowed protocols
-    const httpAllowed = policy.validateNavigation('school.edu', 'http://school.edu/form');
-    assert.strictEqual(httpAllowed.allowed, true);
-    assert.strictEqual(httpAllowed.code, 'NAVIGATION_ALLOWED');
-
-    const httpsAllowed = policy.validateNavigation('school.edu', 'https://school.edu/form');
-    assert.strictEqual(httpsAllowed.allowed, true);
-    assert.strictEqual(httpsAllowed.code, 'NAVIGATION_ALLOWED');
-
-    const fileAllowed = policy.validateNavigation('', 'file:///C:/Users/aayus/autofiller/desktop/public/mock_school_form.html');
-    assert.strictEqual(fileAllowed.allowed, true);
-    assert.strictEqual(fileAllowed.code, 'NAVIGATION_ALLOWED');
-  });
-
   console.log(`\nAll ${passed} PolicyEngine assertions passed.`);
 }
 

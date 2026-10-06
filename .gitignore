@@ -70,10 +70,10 @@ Thumbs.db
 # Local Launchers & Testing Scripts
 /start.bat
 /start.ps1
-/verify_security_live.py
 /docs
 /tests
 
 # Internal Markdown docs (user will push manually later)
 *.md
+!AGENTS.md
 .agents/

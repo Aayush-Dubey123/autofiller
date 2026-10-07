@@ -158,7 +158,11 @@ export class FormScanner {
           name: htmlEl.getAttribute('name') || '',
           groupLegend,
           label: labelText.replace(/[\s]+/g, ' ').trim(),
-          required: htmlEl.required || htmlEl.getAttribute('aria-required') === 'true',
+          required:
+            htmlEl.required ||
+            htmlEl.getAttribute('aria-required') === 'true' ||
+            /\*/.test(labelText) ||
+            Boolean(htmlEl.parentElement && htmlEl.parentElement.querySelector('.req')),
           currentValue: (htmlEl as HTMLInputElement).value || '',
           options: optionsList,
           disabled: htmlEl.disabled,

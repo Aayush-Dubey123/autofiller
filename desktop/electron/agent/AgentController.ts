@@ -17,6 +17,7 @@ import { BackendClient, coerceClarificationValue } from '../services/BackendClie
 import {
   AgentEventPayload,
   ClarificationPromptPayload,
+  ClarificationRequest,
   ExtractedFact,
   FieldMapping,
   FormFieldSnapshot,
@@ -498,6 +499,105 @@ export class AgentController {
   }
 
   /**
+   * Identify a legitimate wizard/pagination Continue control among discovered page controls.
+   *
+   * Guaranteed never to return a final submission control or payment action.
+   *
+   * @param controls Discovered page controls.
+   * @returns Allowed pagination control or undefined.
+   */
+  private findPaginationControl(controls: SubmissionControl[]): SubmissionControl | undefined {
+    return controls.find((control) => {
+      if (control.isSubmitType) return false;
+      const decision = this.policyEngine.validateBrowserAction('click', control.label, false);
+      return decision.allowed && decision.code === 'ALLOWED_PAGINATION';
+    });
+  }
+
+  /**
+   * Wait for the active form section to advance after clicking a pagination control.
+   *
+   * @param previousVisibleRefs Serialized fingerprint of visible fields before navigation.
+   * @param timeoutMs Maximum milliseconds to wait.
+   * @returns Whether the visible fields changed.
+   */
+  private async waitForSectionTransition(previousVisibleRefs: string, timeoutMs: number = 800): Promise<boolean> {
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeoutMs) {
+      await new Promise((r) => setTimeout(r, 50));
+      if (!this.browserManager) break;
+      const snapshot = await this.browserManager.scanActiveForm().catch(() => null);
+      if (!snapshot) break;
+      const currentVisible = snapshot.fields
+        .filter((f) => f.visible)
+        .map((f) => f.ref)
+        .sort()
+        .join(',');
+      if (currentVisible !== previousVisibleRefs) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Sequentially present human clarification prompts and collect verified answers.
+   */
+  private async resolveClarifications(
+    clarifications: ClarificationRequest[],
+    mappings: FieldMapping[]
+  ): Promise<void> {
+    this.stateMachine.transition('CLARIFICATION_REQUIRED');
+    for (let i = 0; i < clarifications.length; i++) {
+      const prompt = clarifications[i];
+      await this.checkPauseOrStop();
+
+      const clarificationResult = await this.runTool<any>(
+        'request_clarification',
+        {
+          clarificationId: prompt.clarification_id,
+          fieldRef: prompt.field_ref,
+          fieldLabel: prompt.field_label,
+          question: prompt.question,
+          options: prompt.options,
+          total: clarifications.length,
+          currentIndex: i + 1,
+        },
+        `Awaiting human clarification for '${prompt.field_label}' (${i + 1}/${clarifications.length})...`,
+        () => `Human confirmed a value for '${prompt.field_label}'.`
+      );
+
+      const answer = coerceClarificationValue(clarificationResult);
+      if (!answer) {
+        throw new Error(
+          `CLARIFICATION_UNANSWERED: no usable value was supplied for '${prompt.field_label}'.`
+        );
+      }
+
+      await this.backendClient.answerClarification(
+        this.sessionId,
+        prompt.clarification_id,
+        answer
+      );
+
+      let target = mappings.find((mapping) => mapping.field_ref === prompt.field_ref);
+      if (target) {
+        target.fact_value = answer;
+        target.status = 'RESOLVED';
+      } else {
+        target = {
+          field_ref: prompt.field_ref,
+          field_label: prompt.field_label,
+          fact_value: answer,
+          confidence: 1.0,
+          status: 'RESOLVED',
+        };
+        mappings.push(target);
+      }
+    }
+  }
+
+  /**
    * Determine whether a fact value should check a checkbox.
    *
    * Consent-style checkboxes are driven by affirmative tokens, not by whether the
@@ -571,171 +671,343 @@ export class AgentController {
         facts = facts.filter((f) => !idRegex.test(f.key));
       }
 
-      // Step 2: Launch the visible browser and scan the form.
+      // Step 2: Launch the visible browser and navigate to the target form.
       this.stateMachine.transition('SCANNING_FORM');
       await this.emitToolStarted('inspect_form', `Navigating to target form: ${options.targetUrl}...`);
       await this.browserManager.launch(false);
       await this.browserManager.navigateTo(options.targetUrl, this.abortController.signal);
       await this.checkPauseOrStop();
 
-      const formSnapshot = await this.runTool<FormSnapshot>(
-        'inspect_form',
-        {},
-        `Scanning the form at ${options.targetUrl}...`,
-        (snapshot: FormSnapshot) => `Detected ${snapshot.fields.length} form fields.`
-      );
+      // Step 3: Multi-step / section form navigation loop
+      const verifiedFieldRefs = new Set<string>();
+      const allDiscoveredRequiredRefs = new Set<string>();
+      let mappings: FieldMapping[] = [];
+      let verifiedCount = 0;
+      let sectionIndex = 1;
+      const MAX_SECTIONS = 15;
 
-      // Step 3: Synthesize semantic mappings.
-      this.stateMachine.transition('MAPPING_FIELDS');
-      const mapResult = await this.backendClient.mapForm(this.sessionId, formSnapshot, facts);
-      const mappings: FieldMapping[] = mapResult.mappings || [];
-      const clarifications = mapResult.clarifications_required || [];
+      while (sectionIndex <= MAX_SECTIONS) {
+        await this.checkPauseOrStop();
 
-      this.emitEvent(
-        this.buildEvent(
-          'STATE_CHANGED',
-          `Mapped ${mappings.length} fields (${clarifications.length} clarifications needed).`,
-          {
-            metadata: {
-              mappings,
-              factCount: facts.length,
-              totalClarifications: clarifications.length,
-            },
-          }
-        )
-      );
+        // 3a: Scan active form section
+        const formSnapshot = await this.runTool<FormSnapshot>(
+          'inspect_form',
+          {},
+          sectionIndex === 1
+            ? `Scanning the form at ${options.targetUrl}...`
+            : `Scanning form section ${sectionIndex}...`,
+          (snapshot: FormSnapshot) =>
+            `Detected ${snapshot.fields.length} form fields (${snapshot.fields.filter((f) => f.visible).length} visible).`
+        );
 
-      // Step 4: Resolve clarifications.
-      if (clarifications.length > 0) {
-        this.stateMachine.transition('CLARIFICATION_REQUIRED');
-        for (let i = 0; i < clarifications.length; i++) {
-          const prompt = clarifications[i];
-          await this.checkPauseOrStop();
+        // Treat active DOM as authoritative: visible enabled fields belong to current section
+        const activeSectionFields = formSnapshot.fields.filter(
+          (field) => field.visible && !field.disabled
+        );
+        const activeRequiredFields = activeSectionFields.filter((field) => field.required);
+        for (const rf of activeRequiredFields) {
+          allDiscoveredRequiredRefs.add(rf.ref);
+        }
 
-          // The tool resolves to `{ fieldRef, selectedValue }`, which is not a string.
-          // Normalize it before it reaches the API, whose contract requires a string
-          // and otherwise rejects the whole session with a 422.
-          const clarificationResult = await this.runTool<any>(
-            'request_clarification',
-            {
-              clarificationId: prompt.clarification_id,
-              fieldRef: prompt.field_ref,
-              fieldLabel: prompt.field_label,
-              question: prompt.question,
-              options: prompt.options,
-              total: clarifications.length,
-              currentIndex: i + 1,
-            },
-            `Awaiting human clarification for '${prompt.field_label}' (${i + 1}/${clarifications.length})...`,
-            () => `Human confirmed a value for '${prompt.field_label}'.`
-          );
+        // 3b: Map unmapped fields if initial section or newly revealed fields appear
+        const unmappedFields = activeSectionFields.filter(
+          (field) => !mappings.some((m) => m.field_ref === field.ref)
+        );
 
-          const answer = coerceClarificationValue(clarificationResult);
+        let sectionClarifications: ClarificationRequest[] = [];
 
-          if (!answer) {
-            throw new Error(
-              `CLARIFICATION_UNANSWERED: no usable value was supplied for '${prompt.field_label}'.`
+        if (sectionIndex === 1 || unmappedFields.length > 0) {
+          if (sectionIndex === 1) {
+            this.stateMachine.transition('MAPPING_FIELDS');
+            const mapResult = await this.backendClient.mapForm(this.sessionId, formSnapshot, facts);
+            mappings = mapResult.mappings || [];
+            sectionClarifications = mapResult.clarifications_required || [];
+
+            this.emitEvent(
+              this.buildEvent(
+                'STATE_CHANGED',
+                `Mapped ${mappings.length} fields (${sectionClarifications.length} clarifications needed).`,
+                {
+                  metadata: {
+                    mappings,
+                    factCount: facts.length,
+                    totalClarifications: sectionClarifications.length,
+                  },
+                }
+              )
             );
-          }
-
-          await this.backendClient.answerClarification(
-            this.sessionId,
-            prompt.clarification_id,
-            answer
-          );
-
-          const target = mappings.find((mapping) => mapping.field_ref === prompt.field_ref);
-          if (target) {
-            target.fact_value = answer;
-            target.status = 'RESOLVED';
+          } else if (unmappedFields.length > 0) {
+            const mapResult = await this.backendClient.mapForm(this.sessionId, formSnapshot, facts);
+            const newMappings = mapResult.mappings || [];
+            for (const nm of newMappings) {
+              if (!mappings.some((m) => m.field_ref === nm.field_ref)) {
+                mappings.push(nm);
+              }
+            }
+            if (mapResult.clarifications_required && mapResult.clarifications_required.length > 0) {
+              sectionClarifications = mapResult.clarifications_required;
+            }
           }
         }
-      }
 
-      // Step 5: Fill mapped fields, reporting the true outcome of every operation.
-      this.stateMachine.transition('FILLING_FORM');
-      for (const mapping of mappings) {
-        await this.checkPauseOrStop();
-        stepCount += 1;
+        // 3c: Identify all required/unresolved fields for current section
+        // Collect ALL missing information needed rather than arbitrarily stopping after two
+        const neededClarifications: ClarificationRequest[] = [...sectionClarifications];
+
+        for (const reqField of activeRequiredFields) {
+          const m = mappings.find((cand) => cand.field_ref === reqField.ref);
+          const hasUsableValue =
+            m && m.fact_value !== undefined && m.fact_value !== null && String(m.fact_value).trim().length > 0;
+          if (!hasUsableValue || m?.status === 'CLARIFICATION_REQUIRED') {
+            if (!neededClarifications.some((c) => c.field_ref === reqField.ref)) {
+              neededClarifications.push({
+                clarification_id: `clarify_${reqField.ref}_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`,
+                field_ref: reqField.ref,
+                field_label: reqField.label,
+                question: `Please provide value for required field '${reqField.label}':`,
+                options: reqField.options || [],
+                selected_value: '',
+              });
+            }
+          }
+        }
+
+        if (neededClarifications.length > 0) {
+          await this.resolveClarifications(neededClarifications, mappings);
+        }
+
+        // 3d: Fill actionable fields in current section
+        const actionableFields = activeSectionFields.filter(
+          (field) => !verifiedFieldRefs.has(field.ref)
+        );
+
+        if (actionableFields.length > 0) {
+          this.stateMachine.transition('FILLING_FORM');
+          for (const field of actionableFields) {
+            await this.checkPauseOrStop();
+            stepCount += 1;
+            if (stepCount > MAX_STEPS) {
+              this.emitEvent(
+                this.buildEvent('TOOL_FAILED', `Step limit of ${MAX_STEPS} reached; stopping safely.`, {
+                  success: false,
+                })
+              );
+              break;
+            }
+
+            const mapping = mappings.find((candidate) => candidate.field_ref === field.ref);
+            if (
+              !mapping ||
+              mapping.fact_value === undefined ||
+              mapping.fact_value === null ||
+              !String(mapping.fact_value).trim()
+            ) {
+              // Optional field without value; skip
+              continue;
+            }
+
+            // Fill and independently verify actual DOM value with safe retry
+            let isVerified = false;
+            let attempts = 0;
+            const MAX_FILL_ATTEMPTS = 2;
+
+            while (!isVerified && attempts < MAX_FILL_ATTEMPTS) {
+              attempts += 1;
+              try {
+                await this.fillField(mapping, field);
+              } catch (fieldError: any) {
+                if (fieldError?.name === 'OperationCancelledError') {
+                  throw fieldError;
+                }
+                this.emitEvent(
+                  this.buildEvent(
+                    'TOOL_FAILED',
+                    `Fill attempt ${attempts} for '${field.label}' failed: ${fieldError?.message || 'could not be populated'}`,
+                    { success: false, metadata: { fieldRef: mapping.field_ref } }
+                  )
+                );
+              }
+
+              // Read back actual DOM value and independently verify
+              this.stateMachine.transition('VERIFYING');
+              const verifyOutcome = await this.runTool<{ verified: boolean; actualValue: string; expectedValue: string }>(
+                'verify_field',
+                { fieldRef: mapping.field_ref, expectedValue: mapping.fact_value },
+                `Verifying '${mapping.field_label}' in browser DOM...`,
+                (outcome) =>
+                  outcome.verified
+                    ? `Verified '${mapping.field_label}' in browser DOM.`
+                    : `Mismatch on '${mapping.field_label}'.`,
+                true
+              );
+
+              if (verifyOutcome.verified) {
+                isVerified = true;
+                break;
+              }
+
+              if (attempts < MAX_FILL_ATTEMPTS) {
+                await new Promise((r) => setTimeout(r, 200));
+              }
+            }
+
+            // If verification failed and field is required:
+            // "If verification fails, retry safely or request clarification."
+            // "Simulate a typo/mismatched value and prove the agent retries or requests clarification instead of advancing."
+            if (!isVerified && field.required) {
+              this.stateMachine.transition('CLARIFICATION_REQUIRED');
+              const clarifyFixId = `clarify_fix_${mapping.field_ref}_${Date.now()}`;
+              const prompt: ClarificationPromptPayload = {
+                clarificationId: clarifyFixId,
+                fieldRef: mapping.field_ref,
+                fieldLabel: mapping.field_label,
+                question: `Verification failed for '${mapping.field_label}'. Please confirm or provide correct value:`,
+                options: field.options || [],
+                total: 1,
+                currentIndex: 1,
+              };
+
+              const clarificationResult = await this.runTool<any>(
+                'request_clarification',
+                prompt,
+                `Awaiting correction for '${mapping.field_label}'...`,
+                () => `Human provided corrected value for '${mapping.field_label}'.`
+              );
+
+              const correctedAnswer = coerceClarificationValue(clarificationResult);
+              if (correctedAnswer) {
+                mapping.fact_value = correctedAnswer;
+                mapping.status = 'RESOLVED';
+                await this.backendClient.answerClarification(
+                  this.sessionId,
+                  clarifyFixId,
+                  correctedAnswer
+                );
+
+                this.stateMachine.transition('FILLING_FORM');
+                try {
+                  await this.fillField(mapping, field);
+                } catch (err: any) {
+                  if (err?.name === 'OperationCancelledError') throw err;
+                }
+
+                this.stateMachine.transition('VERIFYING');
+                const retryVerify = await this.runTool<{ verified: boolean; actualValue: string; expectedValue: string }>(
+                  'verify_field',
+                  { fieldRef: mapping.field_ref, expectedValue: mapping.fact_value },
+                  `Verifying corrected '${mapping.field_label}' in browser DOM...`,
+                  (outcome) =>
+                    outcome.verified
+                      ? `Verified '${mapping.field_label}' in browser DOM.`
+                      : `Mismatch on '${mapping.field_label}'.`,
+                  true
+                );
+                if (retryVerify.verified) {
+                  isVerified = true;
+                }
+              }
+            }
+
+            // Required invariant: A field is COMPLETE only when actual DOM value is successfully filled AND verified
+            if (isVerified) {
+              verifiedFieldRefs.add(field.ref);
+              verifiedCount += 1;
+              verifications.push({
+                field_ref: mapping.field_ref,
+                field_label: mapping.field_label,
+                verified: true,
+              });
+            } else {
+              failedFields.push({
+                field_ref: mapping.field_ref,
+                field_label: field.label,
+                reason: 'Field could not be populated or verified in browser DOM.',
+              });
+              verifications.push({
+                field_ref: mapping.field_ref,
+                field_label: mapping.field_label,
+                verified: false,
+              });
+            }
+          }
+        }
+
         if (stepCount > MAX_STEPS) {
-          this.emitEvent(
-            this.buildEvent('TOOL_FAILED', `Step limit of ${MAX_STEPS} reached; stopping safely.`, {
-              success: false,
-            })
-          );
           break;
         }
-        if (!mapping.fact_value) {
-          continue;
-        }
 
-        const field = formSnapshot.fields.find((candidate) => candidate.ref === mapping.field_ref);
-        if (!field) {
-          continue;
-        }
-        if (field.disabled) {
-          this.emitEvent(
-            this.buildEvent('TOOL_FAILED', `Skipped disabled field '${field.label}'.`, {
-              success: false,
-              metadata: { fieldRef: field.ref },
-            })
-          );
-          continue;
-        }
+        // 3e: Invariant verification check
+        // "Never advance to Continue while required browser fields remain unverified."
+        // "Do not Continue while any required field is unresolved."
+        const unverifiedRequired = activeRequiredFields.filter(
+          (rf) => !verifiedFieldRefs.has(rf.ref)
+        );
 
-        // A single unusable field must not abort the whole session. Record it, keep
-        // going, and surface it for human review at the end.
-        try {
-          await this.fillField(mapping, field);
-        } catch (fieldError: any) {
-          if (fieldError?.name === 'OperationCancelledError') {
-            throw fieldError;
-          }
-          failedFields.push({
-            field_ref: mapping.field_ref,
-            field_label: field.label,
-            reason: fieldError?.message || 'Field could not be populated.',
-          });
+        if (unverifiedRequired.length > 0) {
           this.emitEvent(
             this.buildEvent(
               'TOOL_FAILED',
-              `Skipped '${field.label}': ${fieldError?.message || 'could not be populated'}`,
-              { success: false, metadata: { fieldRef: mapping.field_ref } }
+              `Navigation blocked: ${unverifiedRequired.length} required field(s) (${unverifiedRequired.map((f) => f.label).join(', ')}) remain unverified in the browser DOM.`,
+              {
+                success: false,
+                metadata: {
+                  unverifiedRequired: unverifiedRequired.map((f) => f.ref),
+                },
+              }
             )
           );
+          if (this.stateMachine.getState() !== 'CLARIFICATION_REQUIRED') {
+            this.stateMachine.transition('CLARIFICATION_REQUIRED');
+          }
+          break; // Stop loop! Do NOT Continue!
         }
-      }
 
-      // Step 6: Verify every populated field.
-      this.stateMachine.transition('VERIFYING');
-      let verifiedCount = 0;
-      for (const mapping of mappings) {
-        if (!mapping.fact_value) continue;
-        const result = await this.runTool<{ verified: boolean; actualValue: string; expectedValue: string }>(
-          'verify_field',
-          { fieldRef: mapping.field_ref, expectedValue: mapping.fact_value },
-          `Verifying '${mapping.field_label}'...`,
-          (outcome) =>
-            outcome.verified
-              ? `Verified '${mapping.field_label}'.`
-              : `Mismatch on '${mapping.field_label}'.`,
-          true
-        );
-        if (result.verified) {
-          verifiedCount += 1;
+        // 3f: Check for legitimate wizard pagination Continue control
+        const detectedControls = await this.detectSubmissionControls();
+        const continueControl = this.findPaginationControl(detectedControls);
+
+        if (continueControl) {
+          const visibleBefore = formSnapshot.fields
+            .filter((f) => f.visible)
+            .map((f) => f.ref)
+            .sort()
+            .join(',');
+
+          await this.runTool(
+            'click_pagination',
+            { label: continueControl.label, selector: continueControl.selector },
+            `Advancing to next section via '${continueControl.label}'...`,
+            () => `Advanced section via '${continueControl.label}'.`
+          );
+
+          const advanced = await this.waitForSectionTransition(visibleBefore, 800);
+
+          if (!advanced) {
+            this.emitEvent(
+              this.buildEvent(
+                'TOOL_FAILED',
+                `Clicked '${continueControl.label}', but section did not advance. Halting pagination for human review.`,
+                { success: false }
+              )
+            );
+            break;
+          }
+
+          sectionIndex += 1;
+        } else {
+          // No legitimate Continue control found -> reached final section or single-page form
+          break;
         }
-        verifications.push({
-          field_ref: mapping.field_ref,
-          field_label: mapping.field_label,
-          verified: result.verified,
-        });
       }
 
       await this.persistVerifications(verifications);
 
-      // Step 7: Enforce the submission prohibition based on the real page state.
-      const detectedControls = await this.detectSubmissionControls();
-      const submissionCheck = this.policyEngine.evaluateSubmissionControls(detectedControls);
+      // Step 4: Final section review and Never-Submit enforcement
+      // "Every required field across the complete form must have successful browser-side verification.
+      //  Only then may the agent detect the final Submit and transition to REVIEW_READY.
+      //  Never click Submit."
+      const finalControls = await this.detectSubmissionControls();
+      const submissionCheck = this.policyEngine.evaluateSubmissionControls(finalControls);
       if (!submissionCheck.allowed) {
         this.emitEvent(
           this.buildEvent(
@@ -752,24 +1024,39 @@ export class AgentController {
         );
       }
 
-      this.stateMachine.transition('REVIEW_READY');
-      const failureSummary =
-        failedFields.length > 0
-          ? ` ${failedFields.length} field(s) could not be populated and need operator attention.`
-          : '';
-      this.emitEvent(
-        this.buildEvent(
-          'STATE_CHANGED',
-          `Form filling complete. ${verifiedCount}/${mappings.length} fields verified.` +
-          `${failureSummary} Ready for human review and submission.`,
-          {
-            metadata: {
-              failedFields,
-              submissionControls: submissionCheck.controls,
-            },
-          }
-        )
-      );
+      // Check whether all required fields across the complete form have successful browser-side verification
+      const allRequiredVerified =
+        allDiscoveredRequiredRefs.size > 0 &&
+        Array.from(allDiscoveredRequiredRefs).every((ref) => verifiedFieldRefs.has(ref));
+
+      const hasFailedRequired = verifications.some((v) => {
+        return allDiscoveredRequiredRefs.has(v.field_ref) && !v.verified;
+      });
+
+      if (allRequiredVerified && !hasFailedRequired && this.stateMachine.getState() !== 'CLARIFICATION_REQUIRED') {
+        this.stateMachine.transition('REVIEW_READY');
+        const failureSummary =
+          failedFields.length > 0
+            ? ` ${failedFields.length} optional field(s) could not be populated and need operator attention.`
+            : '';
+        this.emitEvent(
+          this.buildEvent(
+            'STATE_CHANGED',
+            `Form filling complete. ${verifiedCount}/${mappings.length} fields verified.` +
+            `${failureSummary} Ready for human review and submission.`,
+            {
+              metadata: {
+                failedFields,
+                submissionControls: submissionCheck.controls,
+              },
+            }
+          )
+        );
+      } else {
+        if (this.stateMachine.getState() !== 'CLARIFICATION_REQUIRED') {
+          this.stateMachine.transition('CLARIFICATION_REQUIRED');
+        }
+      }
     } catch (error: any) {
       if (error?.name === 'OperationCancelledError' || error?.message === 'WORKFLOW_STOPPED_BY_USER' || this.isStoppedState) {
         if (this.stateMachine.getState() !== 'IDLE') {

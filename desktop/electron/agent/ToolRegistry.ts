@@ -284,6 +284,28 @@ export class ToolRegistry {
         return { success: true, fieldRef: input.fieldRef };
       },
     });
+
+    this.register({
+      name: 'click_pagination',
+      description: 'Advance a multi-step form section by clicking an allowed wizard pagination button (e.g. Continue, Next).',
+      argumentSpec: {
+        label: { type: 'string', required: true },
+        selector: { type: 'string', required: false },
+      },
+      validate: (input: any) => {
+        if (!input?.label || typeof input.label !== 'string') {
+          throw new ToolExecutionError('Missing or invalid pagination button label', 'INVALID_TOOL_INPUT');
+        }
+        return input;
+      },
+      execute: async (input: any, context: ToolContext) => {
+        return await context.browserManager.clickPagination(
+          input.label,
+          input.selector,
+          context.signal
+        );
+      },
+    });
   }
 
   /**

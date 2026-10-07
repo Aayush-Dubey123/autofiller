@@ -180,7 +180,7 @@ export class BrowserManager {
     return await this.page.evaluate(() => {
       const controls: SubmissionControl[] = [];
       const elements = Array.from(
-        document.querySelectorAll('button, input[type="submit"], input[type="image"]')
+        document.querySelectorAll('button, input[type="submit"], input[type="image"], input[type="button"]')
       );
 
       elements.forEach((element, index) => {
@@ -512,15 +512,45 @@ export class BrowserManager {
     // result, not a long Playwright timeout that stalls the whole workflow.
     let applied = true;
     try {
-      await this.withCancellation(
-        signal,
-        locator.selectOption({ label: option }, { timeout: 2500 })
-      );
+      const optionDetails = await locator
+        .evaluate((el: HTMLSelectElement) =>
+          Array.from(el.options).map((o) => ({
+            text: (o.text || '').trim(),
+            value: (o.value || '').trim(),
+          }))
+        )
+        .catch(() => null);
+
+      if (optionDetails && optionDetails.length > 0) {
+        const targetTrimmed = option.trim().toLowerCase();
+        const matched = optionDetails.find(
+          (o) => o.text.toLowerCase() === targetTrimmed || o.value.toLowerCase() === targetTrimmed
+        );
+        if (!matched && optionDetails.length > 1) {
+          // Select element already has populated options and none match the requested option
+          applied = false;
+        } else if (matched) {
+          await this.withCancellation(
+            signal,
+            locator.selectOption({ value: matched.value }, { timeout: 1000 })
+          );
+        } else {
+          await this.withCancellation(
+            signal,
+            locator.selectOption({ label: option }, { timeout: 1000 })
+          );
+        }
+      } else {
+        await this.withCancellation(
+          signal,
+          locator.selectOption({ label: option }, { timeout: 1000 })
+        );
+      }
     } catch {
       try {
         await this.withCancellation(
           signal,
-          locator.selectOption({ value: option }, { timeout: 2500 })
+          locator.selectOption({ value: option }, { timeout: 1000 })
         );
       } catch {
         applied = false;
@@ -755,6 +785,47 @@ export class BrowserManager {
       };
     }
 
+    // Radio group read-back verification: find which radio in the group is checked
+    if (inputType === 'radio') {
+      const { name } = this.resolveField(fieldRef);
+      const groupSelector = name
+        ? `input[type="radio"][name="${this.escapeAttribute(name)}"]`
+        : 'input[type="radio"]';
+      let checkedValue = '';
+      if (this.page) {
+        const group = this.page.locator(groupSelector);
+        const count = await group.count();
+        for (let i = 0; i < count; i++) {
+          const item = group.nth(i);
+          if (await item.isChecked().catch(() => false)) {
+            checkedValue = ((await item.getAttribute('value')) || '').trim();
+            break;
+          }
+        }
+      }
+      const normalize = (raw: string) => raw.trim().toLowerCase().replace(/\s+/g, ' ');
+      const verified = normalize(checkedValue) === normalize(expectedValue);
+      return { verified, actualValue: checkedValue, expectedValue };
+    }
+
+    // Select element read-back verification: verify against selected option value or visible text
+    const tagName = ((await locator.evaluate((el) => el.tagName.toLowerCase()).catch(() => '')) || '');
+    if (tagName === 'select') {
+      const selectedVal = (await locator.inputValue().catch(() => '')) || '';
+      const selectedLabel = await locator
+        .evaluate((el) => {
+          const select = el as HTMLSelectElement;
+          return select.options[select.selectedIndex]?.textContent?.trim() || '';
+        })
+        .catch(() => '');
+      const normalize = (raw: string) => raw.trim().toLowerCase().replace(/\s+/g, ' ');
+      const normExpected = normalize(expectedValue);
+      const verified =
+        normalize(selectedVal) === normExpected ||
+        normalize(selectedLabel) === normExpected;
+      return { verified, actualValue: selectedLabel || selectedVal, expectedValue };
+    }
+
     const actualValue = (await locator.inputValue().catch(() => '')) || '';
     const normalize = (raw: string) => raw.trim().toLowerCase().replace(/\s+/g, ' ');
 
@@ -773,6 +844,80 @@ export class BrowserManager {
     }
 
     return { verified, actualValue, expectedValue };
+  }
+
+  /**
+   * Click an allowed wizard pagination button (e.g. Next, Continue).
+   *
+   * Enforces the policy guard to guarantee that final submission controls
+   * can never be clicked via this method.
+   *
+   * @param label Button text or accessible label.
+   * @param selector Optional DOM selector for the control.
+   * @param signal Optional abort signal.
+   * @returns Success confirmation.
+   */
+  public async clickPagination(
+    label: string,
+    selector?: string,
+    signal?: AbortSignal
+  ): Promise<{ success: boolean; label: string }> {
+    if (!this.page) {
+      throw new Error('Browser is not initialized or page is not open.');
+    }
+
+    // Double check with PolicyEngine
+    const decision = this.policyEngine.validateBrowserAction('click', label, false);
+    if (!decision.allowed || decision.code !== 'ALLOWED_PAGINATION') {
+      throw new Error(`[PolicyEngine] ${decision.code}: Action '${label}' is not an allowed pagination step.`);
+    }
+
+    // 1. Try provided selector if visible and not disabled
+    let target: Locator | null = null;
+    if (selector) {
+      const candidate = this.page.locator(selector);
+      const isVis = await candidate.isVisible().catch(() => false);
+      const isDis = await candidate.isDisabled().catch(() => true);
+      if (isVis && !isDis) {
+        target = candidate;
+      }
+    }
+
+    // 2. Fall back to finding visible enabled button matching the label
+    if (!target) {
+      const candidates = this.page.locator('button, input[type="button"], a');
+      const count = await candidates.count();
+      for (let i = 0; i < count; i++) {
+        const candidate = candidates.nth(i);
+        const isVis = await candidate.isVisible().catch(() => false);
+        const isDis = await candidate.isDisabled().catch(() => true);
+        if (isVis && !isDis) {
+          const text =
+            (await candidate.textContent().catch(() => ''))?.trim() ||
+            (await candidate.getAttribute('value').catch(() => ''))?.trim() ||
+            '';
+          if (text.toLowerCase() === label.trim().toLowerCase()) {
+            target = candidate;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!target) {
+      throw new Error(`Pagination button '${label}' was not visible or was disabled.`);
+    }
+
+    // Highlight briefly for user visibility
+    await this.highlightField(target).catch(() => {});
+    await this.withCancellation(signal, target.click({ timeout: 5000 }));
+    await this.clearHighlight().catch(() => {});
+
+    // Allow page to settle
+    await this.page.waitForLoadState('domcontentloaded').catch(() => {});
+    await this.page.waitForTimeout(200).catch(() => {});
+
+    return { success: true, label };
   }
 
 

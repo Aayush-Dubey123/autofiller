@@ -229,6 +229,32 @@ function runPolicyTests() {
     );
   });
 
+  test('validates click_pagination tool invocations against Never-Submit policy', () => {
+    // Legitimate pagination terms are allowed
+    assert.strictEqual(policy.validateToolInvocation('click_pagination', { label: 'Continue' }).allowed, true);
+    assert.strictEqual(policy.validateToolInvocation('click_pagination', { label: 'Next' }).allowed, true);
+    assert.strictEqual(policy.validateToolInvocation('click_pagination', { label: 'Save & Continue' }).allowed, true);
+
+    // Final submission and payment terms are strictly denied
+    const submitAttempt = policy.validateToolInvocation('click_pagination', { label: 'Submit Application' });
+    assert.strictEqual(submitAttempt.allowed, false);
+    assert.strictEqual(submitAttempt.code, 'DENIED_FINAL_SUBMISSION');
+
+    const bareSubmit = policy.validateToolInvocation('click_pagination', { label: 'Submit' });
+    assert.strictEqual(bareSubmit.allowed, false);
+    assert.strictEqual(bareSubmit.code, 'DENIED_FINAL_SUBMISSION');
+
+    // Structural submit controls are denied even with a pagination label
+    const structuralSubmit = policy.validateToolInvocation('click_pagination', { label: 'Continue', isSubmitType: true });
+    assert.strictEqual(structuralSubmit.allowed, false);
+    assert.strictEqual(structuralSubmit.code, 'DENIED_FINAL_SUBMISSION');
+
+    // Non-pagination arbitrary labels are refused
+    const arbitraryAttempt = policy.validateToolInvocation('click_pagination', { label: 'Random Action' });
+    assert.strictEqual(arbitraryAttempt.allowed, false);
+    assert.strictEqual(arbitraryAttempt.code, 'PAGINATION_NOT_PERMITTED');
+  });
+
   console.log(`\nAll ${passed} PolicyEngine assertions passed.`);
 }
 

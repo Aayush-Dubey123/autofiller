@@ -69,6 +69,10 @@ function makeContext() {
         calls.push('scanActiveForm');
         return { url: 'file://form.html', title: 'Form', fields: [] };
       },
+      clickPagination: async (label) => {
+        calls.push(`clickPagination:${label}`);
+        return { success: true, label };
+      },
     },
     backendClient: {
       extractDocument: async () => {
@@ -143,6 +147,19 @@ async function runToolRegistryTests() {
       (error) => error.code === 'INVALID_TOOL_INPUT'
     );
     assert.deepStrictEqual(calls, []);
+  });
+
+  await test('executes click_pagination with valid label through policy enforcement', async () => {
+    const { context, calls } = makeContext();
+    const res = await registry.dispatch('click_pagination', { label: 'Continue' }, context);
+    assert.strictEqual(res.success, true);
+    assert.deepStrictEqual(calls, ['clickPagination:Continue']);
+
+    // Policy blocks submission terms from click_pagination
+    await assert.rejects(
+      () => registry.dispatch('click_pagination', { label: 'Submit Application' }, context),
+      (error) => error instanceof ToolExecutionError && error.code === 'DENIED_FINAL_SUBMISSION'
+    );
   });
 
   console.log(`\nAll ${passed} ToolRegistry assertions passed.`);

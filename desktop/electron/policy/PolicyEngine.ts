@@ -46,6 +46,7 @@ export class PolicyEngine {
       ['select_radio', 'MUTATING'],
       ['set_checkbox', 'MUTATING'],
       ['request_clarification', 'READ_ONLY'],
+      ['click_pagination', 'READ_ONLY'],
     ]);
 
     this.forbiddenButtonTerms =
@@ -79,6 +80,24 @@ export class PolicyEngine {
         code: 'TOOL_FORBIDDEN',
         reason: `Tool '${toolName}' is explicitly forbidden by AutoFiller execution policy.`,
       };
+    }
+
+    // Pagination tools must validate the target control label and type against Never-Submit rules
+    if (toolName === 'click_pagination') {
+      const label = args?.label;
+      const isSubmitType = Boolean(args?.isSubmitType);
+      const actionDecision = this.validateBrowserAction('click', label, isSubmitType);
+      if (!actionDecision.allowed) {
+        return actionDecision;
+      }
+      if (actionDecision.code !== 'ALLOWED_PAGINATION') {
+        return {
+          allowed: false,
+          code: 'PAGINATION_NOT_PERMITTED',
+          reason: `Target '${label}' is not an allowed wizard pagination step transition.`,
+        };
+      }
+      return { allowed: true, code: 'TOOL_ALLOWED' };
     }
 
     // Mutating tools must always target a validated field reference.

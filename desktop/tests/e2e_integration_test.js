@@ -49,6 +49,56 @@ async function test(name, body) {
   }
 }
 
+function getFullFormMappings(snapshot) {
+  const mappings = [];
+  const find = (needle) =>
+    snapshot.fields.find((field) => field.label.toLowerCase().includes(needle));
+
+  // Section 1
+  const name = find('student full name') || find('student name');
+  if (name) mappings.push({ field_ref: name.ref, field_label: name.label, fact_key: 'student_name', fact_value: 'Aarav Sharma', confidence: 1.0, status: 'PENDING' });
+  const dob = find('date of birth') || find('dob');
+  if (dob) mappings.push({ field_ref: dob.ref, field_label: dob.label, fact_key: 'dob', fact_value: '2005-03-23', confidence: 1.0, status: 'PENDING' });
+  const gender = find('gender');
+  if (gender) mappings.push({ field_ref: gender.ref, field_label: gender.label, fact_key: 'gender', fact_value: 'Male', confidence: 1.0, status: 'PENDING' });
+
+  // Section 2
+  const email = find('email');
+  if (email) mappings.push({ field_ref: email.ref, field_label: email.label, fact_key: 'email', fact_value: 'aarav@example.com', confidence: 1.0, status: 'PENDING' });
+  const phone = find('phone');
+  if (phone) mappings.push({ field_ref: phone.ref, field_label: phone.label, fact_key: 'phone', fact_value: '9876543210', confidence: 1.0, status: 'PENDING' });
+
+  // Section 3
+  const address = find('residential address') || find('address');
+  if (address) mappings.push({ field_ref: address.ref, field_label: address.label, fact_key: 'address', fact_value: '123 Park Street', confidence: 1.0, status: 'PENDING' });
+  const city = find('city');
+  if (city) mappings.push({ field_ref: city.ref, field_label: city.label, fact_key: 'city', fact_value: 'Mumbai', confidence: 1.0, status: 'PENDING' });
+  const state = find('state');
+  if (state) mappings.push({ field_ref: state.ref, field_label: state.label, fact_key: 'state', fact_value: 'Maharashtra', confidence: 1.0, status: 'PENDING' });
+  const pincode = find('pincode') || find('zip');
+  if (pincode) mappings.push({ field_ref: pincode.ref, field_label: pincode.label, fact_key: 'pincode', fact_value: '400001', confidence: 1.0, status: 'PENDING' });
+
+  // Section 4
+  const father = find('father');
+  if (father) mappings.push({ field_ref: father.ref, field_label: father.label, fact_key: 'father_name', fact_value: 'Vikram Sharma', confidence: 1.0, status: 'PENDING' });
+  const mother = find('mother');
+  if (mother) mappings.push({ field_ref: mother.ref, field_label: mother.label, fact_key: 'mother_name', fact_value: 'Sunita Sharma', confidence: 1.0, status: 'PENDING' });
+
+  // Section 5
+  const previousSchool = find('previous school');
+  if (previousSchool) mappings.push({ field_ref: previousSchool.ref, field_label: previousSchool.label, fact_key: 'previous_school', fact_value: 'Greenwood High', confidence: 1.0, status: 'PENDING' });
+  const grade = find('grade');
+  if (grade) mappings.push({ field_ref: grade.ref, field_label: grade.label, fact_key: 'grade', fact_value: 'Grade 10', confidence: 1.0, status: 'PENDING' });
+  const allergies = find('allergies');
+  if (allergies) mappings.push({ field_ref: allergies.ref, field_label: allergies.label, fact_key: 'allergies', fact_value: 'No', confidence: 1.0, status: 'PENDING' });
+  const transport = find('transport');
+  if (transport) mappings.push({ field_ref: transport.ref, field_label: transport.label, fact_key: 'transport', fact_value: 'No', confidence: 1.0, status: 'PENDING' });
+  const terms = find('terms') || snapshot.fields.find((f) => f.type === 'checkbox');
+  if (terms) mappings.push({ field_ref: terms.ref, field_label: terms.label, fact_key: 'terms', fact_value: 'agree', confidence: 1.0, status: 'PENDING' });
+
+  return mappings;
+}
+
 /**
  * Build a stub backend client with deterministic facts and mapping responses.
  *
@@ -67,54 +117,29 @@ function makeStubBackend(url) {
       calls.push(['extractDocument']);
       return {
         document_name: 'student.pdf',
-        fact_count: 4,
+        fact_count: 14,
         facts: [
           { key: 'student_name', label: 'Student Name', value: 'Aarav Sharma', confidence: 0.95 },
+          { key: 'dob', label: 'Date of Birth', value: '2005-03-23', confidence: 0.95 },
+          { key: 'gender', label: 'Gender', value: 'Male', confidence: 0.95 },
           { key: 'email', label: 'Email Address', value: 'aarav.sharma@example.com', confidence: 0.95 },
+          { key: 'phone', label: 'Phone', value: '9876543210', confidence: 0.95 },
+          { key: 'address', label: 'Address', value: '123 Park Street', confidence: 0.95 },
           { key: 'city', label: 'City', value: 'Mumbai', confidence: 0.95 },
-          { key: 'allergies', label: 'Allergies', value: 'Yes', confidence: 0.95 },
+          { key: 'state', label: 'State', value: 'Maharashtra', confidence: 0.95 },
+          { key: 'pincode', label: 'Pincode', value: '400001', confidence: 0.95 },
+          { key: 'father_name', label: 'Father Name', value: 'Vikram Sharma', confidence: 0.95 },
+          { key: 'mother_name', label: 'Mother Name', value: 'Sunita Sharma', confidence: 0.95 },
+          { key: 'grade', label: 'Grade', value: 'Grade 10', confidence: 0.95 },
+          { key: 'allergies', label: 'Allergies', value: 'No', confidence: 0.95 },
+          { key: 'transport', label: 'Transport', value: 'No', confidence: 0.95 },
+          { key: 'terms', label: 'Terms', value: 'agree', confidence: 1.0 },
         ],
       };
     },
     async mapForm(sessionId, snapshot) {
       calls.push(['mapForm', sessionId, snapshot.fields.length]);
-      const find = (needle) =>
-        snapshot.fields.find((field) => field.label.toLowerCase().includes(needle));
-      const mappings = [];
-
-      // TODO: extend when section-by-section flow exists
-      // Currently, the agent can only fill the visible section (Step 1).
-
-      // The fixture labels this field "Student Full Name", so match deliberately.
-      const nameField = find('student name') || find('full name');
-      if (nameField) {
-        mappings.push({
-          field_ref: nameField.ref,
-          field_label: nameField.label,
-          fact_key: 'student_name',
-          fact_value: 'Aarav Sharma',
-          confidence: 0.95,
-          status: 'PENDING',
-        });
-      }
-
-      // Deliberately map a dropdown in Step 1 to a value it does not contain, so the select
-      // genuinely fails. This proves a failed operation is reported honestly rather
-      // than logged as a success.
-      const genderField = snapshot.fields.find(
-        (field) => field.type === 'select' && /gender/i.test(field.label)
-      );
-      if (genderField) {
-        mappings.push({
-          field_ref: genderField.ref,
-          field_label: genderField.label,
-          fact_key: 'gender',
-          fact_value: 'Grade 99 (not an option)',
-          confidence: 0.9,
-          status: 'PENDING',
-        });
-      }
-
+      const mappings = getFullFormMappings(snapshot);
       return {
         session_id: sessionId,
         mappings,
@@ -205,9 +230,23 @@ async function runE2E() {
 
   await test('field fills are verified and reported truthfully', async () => {
     const backend = makeStubBackend(FORM_URL);
+    const origMap = backend.mapForm;
+    backend.mapForm = async (sessionId, snapshot) => {
+      const res = await origMap(sessionId, snapshot);
+      const genderM = res.mappings.find((m) => /gender/i.test(m.field_label));
+      if (genderM) {
+        genderM.fact_value = 'Grade 99 (not an option)';
+      }
+      return res;
+    };
     const controller = new AgentController(backend);
     const events = [];
     controller.onEvent((event) => events.push(event));
+
+    const unsub = controller.onClarificationRequest(async () => {
+      unsub();
+      await controller.stop();
+    });
 
     await controller.startSession({
       documentText: 'Student Name: Aarav Sharma',
@@ -718,6 +757,405 @@ async function runE2E() {
       'undefined',
       'BrowserManager must not expose submitFormManually'
     );
+  });
+
+  await test('agent autonomously navigates all five form sections via Continue and halts at REVIEW_READY before Submit', async () => {
+    const backend = makeStubBackend(FORM_URL);
+
+    // Provide mappings for all 5 sections so validation in each section succeeds
+    backend.mapForm = async (sessionId, snapshot) => {
+      const mappings = [];
+      const find = (needle) =>
+        snapshot.fields.find((f) => f.label.toLowerCase().includes(needle));
+
+      // Section 1
+      const name = find('student full name') || find('student name');
+      if (name) mappings.push({ field_ref: name.ref, field_label: name.label, fact_key: 'student_name', fact_value: 'Aarav Sharma', confidence: 1.0, status: 'PENDING' });
+      const dob = find('date of birth') || find('dob');
+      if (dob) mappings.push({ field_ref: dob.ref, field_label: dob.label, fact_key: 'dob', fact_value: '2005-03-23', confidence: 1.0, status: 'PENDING' });
+      const gender = find('gender');
+      if (gender) mappings.push({ field_ref: gender.ref, field_label: gender.label, fact_key: 'gender', fact_value: 'Male', confidence: 1.0, status: 'PENDING' });
+
+      // Section 2
+      const email = find('email');
+      if (email) mappings.push({ field_ref: email.ref, field_label: email.label, fact_key: 'email', fact_value: 'aarav@example.com', confidence: 1.0, status: 'PENDING' });
+      const phone = find('phone');
+      if (phone) mappings.push({ field_ref: phone.ref, field_label: phone.label, fact_key: 'phone', fact_value: '9876543210', confidence: 1.0, status: 'PENDING' });
+
+      // Section 3
+      const address = find('residential address') || find('address');
+      if (address) mappings.push({ field_ref: address.ref, field_label: address.label, fact_key: 'address', fact_value: '123 Park Street', confidence: 1.0, status: 'PENDING' });
+      const city = find('city');
+      if (city) mappings.push({ field_ref: city.ref, field_label: city.label, fact_key: 'city', fact_value: 'Mumbai', confidence: 1.0, status: 'PENDING' });
+      const state = find('state');
+      if (state) mappings.push({ field_ref: state.ref, field_label: state.label, fact_key: 'state', fact_value: 'Maharashtra', confidence: 1.0, status: 'PENDING' });
+      const pincode = find('pincode') || find('zip');
+      if (pincode) mappings.push({ field_ref: pincode.ref, field_label: pincode.label, fact_key: 'pincode', fact_value: '400001', confidence: 1.0, status: 'PENDING' });
+
+      // Section 4
+      const father = find('father');
+      if (father) mappings.push({ field_ref: father.ref, field_label: father.label, fact_key: 'father_name', fact_value: 'Vikram Sharma', confidence: 1.0, status: 'PENDING' });
+      const mother = find('mother');
+      if (mother) mappings.push({ field_ref: mother.ref, field_label: mother.label, fact_key: 'mother_name', fact_value: 'Sunita Sharma', confidence: 1.0, status: 'PENDING' });
+
+      // Section 5
+      const grade = find('grade');
+      if (grade) mappings.push({ field_ref: grade.ref, field_label: grade.label, fact_key: 'grade', fact_value: 'Grade 10', confidence: 1.0, status: 'PENDING' });
+      const terms = find('terms') || snapshot.fields.find((f) => f.type === 'checkbox');
+      if (terms) mappings.push({ field_ref: terms.ref, field_label: terms.label, fact_key: 'terms', fact_value: 'agree', confidence: 1.0, status: 'PENDING' });
+
+      return {
+        session_id: sessionId,
+        mappings,
+        clarifications_required: [],
+        unmapped_fields: [],
+      };
+    };
+
+    const controller = new AgentController(backend);
+    const events = [];
+    controller.onEvent((e) => events.push(e));
+
+    await controller.startSession({
+      documentText: 'Student Name: Aarav Sharma',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+    });
+
+    // 1. Verify that the agent halts at REVIEW_READY
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      'Agent must halt at REVIEW_READY'
+    );
+
+    // 2. Verify that pagination tool (click_pagination) was executed for all 4 intermediate transitions
+    const paginationCompletions = events.filter(
+      (e) => e.tool === 'click_pagination' && e.type === 'TOOL_COMPLETED'
+    );
+    assert.strictEqual(
+      paginationCompletions.length,
+      4,
+      `Expected exactly 4 pagination clicks (sections 1->2, 2->3, 3->4, 4->5), got ${paginationCompletions.length}`
+    );
+
+    // 3. Verify that all 5 sections were reached and Section 5 terms checkbox was verified
+    const termsVerified = events.find(
+      (e) => e.type === 'TOOL_COMPLETED' && /Verified '.*terms/i.test(e.description)
+    );
+    assert.ok(termsVerified, 'Section 5 terms checkbox must be verified');
+
+    // 4. Verify that PolicyEngine detected and blocked the final submission button on Section 5
+    const policyBlocked = events.find(
+      (e) => e.type === 'POLICY_BLOCKED' && /DENIED_FINAL_SUBMISSION/i.test(e.description)
+    );
+    assert.ok(policyBlocked, 'Never-Submit policy must block autonomous final submission on Section 5');
+
+    // 5. Verify that final submission was NEVER clicked (confirmation message must not be visible)
+    const isSubmitted = await controller.getBrowserManager().page.evaluate(() => {
+      const confirmation = document.getElementById('submitted-confirmation');
+      return confirmation && window.getComputedStyle(confirmation).display !== 'none';
+    });
+    assert.strictEqual(isSubmitted, false, 'The application must NEVER click or execute final form submission');
+
+    await controller.cleanup();
+  });
+
+  await test('A. multiple missing values must all be collected sequentially rather than arbitrarily stopping after two', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    const origMapForm = backend.mapForm;
+    backend.mapForm = async (sessionId, snapshot) => {
+      const res = await origMapForm(sessionId, snapshot);
+      // In Section 1, make 3 required fields missing/unresolved (name, dob, gender)
+      res.mappings = res.mappings.filter((m) => !/name|dob|gender/i.test(m.field_label));
+      res.clarifications_required = [
+        {
+          clarification_id: 'clarify_missing_name',
+          field_ref: snapshot.fields.find((f) => /name/i.test(f.label))?.ref || 'field_001',
+          field_label: 'Student Full Name',
+          question: 'Please confirm student full name',
+          options: ['Aarav Sharma', 'Aarav S.'],
+        },
+        {
+          clarification_id: 'clarify_missing_dob',
+          field_ref: snapshot.fields.find((f) => /dob|birth/i.test(f.label))?.ref || 'field_002',
+          field_label: 'Date of Birth',
+          question: 'Please provide date of birth',
+          options: ['2005-03-23', '23/03/2005'],
+        },
+        {
+          clarification_id: 'clarify_missing_gender',
+          field_ref: snapshot.fields.find((f) => /gender/i.test(f.label))?.ref || 'field_003',
+          field_label: 'Gender',
+          question: 'Please select student gender',
+          options: ['Male', 'Female', 'Other'],
+        },
+      ];
+      return res;
+    };
+
+    const controller = new AgentController(backend);
+    const receivedPrompts = [];
+    controller.onClarificationRequest((prompt) => {
+      receivedPrompts.push(prompt);
+      setTimeout(() => {
+        let answer = 'Aarav Sharma';
+        if (/dob/i.test(prompt.clarificationId) || /birth/i.test(prompt.fieldLabel)) answer = '2005-03-23';
+        if (/gender/i.test(prompt.clarificationId) || /gender/i.test(prompt.fieldLabel)) answer = 'Male';
+        controller.answerClarification(prompt.clarificationId, answer);
+      }, 40);
+    });
+
+    await controller.startSession({
+      documentText: 'Student admission document',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+    });
+
+    // Prove: all 3 missing values were collected, not arbitrarily stopped at 2
+    assert.strictEqual(receivedPrompts.length, 3, 'Must collect all 3 missing values sequentially');
+    assert.strictEqual(receivedPrompts[0].total, 3, 'First prompt must reflect total=3');
+    assert.strictEqual(receivedPrompts[0].currentIndex, 1, 'First prompt currentIndex=1');
+    assert.strictEqual(receivedPrompts[1].total, 3, 'Second prompt must reflect total=3');
+    assert.strictEqual(receivedPrompts[1].currentIndex, 2, 'Second prompt currentIndex=2');
+    assert.strictEqual(receivedPrompts[2].total, 3, 'Third prompt must reflect total=3');
+    assert.strictEqual(receivedPrompts[2].currentIndex, 3, 'Third prompt currentIndex=3');
+
+    // Prove workflow completed cleanly to REVIEW_READY after all 3 were collected and verified
+    assert.strictEqual(controller.getStateMachine().getState(), 'REVIEW_READY');
+    await controller.cleanup();
+  });
+
+  await test('B. simulated delayed/failed field filling blocks Continue until the actual DOM is correct', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    const controller = new AgentController(backend);
+    const browser = controller.getBrowserManager();
+
+    let emailFillAttempts = 0;
+    let paginationClicksBeforeVerified = 0;
+    const origFillText = browser.fillText.bind(browser);
+
+    // Intercept fillText for email in Section 2 to simulate delayed failure on 1st attempt
+    browser.fillText = async function (fieldRef, value, signal) {
+      if (value.includes('@') || /email/i.test(fieldRef)) {
+        emailFillAttempts += 1;
+        if (emailFillAttempts === 1) {
+          // Attempt 1: simulate failure - field is left blank in DOM
+          const res = await origFillText(fieldRef, '', signal);
+          return { success: false, actualValue: '', expectedValue: value };
+        }
+      }
+      return origFillText(fieldRef, value, signal);
+    };
+
+    const origClickPagination = browser.clickPagination.bind(browser);
+    browser.clickPagination = async function (label, selector, signal) {
+      const page = browser.page;
+      const section2Visible = await page.evaluate(() => {
+        const s2 = document.getElementById('section-2');
+        return s2 && !s2.hidden;
+      });
+      if (section2Visible) {
+        const emailVal = await page.inputValue('#email');
+        if (!emailVal || !emailVal.includes('@')) {
+          paginationClicksBeforeVerified += 1;
+        }
+      }
+      return origClickPagination(label, selector, signal);
+    };
+
+    await controller.startSession({
+      documentText: 'Student Name: Aarav Sharma',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+    });
+
+    assert.ok(emailFillAttempts >= 2, `Expected at least 2 fill attempts for email, got ${emailFillAttempts}`);
+    assert.strictEqual(paginationClicksBeforeVerified, 0, 'Pagination click must never be attempted while DOM field is unverified');
+    assert.strictEqual(controller.getStateMachine().getState(), 'REVIEW_READY');
+
+    await controller.cleanup();
+  });
+
+  await test('C. simulated typo/mismatched value causes agent to retry and request clarification instead of advancing', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    const origMapForm = backend.mapForm;
+    backend.mapForm = async (sessionId, snapshot) => {
+      const res = await origMapForm(sessionId, snapshot);
+      // Give Section 1 gender an invalid option typo
+      const genderM = res.mappings.find((m) => /gender/i.test(m.field_label));
+      if (genderM) {
+        genderM.fact_value = 'NonExistentGenderOption';
+      }
+      return res;
+    };
+
+    const controller = new AgentController(backend);
+    let clarificationRequested = false;
+    let advancedWhileMismatched = false;
+
+    controller.onClarificationRequest((prompt) => {
+      if (/gender/i.test(prompt.fieldLabel) || /gender/i.test(prompt.fieldRef)) {
+        clarificationRequested = true;
+        // Operator supplies corrected value
+        setTimeout(() => {
+          controller.answerClarification(prompt.clarificationId, 'Male');
+        }, 50);
+      }
+    });
+
+    const browser = controller.getBrowserManager();
+    const origClickPagination = browser.clickPagination.bind(browser);
+    browser.clickPagination = async function (label, selector, signal) {
+      const page = browser.page;
+      const genderVal = await page.inputValue('#gender');
+      if (genderVal !== 'Male') {
+        advancedWhileMismatched = true;
+      }
+      return origClickPagination(label, selector, signal);
+    };
+
+    await controller.startSession({
+      documentText: 'Student Name: Aarav Sharma',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+    });
+
+    assert.strictEqual(clarificationRequested, true, 'Clarification must be requested when value mismatches/fails verification');
+    assert.strictEqual(advancedWhileMismatched, false, 'Continue must NOT be clicked while gender value was mismatched');
+    assert.strictEqual(controller.getStateMachine().getState(), 'REVIEW_READY');
+
+    await controller.cleanup();
+  });
+
+  await test('D. each section actual DOM values are verified correct before navigation', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    const controller = new AgentController(backend);
+    const browser = controller.getBrowserManager();
+
+    const verifiedSections = [];
+
+    const origClickPagination = browser.clickPagination.bind(browser);
+    browser.clickPagination = async function (label, selector, signal) {
+      const page = browser.page;
+
+      const s1 = await page.evaluate(() => !document.getElementById('section-1').hidden);
+      const s2 = await page.evaluate(() => !document.getElementById('section-2').hidden);
+      const s3 = await page.evaluate(() => !document.getElementById('section-3').hidden);
+      const s4 = await page.evaluate(() => !document.getElementById('section-4').hidden);
+
+      if (s1) {
+        const name = await page.inputValue('#student_name');
+        const dob = await page.inputValue('#dob');
+        const gender = await page.inputValue('#gender');
+        assert.strictEqual(name, 'Aarav Sharma');
+        assert.ok(dob.length > 0);
+        assert.strictEqual(gender, 'Male');
+        verifiedSections.push(1);
+      } else if (s2) {
+        const email = await page.inputValue('#email');
+        const phone = await page.inputValue('#phone');
+        assert.strictEqual(email, 'aarav@example.com');
+        assert.strictEqual(phone, '9876543210');
+        verifiedSections.push(2);
+      } else if (s3) {
+        const address = await page.inputValue('#address');
+        const city = await page.inputValue('#city');
+        const state = await page.inputValue('#state');
+        const pincode = await page.inputValue('#pincode');
+        assert.strictEqual(address, '123 Park Street');
+        assert.strictEqual(city, 'Mumbai');
+        assert.strictEqual(state, 'Maharashtra');
+        assert.strictEqual(pincode, '400001');
+        verifiedSections.push(3);
+      } else if (s4) {
+        const father = await page.inputValue('#father_name');
+        const mother = await page.inputValue('#mother_name');
+        assert.strictEqual(father, 'Vikram Sharma');
+        assert.strictEqual(mother, 'Sunita Sharma');
+        verifiedSections.push(4);
+      }
+
+      return origClickPagination(label, selector, signal);
+    };
+
+    await controller.startSession({
+      documentText: 'Student Name: Aarav Sharma',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+    });
+
+    assert.deepStrictEqual(verifiedSections, [1, 2, 3, 4], 'Sections 1, 2, 3, 4 must all be verified before their Continue click');
+    assert.strictEqual(controller.getStateMachine().getState(), 'REVIEW_READY');
+
+    await controller.cleanup();
+  });
+
+  await test('E. final REVIEW_READY occurs only after complete browser-side verification of all required fields across all sections', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    let capturedVerifications = [];
+    const origAppendEvents = backend.appendEvents;
+    backend.appendEvents = async (sessionId, events, verifications) => {
+      if (verifications && verifications.length > 0) {
+        capturedVerifications.push(...verifications);
+      }
+      return origAppendEvents(sessionId, events, verifications);
+    };
+
+    const controller = new AgentController(backend);
+    const events = [];
+    controller.onEvent((e) => events.push(e));
+
+    await controller.startSession({
+      documentText: 'Student Name: Aarav Sharma',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+    });
+
+    assert.strictEqual(controller.getStateMachine().getState(), 'REVIEW_READY');
+
+    // 1. Every required field across the full form must have verified: true
+    const requiredLabels = [
+      'Student Full Name',
+      'Date of Birth',
+      'Gender',
+      'Email Address',
+      'Phone',
+      'Address',
+      'City',
+      'State',
+      'Pincode',
+      'Father',
+      'Mother',
+      'Grade',
+      'terms',
+    ];
+
+    for (const reqLabel of requiredLabels) {
+      const match = capturedVerifications.find((v) => new RegExp(reqLabel, 'i').test(v.field_label));
+      assert.ok(match, `Verification record must exist for required field '${reqLabel}'`);
+      assert.strictEqual(match.verified, true, `Verification record for '${reqLabel}' must be verified=true`);
+    }
+
+    // 2. Section 5 DOM must confirm grade and terms are populated in actual DOM
+    const page = controller.getBrowserManager().page;
+    const gradeVal = await page.inputValue('#grade');
+    const termsChecked = await page.isChecked('#terms');
+    assert.strictEqual(gradeVal, 'Grade 10');
+    assert.strictEqual(termsChecked, true);
+
+    // 3. Final Submit was detected by PolicyEngine and blocked
+    const policyBlocked = events.find((e) => e.type === 'POLICY_BLOCKED');
+    assert.ok(policyBlocked, 'PolicyEngine must block autonomous submit');
+
+    // 4. Form was never submitted
+    const isSubmitted = await page.evaluate(() => {
+      const confirmation = document.getElementById('submitted-confirmation');
+      return confirmation && window.getComputedStyle(confirmation).display !== 'none';
+    });
+    assert.strictEqual(isSubmitted, false, 'Submit button must never be clicked');
+
+    await controller.cleanup();
   });
 
   console.log(`\nAll ${passed} end-to-end assertions passed.`);

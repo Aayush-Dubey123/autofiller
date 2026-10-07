@@ -8,6 +8,7 @@ Google GenAI SDK through non-blocking async execution.
 import asyncio
 import json
 import os
+import time
 import re
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -21,12 +22,113 @@ from core.models.session_model import (
 
 logging = logger(__name__)
 
-# Single canonical default. gemini-3.5-flash is stable and supported.
-DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
-
 # Developer configuration read from backend/.env (never a user setting).
+# Defaults are only used when the .env variables are unset; candidates that the
+# provider catalog no longer lists are dropped at runtime (see _filter_candidates).
 GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
 GEMINI_MODEL_ENV = "GEMINI_MODEL"
+GEMINI_FALLBACK_MODELS_ENV = "GEMINI_FALLBACK_MODELS"
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+DEFAULT_GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash-lite", "gemini-flash-latest"]
+
+# OpenRouter fallback configuration read from backend/.env.
+OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
+OPENROUTER_MODEL_ENV = "OPENROUTER_MODEL"
+OPENROUTER_FALLBACK_MODELS_ENV = "OPENROUTER_FALLBACK_MODELS"
+DEFAULT_OPENROUTER_MODEL = "openrouter/free"
+DEFAULT_OPENROUTER_FALLBACK_MODELS = [
+    "google/gemma-4-31b-it:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+]
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+
+# Provider timeout: bounded at roughly 2-3s (configurable via AI_REQUEST_TIMEOUT_SECONDS)
+AI_TIMEOUT_SECONDS_ENV = "AI_REQUEST_TIMEOUT_SECONDS"
+DEFAULT_AI_TIMEOUT_SECONDS = 3.0
+# Form mapping sends a large prompt, so healthy models need a bit longer than
+# trivial calls. Dead models never consume this budget twice (health registry).
+AI_MAPPING_TIMEOUT_SECONDS_ENV = "AI_MAPPING_TIMEOUT_SECONDS"
+DEFAULT_AI_MAPPING_TIMEOUT_SECONDS = 8.0
+
+# Model health registry: "provider:model" -> monotonic time until which it is skipped.
+PERMANENT_COOLDOWN_SECONDS = 3600.0  # not found / no longer available
+TRANSIENT_COOLDOWN_SECONDS = 60.0  # 503 / 429 / timeout
+CATALOG_TTL_SECONDS = 600.0
+CATALOG_FETCH_TIMEOUT_SECONDS = 3.0
+_MODEL_COOLDOWN: Dict[str, float] = {}
+_CATALOG_CACHE: Dict[str, Tuple[float, Optional[set]]] = {}
+
+
+def reset_model_health() -> None:
+    """Clear model cooldowns and cached provider catalogs (used by tests)."""
+    _MODEL_COOLDOWN.clear()
+    _CATALOG_CACHE.clear()
+
+
+def mark_model_unavailable(provider: str, model: str, error: Any) -> None:
+    """Record a failed model so later calls skip it instead of re-paying its timeout."""
+    text = str(error).lower()
+    permanent = any(
+        token in text
+        for token in ("404", "not_found", "not found", "no longer available", "no endpoints", "invalid model")
+    )
+    cooldown = PERMANENT_COOLDOWN_SECONDS if permanent else TRANSIENT_COOLDOWN_SECONDS
+    _MODEL_COOLDOWN[f"{provider}:{model}"] = time.monotonic() + cooldown
+
+
+def _is_model_cooling(provider: str, model: str) -> bool:
+    until = _MODEL_COOLDOWN.get(f"{provider}:{model}")
+    return until is not None and until > time.monotonic()
+
+
+def filter_candidates(provider: str, models: List[str], catalog: Optional[set]) -> List[str]:
+    """
+    Drop models that are cooling down or absent from the provider catalog.
+
+    If filtering would remove every candidate, the unfiltered list is returned so a
+    recovered provider can still be probed (bounded by the request timeout).
+    """
+    kept = [
+        m
+        for m in models
+        if not _is_model_cooling(provider, m) and (catalog is None or m in catalog)
+    ]
+    skipped = [m for m in models if m not in kept]
+    if skipped:
+        logging.info(f"Skipping unavailable {provider} model candidates: {skipped}")
+    return kept or models
+
+
+def _cached_catalog(provider: str) -> Tuple[bool, Optional[set]]:
+    entry = _CATALOG_CACHE.get(provider)
+    if entry and entry[0] > time.monotonic():
+        return True, entry[1]
+    return False, None
+
+
+def _store_catalog(provider: str, names: Optional[set], ttl: float = CATALOG_TTL_SECONDS) -> None:
+    _CATALOG_CACHE[provider] = (time.monotonic() + ttl, names)
+
+
+def get_ai_timeout_seconds() -> float:
+    """Read bounded AI request timeout from backend/.env, default 3.0s."""
+    try:
+        val = float(os.getenv(AI_TIMEOUT_SECONDS_ENV, str(DEFAULT_AI_TIMEOUT_SECONDS)).strip())
+        return max(1.0, min(val, 30.0))
+    except (ValueError, TypeError):
+        return DEFAULT_AI_TIMEOUT_SECONDS
+
+
+def get_ai_mapping_timeout_seconds() -> float:
+    """Read bounded form-mapping timeout from backend/.env, default 8.0s."""
+    try:
+        val = float(
+            os.getenv(AI_MAPPING_TIMEOUT_SECONDS_ENV, str(DEFAULT_AI_MAPPING_TIMEOUT_SECONDS)).strip()
+        )
+        return max(1.0, min(val, 30.0))
+    except (ValueError, TypeError):
+        return DEFAULT_AI_MAPPING_TIMEOUT_SECONDS
 
 
 def get_gemini_api_key() -> str:
@@ -48,15 +150,62 @@ def is_gemini_configured() -> bool:
     """
     return bool(get_gemini_api_key())
 
-# Fallback models if default model is rate limited (429) or unavailable.
-FALLBACK_GEMINI_MODELS = [
-    "gemini-3.5-flash-lite",
-    "gemini-3.6-flash",
-]
 
-# Provider call budget. Bounded so a hung provider cannot stall the event loop forever.
-GEMINI_TIMEOUT_SECONDS = 45.0
-GEMINI_MAX_ATTEMPTS = 2
+def get_openrouter_api_key() -> str:
+    """
+    Read the OpenRouter API key from the environment (backend/.env).
+
+    Returns:
+        str: The trimmed API key, or an empty string when unset.
+    """
+    return os.getenv(OPENROUTER_API_KEY_ENV, "").strip()
+
+
+def is_openrouter_configured() -> bool:
+    """
+    Report whether an OpenRouter API key is configured, without exposing it.
+
+    Returns:
+        bool: True when OPENROUTER_API_KEY is set to a non-empty value.
+    """
+    return bool(get_openrouter_api_key())
+
+
+def is_ai_provider_configured() -> bool:
+    """Report whether any AI provider (Gemini or OpenRouter) is configured."""
+    return is_gemini_configured() or is_openrouter_configured()
+
+
+def get_gemini_models() -> List[str]:
+    """Get ordered list of candidate Gemini models (primary + fallbacks)."""
+    primary = os.getenv(GEMINI_MODEL_ENV, "").strip() or DEFAULT_GEMINI_MODEL
+    fallbacks_raw = os.getenv(GEMINI_FALLBACK_MODELS_ENV, "").strip()
+    fallbacks = (
+        [m.strip() for m in fallbacks_raw.split(",") if m.strip()]
+        if fallbacks_raw
+        else DEFAULT_GEMINI_FALLBACK_MODELS
+    )
+    models = [primary]
+    for m in fallbacks:
+        if m not in models:
+            models.append(m)
+    return models
+
+
+def get_openrouter_models() -> List[str]:
+    """Get ordered list of candidate OpenRouter models (primary + fallbacks)."""
+    primary = os.getenv(OPENROUTER_MODEL_ENV, "").strip() or DEFAULT_OPENROUTER_MODEL
+    fallbacks_raw = os.getenv(OPENROUTER_FALLBACK_MODELS_ENV, "").strip()
+    fallbacks = (
+        [m.strip() for m in fallbacks_raw.split(",") if m.strip()]
+        if fallbacks_raw
+        else DEFAULT_OPENROUTER_FALLBACK_MODELS
+    )
+    models = [primary]
+    for m in fallbacks:
+        if m not in models:
+            models.append(m)
+    return models
 
 
 def _strip_code_fences(text: str) -> str:
@@ -147,22 +296,24 @@ class GeminiService:
 
     def _build_client(self, api_key: str) -> None:
         """
-        Construct the underlying Google GenAI client.
+        Construct the underlying Google GenAI client with bounded socket timeout.
 
         Args:
             api_key (str): Google AI Studio API key.
 
         Returns:
             None
-
-        Raises:
-            None
         """
         try:
             from google import genai
+            from google.genai import types
 
-            self.client = genai.Client(api_key=api_key)
-            logging.info("Initialized Google GenAI client successfully")
+            timeout_ms = int(max(get_ai_timeout_seconds(), get_ai_mapping_timeout_seconds()) * 1000)
+            self.client = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(timeout=timeout_ms),
+            )
+            logging.info("Initialized Google GenAI client successfully with bounded socket timeout")
         except Exception as error:
             self.client = None
             logging.error(f"Could not initialize Google GenAI client: {error}")
@@ -181,9 +332,10 @@ class GeminiService:
         model: str,
         contents: Any,
         config: Optional[Any] = None,
+        timeout: Optional[float] = None,
     ) -> str:
         """
-        Execute a non-blocking Gemini generation call with a hard timeout.
+        Execute a non-blocking Gemini generation call with a bounded timeout.
 
         Runs the synchronous SDK call in a worker thread so the FastAPI event loop is
         never blocked by provider latency.
@@ -192,6 +344,7 @@ class GeminiService:
             model (str): Gemini model identifier.
             contents (Any): Prompt string or multimodal content parts.
             config (Optional[Any]): Optional generation config.
+            timeout (Optional[float]): Custom timeout in seconds.
 
         Returns:
             str: Model response text.
@@ -202,6 +355,8 @@ class GeminiService:
         self._ensure_client()
         if self.client is None:
             raise RuntimeError("Gemini client is not initialized.")
+
+        req_timeout = timeout if timeout is not None else get_ai_timeout_seconds()
 
         def _call() -> str:
             """Perform the blocking provider call inside the worker thread."""
@@ -217,8 +372,165 @@ class GeminiService:
 
         return await asyncio.wait_for(
             asyncio.to_thread(_call),
-            timeout=GEMINI_TIMEOUT_SECONDS,
+            timeout=req_timeout,
         )
+
+    async def _generate_openrouter_async(
+        self,
+        *,
+        messages: List[Dict[str, Any]],
+        temperature: float = 0.1,
+        timeout: Optional[float] = None,
+    ) -> str:
+        """
+        Execute an OpenRouter chat completion call as a fast fallback provider.
+
+        Cycles through candidate OpenRouter models (primary + fallbacks) with bounded timeout.
+
+        Args:
+            messages: List of chat messages in standard format.
+            temperature: Sampling temperature.
+            timeout: Optional per-model timeout in seconds.
+
+        Returns:
+            str: Assistant response content.
+
+        Raises:
+            RuntimeError: If OpenRouter is unconfigured, times out, or all models return errors.
+        """
+        api_key = get_openrouter_api_key()
+        if not api_key:
+            raise RuntimeError("OpenRouter API key is not configured.")
+
+        req_timeout = timeout if timeout is not None else get_ai_timeout_seconds()
+        candidate_models = filter_candidates(
+            "openrouter",
+            get_openrouter_models(),
+            await self._openrouter_catalog(),
+        )
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://autofiller.ai",
+            "X-Title": "AutoFiller AI",
+        }
+
+        import httpx
+
+        last_error = None
+        async with httpx.AsyncClient(timeout=req_timeout) as client:
+            for candidate_model in candidate_models:
+                try:
+                    logging.info(f"Attempting OpenRouter completion with model {candidate_model}")
+                    payload = {
+                        "model": candidate_model,
+                        "messages": messages,
+                        "temperature": temperature,
+                    }
+                    resp = await client.post(OPENROUTER_URL, json=payload, headers=headers)
+                    if resp.status_code != 200:
+                        raise RuntimeError(
+                            f"OpenRouter returned status {resp.status_code}: {resp.text[:120]}"
+                        )
+                    data = resp.json()
+                    if "error" in data:
+                        err_msg = data["error"].get("message", str(data["error"]))
+                        raise RuntimeError(f"OpenRouter error: {err_msg}")
+                    choices = data.get("choices")
+                    if not choices or not isinstance(choices, list):
+                        raise RuntimeError("OpenRouter response did not contain choices")
+                    content = choices[0].get("message", {}).get("content", "")
+                    cleaned = content.strip()
+                    if cleaned:
+                        return cleaned
+                except Exception as err:
+                    mark_model_unavailable("openrouter", candidate_model, err)
+                    last_error = f"OpenRouter model {candidate_model} failed: {err}"
+                    logging.warning(
+                        f"OpenRouter candidate model {candidate_model} failed ({err}); failing over immediately to next model"
+                    )
+                    continue
+
+        raise RuntimeError(
+            f"All candidate OpenRouter models failed. Last error: {last_error}"
+        )
+
+    def _parse_facts_json(
+        self,
+        response_text: str,
+        document_name: str = "document",
+    ) -> List[ExtractedFact]:
+        """
+        Parse model JSON into normalized ExtractedFact objects.
+
+        Normalizes keys using KEY_ALIASES, assigns canonical labels,
+        and enforces DD/MM/YYYY date formatting.
+        """
+        from core.services.document_service import KEY_ALIASES, CANONICAL_LABELS
+
+        cleaned = _strip_code_fences(response_text)
+        parsed = json.loads(cleaned)
+        facts: List[ExtractedFact] = []
+        seen_keys = set()
+
+        raw_facts = parsed.get("facts", [])
+        if not isinstance(raw_facts, list) and isinstance(parsed, list):
+            raw_facts = parsed
+
+        for item in raw_facts:
+            raw_key = str(item.get("key", "")).strip().lower().replace(" ", "_")
+            val = str(item.get("value", "")).strip()
+            label = str(item.get("label", raw_key.replace("_", " ").title())).strip()
+            confidence = float(item.get("confidence", 0.95))
+            if raw_key and val and raw_key not in seen_keys:
+                facts.append(
+                    ExtractedFact(
+                        key=raw_key,
+                        label=label,
+                        value=val,
+                        confidence=confidence,
+                    )
+                )
+                seen_keys.add(raw_key)
+        return facts
+
+    async def _gemini_catalog(self) -> Optional[set]:
+        """Return the set of Gemini model ids the key can see (cached), or None if unknown."""
+        hit, cached = _cached_catalog("gemini")
+        if hit:
+            return cached
+        names: Optional[set] = None
+        try:
+            def _list() -> set:
+                return {str(m.name).split("/")[-1] for m in self.client.models.list()}
+
+            names = await asyncio.wait_for(
+                asyncio.to_thread(_list), timeout=CATALOG_FETCH_TIMEOUT_SECONDS
+            ) or None
+        except Exception as error:
+            logging.info(f"Gemini model catalog unavailable ({type(error).__name__}); not filtering")
+        _store_catalog("gemini", names, CATALOG_TTL_SECONDS if names else TRANSIENT_COOLDOWN_SECONDS)
+        return names
+
+    async def _openrouter_catalog(self) -> Optional[set]:
+        """Return the set of OpenRouter model ids (cached, public endpoint), or None if unknown."""
+        hit, cached = _cached_catalog("openrouter")
+        if hit:
+            return cached
+        names: Optional[set] = None
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=CATALOG_FETCH_TIMEOUT_SECONDS) as http:
+                resp = await http.get(OPENROUTER_MODELS_URL)
+                resp.raise_for_status()
+                names = {str(m["id"]) for m in resp.json().get("data", [])} or None
+        except Exception as error:
+            logging.info(f"OpenRouter model catalog unavailable ({type(error).__name__}); not filtering")
+        _store_catalog(
+            "openrouter", names, CATALOG_TTL_SECONDS if names else TRANSIENT_COOLDOWN_SECONDS
+        )
+        return names
 
     async def _generate_with_failover(
         self,
@@ -226,13 +538,14 @@ class GeminiService:
         contents: Any,
         config: Optional[Any] = None,
         log_context: str = "generation",
+        timeout: Optional[float] = None,
     ) -> Tuple[str, bool, Optional[str]]:
         """
-        Generate content across candidate models with bounded retries and failover.
+        Generate content across candidate models with fast failover and bounded timeouts.
 
-        Owns the candidate-model list, the per-model attempt loop, and the 429/404
-        short-circuit so deterministic provider failures fail over immediately instead
-        of burning every attempt. Shared by both the vision and mapping code paths.
+        If a model returns an immediate error (503, 429, 404, unavailable) or times out
+        after the bounded window (~3s), fails over immediately to the next candidate model
+        instead of waiting through sequential long timeouts. Stops on first valid result.
 
         Args:
             contents (Any): Prompt string or multimodal content parts.
@@ -240,52 +553,44 @@ class GeminiService:
             log_context (str): Label used in log messages.
 
         Returns:
-            Tuple[str, bool, Optional[str]]: Response text (empty if all failed), a
-                flag indicating a project-level quota exhaustion (429), and the last
-                error message when generation did not succeed.
+            Tuple[str, bool, Optional[str]]: Response text (empty if all failed),
+                quota flag, and the last error message.
         """
-        models_to_try = [self.model or DEFAULT_GEMINI_MODEL]
-        for alternative in FALLBACK_GEMINI_MODELS:
-            if alternative not in models_to_try:
-                models_to_try.append(alternative)
-
+        models_to_try = filter_candidates(
+            "gemini", get_gemini_models(), await self._gemini_catalog()
+        )
+        timeout = timeout if timeout is not None else get_ai_timeout_seconds()
         last_error: Optional[str] = None
-        response_text = ""
-        quota_exhausted = False
+
         for candidate_model in models_to_try:
-            for attempt in range(GEMINI_MAX_ATTEMPTS):
-                try:
-                    logging.info(
-                        f"Attempting {log_context} with model {candidate_model} "
-                        f"(attempt {attempt + 1})"
-                    )
-                    response_text = await self._generate_async(
-                        model=candidate_model,
-                        contents=contents,
-                        config=config,
-                    )
-                    if response_text:
-                        break
-                except asyncio.TimeoutError:
-                    last_error = f"timeout after {GEMINI_TIMEOUT_SECONDS:.0f}s"
-                    logging.warning(
-                        f"Model {candidate_model} timed out on attempt {attempt + 1}"
-                    )
-                except Exception as error:
-                    last_error = str(error)
-                    logging.warning(
-                        f"{log_context.capitalize()} with model {candidate_model} "
-                        f"attempt {attempt + 1} failed: {error}"
-                    )
-                    # If a model returns 429 or 404, break attempt loop for this model and try next model
-                    if "429" in last_error or "RESOURCE_EXHAUSTED" in last_error or "404" in last_error:
-                        logging.info(f"Model {candidate_model} quota or availability issue, trying next alternative candidate model")
-                        break
-                if attempt < GEMINI_MAX_ATTEMPTS - 1:
-                    await asyncio.sleep(1)
-            if response_text:
-                break
-        return response_text, False, None if response_text else last_error
+            try:
+                logging.info(
+                    f"Attempting {log_context} with Gemini model {candidate_model} (timeout {timeout:.1f}s)"
+                )
+                response_text = await self._generate_async(
+                    model=candidate_model,
+                    contents=contents,
+                    config=config,
+                    timeout=timeout,
+                )
+                if response_text:
+                    return response_text, False, None
+            except asyncio.TimeoutError:
+                mark_model_unavailable("gemini", candidate_model, "timeout")
+                last_error = f"Gemini {candidate_model} timed out after {timeout:.1f}s"
+                logging.warning(
+                    f"Model {candidate_model} timed out after {timeout:.1f}s; failing over immediately to next model"
+                )
+                continue
+            except Exception as error:
+                mark_model_unavailable("gemini", candidate_model, error)
+                last_error = f"Gemini {candidate_model} failed: {error}"
+                logging.warning(
+                    f"{log_context.capitalize()} with model {candidate_model} failed ({error}); failing over immediately to next model"
+                )
+                continue
+
+        return "", False, last_error
 
     async def extract_facts_from_image(
         self,
@@ -297,8 +602,8 @@ class GeminiService:
         """
         Extract structured domain facts from an image or scanned document page.
 
-        Uses Gemini multimodal vision capabilities to extract student and administrative
-        facts directly from raw image bytes.
+        Uses Gemini multimodal vision capabilities as primary provider, with OpenRouter
+        multimodal fallback when configured and available.
 
         Args:
             image_bytes (bytes): Binary content of the image.
@@ -316,13 +621,11 @@ class GeminiService:
             f"({len(image_bytes)} bytes, mime={mime_type})"
         )
         self._ensure_client()
-        if self.client is None:
+        if self.client is None and not is_openrouter_configured():
             raise RuntimeError(
                 "Gemini API key is required to extract facts from images. "
                 "Set GEMINI_API_KEY in backend/.env and restart the backend."
             )
-
-        from google.genai import types
 
         prompt = """You are AutoFiller AI, an expert document intelligence assistant specialized in educational records, transfer certificates (TC), admission forms, marksheets, and identity documents.
 Carefully examine the entire document image, including both printed template text and handwritten entries.
@@ -356,46 +659,54 @@ Return a JSON object matching this structure:
 }
 Respond ONLY with valid JSON."""
 
-        part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
-        contents = [part, prompt]
-        config = types.GenerateContentConfig(
-            response_mime_type="application/json",
-            temperature=0.1,
-        )
+        response_text = ""
+        last_error = None
 
-        response_text, _quota_exhausted, last_error = await self._generate_with_failover(
-            contents=contents,
-            config=config,
-            log_context="image fact extraction",
-        )
+        if self.client is not None:
+            from google.genai import types
+
+            part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+            contents = [part, prompt]
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1,
+            )
+
+            response_text, _quota_exhausted, last_error = await self._generate_with_failover(
+                contents=contents,
+                config=config,
+                log_context="image fact extraction",
+            )
+
+        if not response_text and is_openrouter_configured():
+            logging.info(
+                f"Gemini Vision unavailable or failed ({last_error}). Engaging OpenRouter fallback provider for image {document_name}."
+            )
+            import base64
+            b64_img = base64.b64encode(image_bytes).decode("utf-8")
+            try:
+                or_messages = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64_img}"}},
+                        ],
+                    }
+                ]
+                response_text = await self._generate_openrouter_async(messages=or_messages)
+            except Exception as or_err:
+                logging.warning(f"OpenRouter vision fallback failed: {or_err}")
+                last_error = f"Gemini ({last_error}), OpenRouter ({or_err})"
 
         if not response_text:
             raise RuntimeError(
-                f"Failed to extract facts from image using Gemini. Last error: {last_error}"
+                f"Failed to extract facts from image using AI providers. Last error: {last_error}"
             )
 
-        parsed = json.loads(_strip_code_fences(response_text))
-        facts: List[ExtractedFact] = []
-        seen_keys = set()
-
-        for item in parsed.get("facts", []):
-            raw_key = str(item.get("key", "")).strip().lower().replace(" ", "_")
-            val = str(item.get("value", "")).strip()
-            label = str(item.get("label", raw_key.replace("_", " ").title())).strip()
-            confidence = float(item.get("confidence", 0.95))
-            if raw_key and val and raw_key not in seen_keys:
-                facts.append(
-                    ExtractedFact(
-                        key=raw_key,
-                        label=label,
-                        value=val,
-                        confidence=confidence,
-                    )
-                )
-                seen_keys.add(raw_key)
-
+        facts = self._parse_facts_json(response_text, document_name)
         logging.info(
-            f"Gemini Vision successfully extracted {len(facts)} facts from {document_name}"
+            f"Successfully extracted {len(facts)} facts from image {document_name}"
         )
         return facts
 
@@ -406,7 +717,7 @@ Respond ONLY with valid JSON."""
         document_name: str = "document.txt",
     ) -> List[ExtractedFact]:
         """
-        Extract structured domain facts from document text using Gemini.
+        Extract structured domain facts from document text using Gemini or OpenRouter fallback.
 
         Args:
             text (str): Raw or parsed document text content.
@@ -416,20 +727,18 @@ Respond ONLY with valid JSON."""
             List[ExtractedFact]: Discovered entity facts.
 
         Raises:
-            RuntimeError: If client is unconfigured or candidate models fail.
+            RuntimeError: If all candidate AI providers fail or are unconfigured.
         """
         logging.info(
             f"Executing GeminiService.extract_facts_from_text for {document_name} "
             f"({len(text)} characters)"
         )
         self._ensure_client()
-        if self.client is None:
+        if self.client is None and not is_openrouter_configured():
             raise RuntimeError(
                 "Gemini API key is required to extract facts from text. "
                 "Set GEMINI_API_KEY in backend/.env and restart the backend."
             )
-
-        from google.genai import types
 
         prompt = f"""You are AutoFiller AI, an expert document intelligence assistant specialized in educational records, transfer certificates (TC), admission forms, marksheets, and identity documents.
 Carefully examine the entire document text below:
@@ -468,44 +777,47 @@ Return a JSON object matching this structure:
 }}
 Respond ONLY with valid JSON."""
 
-        config = types.GenerateContentConfig(
-            response_mime_type="application/json",
-            temperature=0.1,
-        )
+        response_text = ""
+        last_error = None
 
-        response_text, _quota_exhausted, last_error = await self._generate_with_failover(
-            contents=prompt,
-            config=config,
-            log_context="text fact extraction",
-        )
+        if self.client is not None:
+            try:
+                from google.genai import types
+
+                config = types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1,
+                )
+
+                response_text, _quota_exhausted, last_error = await self._generate_with_failover(
+                    contents=prompt,
+                    config=config,
+                    log_context="text fact extraction",
+                )
+            except Exception as gemini_err:
+                last_error = str(gemini_err)
+                logging.warning(f"Primary Gemini text extraction failed: {gemini_err}")
+
+        if not response_text and is_openrouter_configured():
+            logging.info(
+                f"Gemini text extraction failed or unavailable ({last_error}). Engaging OpenRouter fallback provider for {document_name}."
+            )
+            try:
+                response_text = await self._generate_openrouter_async(
+                    messages=[{"role": "user", "content": prompt}]
+                )
+            except Exception as or_err:
+                logging.warning(f"OpenRouter text fallback failed: {or_err}")
+                last_error = f"Gemini ({last_error}), OpenRouter ({or_err})"
 
         if not response_text:
             raise RuntimeError(
-                f"Failed to extract facts from text using Gemini. Last error: {last_error}"
+                f"Failed to extract facts from text using AI providers. Last error: {last_error}"
             )
 
-        parsed = json.loads(_strip_code_fences(response_text))
-        facts: List[ExtractedFact] = []
-        seen_keys = set()
-
-        for item in parsed.get("facts", []):
-            raw_key = str(item.get("key", "")).strip().lower().replace(" ", "_")
-            val = str(item.get("value", "")).strip()
-            label = str(item.get("label", raw_key.replace("_", " ").title())).strip()
-            confidence = float(item.get("confidence", 0.95))
-            if raw_key and val and raw_key not in seen_keys:
-                facts.append(
-                    ExtractedFact(
-                        key=raw_key,
-                        label=label,
-                        value=val,
-                        confidence=confidence,
-                    )
-                )
-                seen_keys.add(raw_key)
-
+        facts = self._parse_facts_json(response_text, document_name)
         logging.info(
-            f"Gemini Text successfully extracted {len(facts)} facts from {document_name}"
+            f"Successfully extracted {len(facts)} facts from text in {document_name}"
         )
         return facts
 
@@ -594,13 +906,27 @@ Return a JSON object with:
 }}
 Respond ONLY with valid JSON."""
 
+        mapping_timeout = get_ai_mapping_timeout_seconds()
         response_text, quota_exhausted, last_error = await self._generate_with_failover(
             contents=prompt,
             log_context="Gemini field mapping",
+            timeout=mapping_timeout,
         )
+        if not response_text and is_openrouter_configured():
+            logging.info(
+                f"Gemini field mapping failed or unavailable ({last_error}). Engaging OpenRouter fallback provider."
+            )
+            try:
+                response_text = await self._generate_openrouter_async(
+                    messages=[{"role": "user", "content": prompt}],
+                    timeout=mapping_timeout,
+                )
+            except Exception as or_err:
+                logging.warning(f"OpenRouter field mapping fallback failed: {or_err}")
+
         if not response_text:
             logging.warning(
-                f"All candidate Gemini models failed (last error: {last_error}). "
+                f"All AI mapping providers failed (last error: {last_error}). "
                 "Engaging deterministic heuristic field mapping fallback."
             )
             return self._map_heuristic_fallback(form_snapshot, facts)
@@ -665,6 +991,24 @@ Respond ONLY with valid JSON."""
             else:
                 unmapped.append(field_ref)
 
+        # Supplement any unmapped or missing fields with heuristic fallback
+        accounted_refs = {m.field_ref for m in mappings} | {c.field_ref for c in clarifications}
+        missing_fields = [f for f in form_snapshot.fields if f.ref not in accounted_refs]
+        if missing_fields:
+            missing_snapshot = FormSnapshot(
+                url=form_snapshot.url,
+                title=form_snapshot.title,
+                fields=missing_fields,
+            )
+            h_maps, h_clars, _ = self._map_heuristic_fallback(missing_snapshot, facts)
+            for hm in h_maps:
+                mappings.append(hm)
+                accounted_refs.add(hm.field_ref)
+            for hc in h_clars:
+                clarifications.append(hc)
+                accounted_refs.add(hc.field_ref)
+
+        unmapped = [f.ref for f in form_snapshot.fields if f.ref not in accounted_refs]
         return mappings, clarifications, unmapped
 
     def _map_heuristic_fallback(

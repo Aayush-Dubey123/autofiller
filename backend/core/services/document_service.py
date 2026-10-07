@@ -15,7 +15,11 @@ from fastapi import HTTPException, status
 import pymupdf
 from commons.logger import logger
 from core.models.session_model import ExtractedFact
-from core.services.gemini_service import get_gemini_service
+from core.services.gemini_service import (
+    get_gemini_service,
+    is_ai_provider_configured,
+    is_openrouter_configured,
+)
 
 logging = logger(__name__)
 
@@ -335,8 +339,8 @@ class DocumentService:
                             doc_for_render.close()
                         try:
                             gemini = get_gemini_service()
-                            if not gemini.api_key or not gemini.client:
-                                raise RuntimeError("Google Gemini API is not configured or failed extraction")
+                            if (not gemini.api_key or not gemini.client) and not is_openrouter_configured():
+                                raise RuntimeError("AI extraction provider is not configured or failed extraction")
                             vision_facts = await gemini.extract_facts_from_image(
                                 image_bytes=image_bytes,
                                 mime_type="image/png",
@@ -344,12 +348,12 @@ class DocumentService:
                             )
                             if vision_facts:
                                 logging.info(
-                                    f"Gemini Vision extracted {len(vision_facts)} facts from scanned PDF {document_name}"
+                                    f"AI Vision extracted {len(vision_facts)} facts from scanned PDF {document_name}"
                                 )
                                 return vision_facts
                         except Exception as vision_err:
                             logging.warning(
-                                f"Gemini Vision extraction failed for {document_name}: {vision_err}"
+                                f"AI Vision extraction failed for {document_name}: {vision_err}"
                             )
                             if facts:
                                 return facts
@@ -361,11 +365,11 @@ class DocumentService:
                     if not content:
                         raise DocumentEmptyError("No readable text found in this document")
 
-                    # Try Gemini Text Extraction if client is configured and text is substantial
+                    # Try AI Text Extraction if client is configured and text is substantial
                     if content and len(content) > 50:
                         try:
                             gemini = get_gemini_service()
-                            if gemini.api_key:
+                            if gemini.api_key or is_openrouter_configured():
                                 ai_facts = await gemini.extract_facts_from_text(
                                     text=content,
                                     document_name=document_name,
@@ -406,7 +410,7 @@ class DocumentService:
             if content and len(content) > 50:
                 try:
                     gemini = get_gemini_service()
-                    if gemini.api_key:
+                    if gemini.api_key or is_openrouter_configured():
                         ai_facts = await gemini.extract_facts_from_text(
                             text=content,
                             document_name=document_name,

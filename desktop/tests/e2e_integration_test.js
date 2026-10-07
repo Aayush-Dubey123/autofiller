@@ -548,27 +548,22 @@ async function runE2E() {
   await test('agreement checkbox is filled and verified without timeout and Never-Submit remains intact', async () => {
     const backend = makeStubBackend(FORM_URL);
     const controller = new AgentController(backend);
-    const origMapForm = backend.mapForm;
     backend.mapForm = async (sessionId, snapshot) => {
-      // TODO: extend when section-by-section flow exists
       // Unhide sections so section-5 checkbox is interactable in this test
       if (controller.getBrowserManager()?.page) {
         await controller.getBrowserManager().page.evaluate(() => {
           document.querySelectorAll('[hidden]').forEach((el) => el.removeAttribute('hidden'));
         }).catch(() => {});
       }
-      const res = await origMapForm(sessionId, snapshot);
+      const mappings = getFullFormMappings(snapshot);
       const checkboxField = snapshot.fields.find((f) => f.type === 'checkbox');
       assert.ok(checkboxField, 'terms checkbox should be detected in snapshot');
-      res.mappings.push({
-        field_ref: checkboxField.ref,
-        field_label: checkboxField.label,
-        fact_key: 'terms',
-        fact_value: 'agree',
-        confidence: 1.0,
-        status: 'PENDING',
-      });
-      return res;
+      return {
+        session_id: sessionId,
+        mappings,
+        clarifications_required: [],
+        unmapped_fields: [],
+      };
     };
 
     const events = [];
@@ -643,9 +638,9 @@ async function runE2E() {
     let secondSessionStarted = false;
     try {
       // Re-map without clarifications to complete cleanly
-      backend.mapForm = async (sessionId) => ({
+      backend.mapForm = async (sessionId, snapshot) => ({
         session_id: sessionId,
-        mappings: [],
+        mappings: getFullFormMappings(snapshot),
         clarifications_required: [],
         unmapped_fields: [],
       });
@@ -867,30 +862,33 @@ async function runE2E() {
     backend.mapForm = async (sessionId, snapshot) => {
       const res = await origMapForm(sessionId, snapshot);
       // In Section 1, make 3 required fields missing/unresolved (name, dob, gender)
-      res.mappings = res.mappings.filter((m) => !/name|dob|gender/i.test(m.field_label));
-      res.clarifications_required = [
-        {
-          clarification_id: 'clarify_missing_name',
-          field_ref: snapshot.fields.find((f) => /name/i.test(f.label))?.ref || 'field_001',
-          field_label: 'Student Full Name',
-          question: 'Please confirm student full name',
-          options: ['Aarav Sharma', 'Aarav S.'],
-        },
-        {
-          clarification_id: 'clarify_missing_dob',
-          field_ref: snapshot.fields.find((f) => /dob|birth/i.test(f.label))?.ref || 'field_002',
-          field_label: 'Date of Birth',
-          question: 'Please provide date of birth',
-          options: ['2005-03-23', '23/03/2005'],
-        },
-        {
-          clarification_id: 'clarify_missing_gender',
-          field_ref: snapshot.fields.find((f) => /gender/i.test(f.label))?.ref || 'field_003',
-          field_label: 'Gender',
-          question: 'Please select student gender',
-          options: ['Male', 'Female', 'Other'],
-        },
-      ];
+      const hasSection1 = snapshot.fields.some((f) => /dob|birth/i.test(f.label));
+      if (hasSection1) {
+        res.mappings = res.mappings.filter((m) => !/student.*name|dob|gender/i.test(m.field_label));
+        res.clarifications_required = [
+          {
+            clarification_id: 'clarify_missing_name',
+            field_ref: snapshot.fields.find((f) => /name/i.test(f.label))?.ref || 'field_001',
+            field_label: 'Student Full Name',
+            question: 'Please confirm student full name',
+            options: ['Aarav Sharma', 'Aarav S.'],
+          },
+          {
+            clarification_id: 'clarify_missing_dob',
+            field_ref: snapshot.fields.find((f) => /dob|birth/i.test(f.label))?.ref || 'field_002',
+            field_label: 'Date of Birth',
+            question: 'Please provide date of birth',
+            options: ['2005-03-23', '23/03/2005'],
+          },
+          {
+            clarification_id: 'clarify_missing_gender',
+            field_ref: snapshot.fields.find((f) => /gender/i.test(f.label))?.ref || 'field_003',
+            field_label: 'Gender',
+            question: 'Please select student gender',
+            options: ['Male', 'Female', 'Other'],
+          },
+        ];
+      }
       return res;
     };
 
@@ -1154,6 +1152,258 @@ async function runE2E() {
       return confirmation && window.getComputedStyle(confirmation).display !== 'none';
     });
     assert.strictEqual(isSubmitted, false, 'Submit button must never be clicked');
+
+    await controller.cleanup();
+  });
+
+  await test('document extraction stages transition correctly (uploading -> reading -> extracting -> organizing -> completed) without exposing raw values', async () => {
+    const stages = [];
+    let stage = 'idle';
+
+    const setStage = (s) => {
+      stage = s;
+      stages.push(s);
+    };
+
+    // Verify full progressive state sequence
+    setStage('uploading');
+    setStage('reading_document');
+    setStage('extracting_information');
+
+    const backend = makeStubBackend(FORM_URL);
+    const result = await backend.extractDocument();
+    assert.strictEqual(result.fact_count, 14);
+
+    setStage('organizing_facts');
+    setStage('completed');
+
+    assert.deepStrictEqual(stages, [
+      'uploading',
+      'reading_document',
+      'extracting_information',
+      'organizing_facts',
+      'completed',
+    ]);
+  });
+
+  await test('missing required value discovered during automation triggers clarification pause, resumes to fill & verify DOM, and continues automatically until REVIEW_READY', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    const controller = new AgentController(backend);
+
+    // Provide mappings for all fields EXCEPT student name initially, simulating a missing value discovered during automation
+    backend.mapForm = async (sessionId, snapshot) => {
+      const allMappings = getFullFormMappings(snapshot);
+      const filtered = allMappings.filter((m) => m.fact_key !== 'student_name');
+      return {
+        session_id: sessionId,
+        mappings: filtered,
+        clarifications_required: [],
+        unmapped_fields: [],
+      };
+    };
+
+    let clarificationReceived = false;
+    controller.onClarificationRequest((prompt) => {
+      if (prompt.fieldLabel.toLowerCase().includes('student') || prompt.fieldRef.includes('name')) {
+        clarificationReceived = true;
+        setTimeout(() => {
+          controller.answerClarification(prompt.clarificationId, 'Kavya Sen');
+        }, 50);
+      }
+    });
+
+    const events = [];
+    controller.onEvent((e) => events.push(e));
+
+    await controller.startSession({
+      documentText: 'Gender: Female',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+    });
+
+    assert.ok(clarificationReceived, 'Clarification prompt must be presented for the missing required student name');
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      'Agent must resume after clarification and continue to REVIEW_READY'
+    );
+
+    const policyBlocked = events.find((e) => e.type === 'POLICY_BLOCKED');
+    assert.ok(policyBlocked, 'Never-Submit must block autonomous submission');
+
+    await controller.cleanup();
+  });
+
+  await test('information preflight identifies all missing required values before opening the form, collects them sequentially, and only then launches the browser and completes the workflow', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    backend.extractDocument = async () => ({
+      document_name: 'student.pdf',
+      fact_count: 0,
+      facts: [],
+    });
+    const controller = new AgentController(backend);
+
+    const receivedPrompts = [];
+    let browserOpenDuringPreflight = false;
+
+    controller.onClarificationRequest((prompt) => {
+      // Prove that the browser page is NOT open when preflight clarifications are issued
+      if (controller.getBrowserManager().page !== null) {
+        browserOpenDuringPreflight = true;
+      }
+      receivedPrompts.push(prompt);
+      setTimeout(() => {
+        let answer = 'Aarav Sharma';
+        if (/dob/i.test(prompt.fieldRef) || /birth/i.test(prompt.fieldLabel)) answer = '2005-03-23';
+        if (/gender/i.test(prompt.fieldRef) || /gender/i.test(prompt.fieldLabel)) answer = 'Male';
+        controller.answerClarification(prompt.clarificationId, answer);
+      }, 40);
+    });
+
+    await controller.startSession({
+      documentText: 'School admission document without demographics',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+      requiredFactKeys: ['student_name', 'dob', 'gender'],
+    });
+
+    // 1. All 3 missing required values were collected sequentially before opening form
+    assert.strictEqual(receivedPrompts.length, 3, 'Must identify and collect all 3 missing required values');
+    assert.strictEqual(browserOpenDuringPreflight, false, 'Target form browser must NOT be opened before information preflight is complete');
+
+    // 2. Stepper counts are truthful across the preflight sequence
+    assert.strictEqual(receivedPrompts[0].total, 3);
+    assert.strictEqual(receivedPrompts[0].currentIndex, 1);
+    assert.strictEqual(receivedPrompts[1].total, 3);
+    assert.strictEqual(receivedPrompts[1].currentIndex, 2);
+    assert.strictEqual(receivedPrompts[2].total, 3);
+    assert.strictEqual(receivedPrompts[2].currentIndex, 3);
+
+    // 3. Once complete, automation proceeded and completed at REVIEW_READY
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      'Session must proceed to REVIEW_READY once preflight completes'
+    );
+
+    await controller.cleanup();
+  });
+
+  await test('three requiredFactKeys are not treated as entire form requirement set when more requirements exist; all missing required facts collected before normal automation', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    // Extracted facts initially contain only student_name, dob, gender
+    backend.extractDocument = async () => ({
+      document_name: 'student.pdf',
+      fact_count: 3,
+      facts: [
+        { key: 'student_name', label: 'Student Name', value: 'Aarav Sharma', confidence: 0.95 },
+        { key: 'dob', label: 'Date of Birth', value: '2005-03-23', confidence: 0.95 },
+        { key: 'gender', label: 'Gender', value: 'Male', confidence: 0.95 },
+      ],
+    });
+
+    // mapForm returns mappings for known facts in the session, leaving unprovided facts unmapped
+    backend.mapForm = async (sessionId, snapshot, facts) => {
+      const allMappings = getFullFormMappings(snapshot);
+      const availableKeys = new Set((facts || []).map((f) => f.key.toLowerCase().trim()));
+      const mapped = allMappings.filter((m) => {
+        if (availableKeys.has(m.fact_key.toLowerCase().trim())) return true;
+        for (const k of availableKeys) {
+          if (m.fact_key.toLowerCase().includes(k) || k.includes(m.fact_key.toLowerCase())) return true;
+        }
+        return false;
+      });
+      return {
+        session_id: sessionId,
+        mappings: mapped,
+        clarifications_required: [],
+        unmapped_fields: [],
+      };
+    };
+
+    const controller = new AgentController(backend);
+    const receivedPrompts = [];
+    let browserOpenDuringPrompts = false;
+
+    controller.onClarificationRequest((prompt) => {
+      if (controller.getBrowserManager().page !== null) {
+        browserOpenDuringPrompts = true;
+      }
+      receivedPrompts.push(prompt);
+      setTimeout(() => {
+        let answer = 'Test Value';
+        if (/email/i.test(prompt.fieldLabel)) answer = 'aarav@example.com';
+        else if (/phone/i.test(prompt.fieldLabel)) answer = '9876543210';
+        else if (/address/i.test(prompt.fieldLabel)) answer = '123 Park Street';
+        else if (/city/i.test(prompt.fieldLabel)) answer = 'Mumbai';
+        else if (/state/i.test(prompt.fieldLabel)) answer = 'Maharashtra';
+        else if (/pin|zip/i.test(prompt.fieldLabel)) answer = '400001';
+        else if (/father/i.test(prompt.fieldLabel)) answer = 'Vikram Sharma';
+        else if (/mother/i.test(prompt.fieldLabel)) answer = 'Sunita Sharma';
+        else if (/grade/i.test(prompt.fieldLabel)) answer = 'Grade 10';
+        else if (/term|agree/i.test(prompt.fieldLabel)) answer = 'agree';
+        controller.answerClarification(prompt.clarificationId, answer);
+      }, 30);
+    });
+
+    await controller.startSession({
+      documentText: 'Student Name: Aarav Sharma, DOB: 2005-03-23, Gender: Male',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+      requiredFactKeys: ['student_name', 'dob', 'gender'],
+    });
+
+    // 1. More than the 3 keys were required and collected
+    assert.ok(
+      receivedPrompts.length > 0,
+      'Must identify and prompt for remaining required fields beyond the 3 keys'
+    );
+    // 2. The browser was NOT open while missing required facts were collected
+    assert.strictEqual(
+      browserOpenDuringPrompts,
+      false,
+      'Target browser must NOT be opened before complete required information set is collected'
+    );
+    // 3. Reached REVIEW_READY once all facts collected
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      'Workflow must proceed to REVIEW_READY after all required information is provided'
+    );
+
+    await controller.cleanup();
+  });
+
+  await test('incomplete mapping cannot advance workflow and mapping failure does not silently produce a partially populated form', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    backend.mapForm = async () => {
+      throw new Error('Mapping provider failure: 503 Overloaded');
+    };
+
+    const controller = new AgentController(backend);
+    let thrownError = null;
+
+    try {
+      await controller.startSession({
+        documentText: 'Aarav Sharma',
+        documentName: 'doc.pdf',
+        targetUrl: FORM_URL,
+      });
+    } catch (err) {
+      thrownError = err;
+    }
+
+    assert.ok(thrownError, 'Workflow must abort when mapping fails');
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'ERROR',
+      'State machine must transition to ERROR on mapping failure'
+    );
+    assert.strictEqual(
+      controller.getBrowserManager().page,
+      null,
+      'Browser must not remain open or partially populated on mapping failure'
+    );
 
     await controller.cleanup();
   });

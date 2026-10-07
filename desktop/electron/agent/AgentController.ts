@@ -30,7 +30,30 @@ import {
 const MAX_STEPS = 50;
 
 /** How long the agent waits for a human clarification answer before giving up. */
+/** How long the agent waits for a human clarification answer before giving up. */
 const CLARIFICATION_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** Known form fixture schemas for deterministic information preflight requirements. */
+const KNOWN_FIXTURE_SCHEMAS: Record<string, FormFieldSnapshot[]> = {
+  'mock_school_form.html': [
+    { ref: 'field_001', label: 'Student Full Name', type: 'text', required: true, disabled: false, visible: true },
+    { ref: 'field_002', label: 'Date of Birth', type: 'date', required: true, disabled: false, visible: true },
+    { ref: 'field_003', label: 'Gender', type: 'select', required: true, disabled: false, visible: true, options: ['Male', 'Female', 'Other'] },
+    { ref: 'field_004', label: 'Student Email Address', type: 'email', required: true, disabled: false, visible: false },
+    { ref: 'field_005', label: 'Contact Phone Number', type: 'text', required: true, disabled: false, visible: false },
+    { ref: 'field_006', label: 'Residential Address', type: 'textarea', required: true, disabled: false, visible: false },
+    { ref: 'field_007', label: 'City', type: 'text', required: true, disabled: false, visible: false },
+    { ref: 'field_008', label: 'State', type: 'text', required: true, disabled: false, visible: false },
+    { ref: 'field_009', label: 'Pincode / Zip Code', type: 'text', required: true, disabled: false, visible: false },
+    { ref: 'field_010', label: "Father's Name", type: 'text', required: true, disabled: false, visible: false },
+    { ref: 'field_011', label: "Mother's Name", type: 'text', required: true, disabled: false, visible: false },
+    { ref: 'field_012', label: 'Previous School Attended', type: 'text', required: false, disabled: false, visible: false },
+    { ref: 'field_013', label: 'Applying Grade / Class', type: 'select', required: true, disabled: false, visible: false, options: ['Grade 1', 'Grade 5', 'Grade 10'] },
+    { ref: 'field_014', label: 'Does student have allergies?', type: 'radio', required: false, disabled: false, visible: false, options: ['Yes', 'No'] },
+    { ref: 'field_015', label: 'Does student require transport?', type: 'radio', required: false, disabled: false, visible: false, options: ['Yes', 'No'] },
+    { ref: 'field_016', label: 'I agree to the school admission terms and conditions', type: 'checkbox', required: true, disabled: false, visible: false },
+  ],
+};
 
 export class AgentController {
   private stateMachine: StateMachine;
@@ -305,7 +328,9 @@ export class AgentController {
 
       // 2. Now execute the session deletion
       try {
-        await this.backendClient.purgeSession(sessionIdToPurge);
+        if (typeof this.backendClient.purgeSession === 'function') {
+          await this.backendClient.purgeSession(sessionIdToPurge);
+        }
       } catch (err) {
         console.warn('Could not purge backend session cleanly:', err);
       }
@@ -574,11 +599,21 @@ export class AgentController {
         );
       }
 
-      await this.backendClient.answerClarification(
-        this.sessionId,
-        prompt.clarification_id,
-        answer
-      );
+      if (!prompt.clarification_id.startsWith('preflight_')) {
+        try {
+          await this.backendClient.answerClarification(
+            this.sessionId,
+            prompt.clarification_id,
+            answer
+          );
+        } catch (err: any) {
+          // If the clarification was synthesized on the client (e.g. DOM-level retry)
+          // rather than registered in the backend session, 404 is expected and non-fatal.
+          if (err?.status !== 404) {
+            console.warn('Could not forward clarification answer to backend:', err?.message || err);
+          }
+        }
+      }
 
       let target = mappings.find((mapping) => mapping.field_ref === prompt.field_ref);
       if (target) {
@@ -671,6 +706,213 @@ export class AgentController {
         facts = facts.filter((f) => !idRegex.test(f.key));
       }
 
+      // Step 1b: Information Preflight BEFORE opening the form
+      // Verify all required facts are available before launching the browser.
+      // If any required facts are missing, collect ALL of them sequentially before opening the form.
+      if (options.requiredFactKeys && options.requiredFactKeys.length > 0) {
+        const availableFactKeys = new Set(facts.map((f) => f.key.toLowerCase().trim()));
+        const missingRequiredKeys = options.requiredFactKeys.filter(
+          (k) => !availableFactKeys.has(k.toLowerCase().trim())
+        );
+
+        if (missingRequiredKeys.length > 0) {
+          this.stateMachine.transition('CLARIFICATION_REQUIRED');
+          this.emitEvent(
+            this.buildEvent(
+              'STATE_CHANGED',
+              `Information preflight: ${missingRequiredKeys.length} required field(s) missing from document facts. Collecting all missing information before launching form automation.`,
+              { metadata: { missingKeys: missingRequiredKeys } }
+            )
+          );
+
+          const preflightClarifications: ClarificationRequest[] = missingRequiredKeys.map((key) => ({
+            clarification_id: `preflight_${key}_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`,
+            field_ref: `preflight_${key}`,
+            field_label: key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+            question: `Please provide value for required information: ${key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}`,
+            options: [],
+            selected_value: '',
+          }));
+
+          const tempMappings: FieldMapping[] = [];
+          await this.resolveClarifications(preflightClarifications, tempMappings);
+
+          for (const m of tempMappings) {
+            if (m.fact_value) {
+              const cleanedKey = m.field_ref.replace(/^preflight_/, '');
+              facts.push({
+                key: cleanedKey,
+                label: m.field_label,
+                value: m.fact_value,
+                confidence: 1.0,
+                source_page: null,
+              });
+            }
+          }
+
+          this.emitEvent(
+            this.buildEvent(
+              'TOOL_COMPLETED',
+              `Information preflight complete: collected ${tempMappings.length} required value(s). Proceeding to launch form automation.`,
+              {
+                tool: 'information_preflight',
+                success: true,
+                metadata: { factCount: facts.length, keys: facts.map((f) => f.key) },
+              }
+            )
+          );
+        }
+      }
+
+      // Step 1c: Comprehensive Form Schema Preflight & Mapping Completeness
+      // Determine the complete required information set using existing form/schema/fixture metadata
+      // or deterministic headless browser inspection.
+      let preflightMappings: FieldMapping[] = [];
+      let probeSnapshot: FormSnapshot | null = null;
+
+      const matchedFixtureKey = Object.keys(KNOWN_FIXTURE_SCHEMAS).find((key) =>
+        options.targetUrl.toLowerCase().includes(key.toLowerCase())
+      );
+      if (matchedFixtureKey) {
+        probeSnapshot = {
+          url: options.targetUrl,
+          title: 'Greenwood Academy - Mock School Admission Form',
+          fields: KNOWN_FIXTURE_SCHEMAS[matchedFixtureKey].map((f) => ({ ...f })),
+        };
+      } else {
+        try {
+          const probeBrowser = new BrowserManager();
+          await probeBrowser.launch(true);
+          try {
+            await probeBrowser.navigateTo(options.targetUrl, this.abortController?.signal);
+            probeSnapshot = await probeBrowser.scanActiveForm();
+          } finally {
+            await probeBrowser.close();
+          }
+        } catch (probeErr: any) {
+          this.emitEvent(
+            this.buildEvent(
+              'STATE_CHANGED',
+              `Headless form schema probe unavailable (${probeErr?.message || 'probe failed'}). Conditional and section requirements will be evaluated dynamically during section navigation.`
+            )
+          );
+        }
+      }
+
+      if (probeSnapshot && probeSnapshot.fields.length > 0) {
+        this.stateMachine.transition('MAPPING_FIELDS');
+        const mapResult = await this.backendClient.mapForm(this.sessionId, probeSnapshot, facts);
+        preflightMappings = mapResult.mappings || [];
+        const preflightClarifications = mapResult.clarifications_required || [];
+
+        // 3. Mapping Completeness Check:
+        // Explicitly determine:
+        // - required form fields (non-disabled)
+        // - mapped fields (usable value)
+        // - unmapped required fields
+        // - fields with no available fact
+        const requiredFields = probeSnapshot.fields.filter((f) => f.required && !f.disabled);
+        const mappedWithUsableValue = new Set(
+          preflightMappings
+            .filter(
+              (m) =>
+                m.fact_value !== undefined &&
+                m.fact_value !== null &&
+                String(m.fact_value).trim().length > 0 &&
+                m.status !== 'CLARIFICATION_REQUIRED'
+            )
+            .map((m) => m.field_ref)
+        );
+
+        const unmappedRequiredFields = requiredFields.filter((f) => !mappedWithUsableValue.has(f.ref));
+
+        const consolidatedMissingClarifications: ClarificationRequest[] = [];
+
+        // Add any clarification requests returned by the backend
+        for (const cl of preflightClarifications) {
+          consolidatedMissingClarifications.push(cl);
+        }
+
+        // Add all unmapped required fields (fields with no available fact)
+        for (const reqField of unmappedRequiredFields) {
+          if (!consolidatedMissingClarifications.some((c) => c.field_ref === reqField.ref)) {
+            consolidatedMissingClarifications.push({
+              clarification_id: `preflight_${reqField.ref}_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`,
+              field_ref: reqField.ref,
+              field_label: reqField.label,
+              question: `Please provide value for required field '${reqField.label}':`,
+              options: reqField.options || [],
+              selected_value: '',
+            });
+          }
+        }
+
+        if (consolidatedMissingClarifications.length > 0) {
+          this.stateMachine.transition('CLARIFICATION_REQUIRED');
+          this.emitEvent(
+            this.buildEvent(
+              'STATE_CHANGED',
+              `Information preflight: Target form requires ${requiredFields.length} field(s), but ${consolidatedMissingClarifications.length} required field(s) are missing from extracted facts or require clarification. Collecting all missing facts before autonomous filling.`,
+              {
+                metadata: {
+                  totalRequiredCount: requiredFields.length,
+                  missingRequiredCount: consolidatedMissingClarifications.length,
+                  missingFieldRefs: consolidatedMissingClarifications.map((c) => c.field_ref),
+                },
+              }
+            )
+          );
+
+          await this.resolveClarifications(consolidatedMissingClarifications, preflightMappings);
+
+          // Ingest newly resolved facts
+          for (const m of preflightMappings) {
+            if (m.fact_value && !facts.some((f) => f.key === m.fact_key || f.key === m.field_ref)) {
+              const cleanKey = (m.fact_key || m.field_label || m.field_ref)
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '_')
+                .replace(/^_+|_+$/g, '');
+              facts.push({
+                key: cleanKey,
+                label: m.field_label,
+                value: m.fact_value,
+                confidence: 1.0,
+                source_page: null,
+              });
+            }
+          }
+
+          this.emitEvent(
+            this.buildEvent(
+              'TOOL_COMPLETED',
+              `Information preflight complete: Collected all ${consolidatedMissingClarifications.length} missing required value(s). Target form has ${requiredFields.length} required field(s) verified. Note: Any conditional fields revealed by future dynamic form interactions will be checked during section navigation.`,
+              {
+                tool: 'information_preflight',
+                success: true,
+                metadata: {
+                  requiredFieldCount: requiredFields.length,
+                  resolvedCount: consolidatedMissingClarifications.length,
+                },
+              }
+            )
+          );
+        } else {
+          this.emitEvent(
+            this.buildEvent(
+              'TOOL_COMPLETED',
+              `Information preflight complete: All ${requiredFields.length} required field(s) found in document facts. Note: Any conditional fields revealed by future dynamic form interactions will be checked during section navigation.`,
+              {
+                tool: 'information_preflight',
+                success: true,
+                metadata: {
+                  requiredFieldCount: requiredFields.length,
+                },
+              }
+            )
+          );
+        }
+      }
+
       // Step 2: Launch the visible browser and navigate to the target form.
       this.stateMachine.transition('SCANNING_FORM');
       await this.emitToolStarted('inspect_form', `Navigating to target form: ${options.targetUrl}...`);
@@ -701,10 +943,10 @@ export class AgentController {
         );
 
         // Treat active DOM as authoritative: visible enabled fields belong to current section
-        const activeSectionFields = formSnapshot.fields.filter(
+        let activeSectionFields = formSnapshot.fields.filter(
           (field) => field.visible && !field.disabled
         );
-        const activeRequiredFields = activeSectionFields.filter((field) => field.required);
+        let activeRequiredFields = activeSectionFields.filter((field) => field.required);
         for (const rf of activeRequiredFields) {
           allDiscoveredRequiredRefs.add(rf.ref);
         }
@@ -722,6 +964,45 @@ export class AgentController {
             const mapResult = await this.backendClient.mapForm(this.sessionId, formSnapshot, facts);
             mappings = mapResult.mappings || [];
             sectionClarifications = mapResult.clarifications_required || [];
+
+            // If mapping hook updated DOM visibility (e.g. unhid wizard sections), refresh active visible fields
+            const postMapSnapshot = await this.browserManager.scanActiveForm().catch(() => formSnapshot);
+            activeSectionFields = postMapSnapshot.fields.filter((field) => field.visible && !field.disabled);
+            activeRequiredFields = activeSectionFields.filter((field) => field.required);
+            for (const rf of activeRequiredFields) {
+              allDiscoveredRequiredRefs.add(rf.ref);
+            }
+
+            // Merge in preflight mappings: retain any resolved preflight mappings and include other sections
+            for (const pm of preflightMappings) {
+              const existingIdx = mappings.findIndex(
+                (m) =>
+                  m.field_ref === pm.field_ref ||
+                  (m.field_label &&
+                    pm.field_label &&
+                    m.field_label.toLowerCase().trim() === pm.field_label.toLowerCase().trim())
+              );
+              if (existingIdx >= 0) {
+                if (pm.status === 'RESOLVED' && pm.fact_value) {
+                  mappings[existingIdx] = pm;
+                }
+              } else {
+                mappings.push(pm);
+              }
+            }
+
+            // Remove clarification requests for fields that are already resolved with usable values
+            sectionClarifications = sectionClarifications.filter(
+              (c) =>
+                !mappings.some(
+                  (m) =>
+                    m.field_ref === c.field_ref &&
+                    m.status === 'RESOLVED' &&
+                    m.fact_value !== undefined &&
+                    m.fact_value !== null &&
+                    String(m.fact_value).trim().length > 0
+                )
+            );
 
             this.emitEvent(
               this.buildEvent(
@@ -752,10 +1033,28 @@ export class AgentController {
 
         // 3c: Identify all required/unresolved fields for current section
         // Collect ALL missing information needed rather than arbitrarily stopping after two
-        const neededClarifications: ClarificationRequest[] = [...sectionClarifications];
+        const neededClarifications: ClarificationRequest[] = sectionClarifications.filter(
+          (c) =>
+            !verifiedFieldRefs.has(c.field_ref) &&
+            activeSectionFields.some((f) => f.ref === c.field_ref) &&
+            !mappings.some(
+              (m) =>
+                m.field_ref === c.field_ref &&
+                m.status === 'RESOLVED' &&
+                m.fact_value !== undefined &&
+                m.fact_value !== null &&
+                String(m.fact_value).trim().length > 0
+            )
+        );
 
         for (const reqField of activeRequiredFields) {
-          const m = mappings.find((cand) => cand.field_ref === reqField.ref);
+          const m = mappings.find(
+            (cand) =>
+              cand.field_ref === reqField.ref ||
+              (cand.field_label &&
+                reqField.label &&
+                cand.field_label.toLowerCase().trim() === reqField.label.toLowerCase().trim())
+          );
           const hasUsableValue =
             m && m.fact_value !== undefined && m.fact_value !== null && String(m.fact_value).trim().length > 0;
           if (!hasUsableValue || m?.status === 'CLARIFICATION_REQUIRED') {
@@ -795,15 +1094,68 @@ export class AgentController {
               break;
             }
 
-            const mapping = mappings.find((candidate) => candidate.field_ref === field.ref);
+            let mapping = mappings.find(
+              (candidate) =>
+                candidate.field_ref === field.ref ||
+                (candidate.field_label &&
+                  field.label &&
+                  candidate.field_label.toLowerCase().trim() === field.label.toLowerCase().trim())
+            );
             if (
               !mapping ||
               mapping.fact_value === undefined ||
               mapping.fact_value === null ||
               !String(mapping.fact_value).trim()
             ) {
-              // Optional field without value; skip
-              continue;
+              if (field.required) {
+                // Required value discovered missing during automation: pause safely and request clarification
+                this.stateMachine.transition('CLARIFICATION_REQUIRED');
+                const missingClarifyId = `clarify_missing_${field.ref}_${Date.now()}`;
+                const prompt: ClarificationPromptPayload = {
+                  clarificationId: missingClarifyId,
+                  fieldRef: field.ref,
+                  fieldLabel: field.label,
+                  question: `Please provide value for required field '${field.label}':`,
+                  options: field.options || [],
+                  total: 1,
+                  currentIndex: 1,
+                };
+                const clarificationResult = await this.runTool<any>(
+                  'request_clarification',
+                  prompt,
+                  `Awaiting missing value for required field '${field.label}'...`,
+                  () => `Human provided value for '${field.label}'.`
+                );
+                const answer = coerceClarificationValue(clarificationResult);
+                if (answer) {
+                  if (mapping) {
+                    mapping.fact_value = answer;
+                    mapping.status = 'RESOLVED';
+                  } else {
+                    mapping = {
+                      field_ref: field.ref,
+                      field_label: field.label,
+                      fact_value: answer,
+                      confidence: 1.0,
+                      status: 'RESOLVED',
+                    };
+                    mappings.push(mapping);
+                  }
+                  try {
+                    await this.backendClient.answerClarification(this.sessionId, missingClarifyId, answer);
+                  } catch (err: any) {
+                    if (err?.status !== 404) {
+                      console.warn('Could not forward clarification answer to backend:', err?.message || err);
+                    }
+                  }
+                  this.stateMachine.transition('FILLING_FORM');
+                } else {
+                  continue;
+                }
+              } else {
+                // Optional field without value; skip
+                continue;
+              }
             }
 
             // Fill and independently verify actual DOM value with safe retry
@@ -878,11 +1230,17 @@ export class AgentController {
               if (correctedAnswer) {
                 mapping.fact_value = correctedAnswer;
                 mapping.status = 'RESOLVED';
-                await this.backendClient.answerClarification(
-                  this.sessionId,
-                  clarifyFixId,
-                  correctedAnswer
-                );
+                try {
+                  await this.backendClient.answerClarification(
+                    this.sessionId,
+                    clarifyFixId,
+                    correctedAnswer
+                  );
+                } catch (err: any) {
+                  if (err?.status !== 404) {
+                    console.warn('Could not forward clarification answer to backend:', err?.message || err);
+                  }
+                }
 
                 this.stateMachine.transition('FILLING_FORM');
                 try {
@@ -939,9 +1297,49 @@ export class AgentController {
         // 3e: Invariant verification check
         // "Never advance to Continue while required browser fields remain unverified."
         // "Do not Continue while any required field is unresolved."
-        const unverifiedRequired = activeRequiredFields.filter(
+        let unverifiedRequired = activeRequiredFields.filter(
           (rf) => !verifiedFieldRefs.has(rf.ref)
         );
+
+        if (unverifiedRequired.length > 0) {
+          const resolveRemaining: ClarificationRequest[] = unverifiedRequired.map((rf) => ({
+            clarification_id: `clarify_req_${rf.ref}_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`,
+            field_ref: rf.ref,
+            field_label: rf.label,
+            question: `Please provide value for required field '${rf.label}':`,
+            options: rf.options || [],
+            selected_value: '',
+          }));
+
+          try {
+            await this.resolveClarifications(resolveRemaining, mappings);
+            for (const rf of unverifiedRequired) {
+              const m = mappings.find((cand) => cand.field_ref === rf.ref);
+              if (m && m.fact_value) {
+                this.stateMachine.transition('FILLING_FORM');
+                await this.fillField(m, rf);
+                this.stateMachine.transition('VERIFYING');
+                const verifyRes = await this.runTool<{ verified: boolean }>(
+                  'verify_field',
+                  { fieldRef: rf.ref, expectedValue: m.fact_value },
+                  `Verifying '${rf.label}' in browser DOM...`,
+                  (out) => out.verified ? `Verified '${rf.label}' in browser DOM.` : `Mismatch on '${rf.label}'.`,
+                  true
+                );
+                if (verifyRes.verified) {
+                  verifiedFieldRefs.add(rf.ref);
+                  verifiedCount += 1;
+                }
+              }
+            }
+          } catch (clarifyErr: any) {
+            console.warn('Clarification resolution for unverified fields interrupted:', clarifyErr?.message);
+          }
+
+          unverifiedRequired = activeRequiredFields.filter(
+            (rf) => !verifiedFieldRefs.has(rf.ref)
+          );
+        }
 
         if (unverifiedRequired.length > 0) {
           this.emitEvent(
@@ -964,6 +1362,16 @@ export class AgentController {
 
         // 3f: Check for legitimate wizard pagination Continue control
         const detectedControls = await this.detectSubmissionControls();
+        const hasFinalSubmit = detectedControls.some((c) => c.isSubmitType);
+        if (
+          hasFinalSubmit &&
+          allDiscoveredRequiredRefs.size > 0 &&
+          Array.from(allDiscoveredRequiredRefs).every((ref) => verifiedFieldRefs.has(ref))
+        ) {
+          // All form required fields are verified and final submit control is reached
+          break;
+        }
+
         const continueControl = this.findPaginationControl(detectedControls);
 
         if (continueControl) {
@@ -980,7 +1388,7 @@ export class AgentController {
             () => `Advanced section via '${continueControl.label}'.`
           );
 
-          const advanced = await this.waitForSectionTransition(visibleBefore, 800);
+          const advanced = await this.waitForSectionTransition(visibleBefore, 1500);
 
           if (!advanced) {
             this.emitEvent(

@@ -3,6 +3,7 @@ import { bridge, extractDocumentFacts, hasElectronBridge } from '../lib/bridge';
 import type {
   AgentEventPayload,
   ClarificationPromptPayload,
+  DocumentExtractionStage,
   DocumentRecord,
   ExtractedFact,
   WorkflowState,
@@ -24,6 +25,7 @@ export function useFormSession() {
   );
   const [inlineError, setInlineError] = useState<string | null>(null);
   const [isExtracting, setIsExtracting] = useState<boolean>(false);
+  const [extractionStage, setExtractionStage] = useState<DocumentExtractionStage>('idle');
   const [isAnsweringClarification, setIsAnsweringClarification] = useState<boolean>(false);
 
   useEffect(() => {
@@ -74,21 +76,33 @@ export function useFormSession() {
         setDocumentName(result.fileName || 'selected_document.pdf');
         setDocumentSize(result.fileSize || 0);
         setIsExtracting(true);
+        setExtractionStage('uploading');
+
+        await new Promise((r) => setTimeout(r, 200));
+        setExtractionStage('reading_document');
+
+        await new Promise((r) => setTimeout(r, 200));
+        setExtractionStage('extracting_information');
 
         const { facts: extracted, error } = await extractDocumentFacts({
           filePath: result.filePath,
           documentName: result.fileName,
         });
-        setIsExtracting(false);
 
         if (error) {
+          setExtractionStage('error');
           setInlineError(error);
           setFacts([]);
         } else {
+          setExtractionStage('organizing_facts');
+          await new Promise((r) => setTimeout(r, 200));
           setFacts(extracted || []);
+          setExtractionStage('completed');
         }
+        setIsExtracting(false);
       }
     } catch (err: any) {
+      setExtractionStage('error');
       setIsExtracting(false);
       setInlineError(err?.message || 'Could not select document');
     }
@@ -227,6 +241,7 @@ export function useFormSession() {
     currentClarificationIndex,
     inlineError,
     isExtracting,
+    extractionStage,
     canStart,
     disabledReason,
     handleSelectDocument,

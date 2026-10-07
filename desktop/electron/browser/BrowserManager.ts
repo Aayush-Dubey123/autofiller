@@ -9,6 +9,7 @@
  */
 
 import * as path from 'path';
+import * as fs from 'fs';
 import { chromium, Browser, BrowserContext, Page, Locator } from 'playwright';
 import { FormScanner, FormSnapshot } from './FormScanner';
 import { PolicyEngine, SubmissionControl } from '../policy/PolicyEngine';
@@ -143,7 +144,14 @@ export class BrowserManager {
       const isMockForm = url.includes('mock_school_form.html');
       if (isConnRefused && isMockForm) {
         const fallbackBackendUrl = 'http://127.0.0.1:8000/mock_school_form.html';
-        const fallbackFileUrl = `file://${path.resolve(__dirname, '../../test-fixtures/mock_school_form.html').replace(/\\/g, '/')}`;
+        const candidatePaths = [
+          path.resolve(__dirname, '../../public/mock_school_form.html'),
+          path.resolve(__dirname, '../../../desktop/public/mock_school_form.html'),
+          path.resolve(__dirname, '../../test-fixtures/mock_school_form.html'),
+          path.resolve(__dirname, '../../../test-fixtures/mock_school_form.html'),
+        ];
+        const found = candidatePaths.find((p) => fs.existsSync(p));
+        const fallbackFileUrl = found ? `file://${found.replace(/\\/g, '/')}` : '';
         console.warn(`Target form ${url} unreachable. Attempting fallback to ${fallbackBackendUrl}...`);
         try {
           await this.withCancellation(
@@ -151,11 +159,13 @@ export class BrowserManager {
             this.page!.goto(fallbackBackendUrl, { waitUntil: 'load', timeout: 10000 })
           );
         } catch {
-          console.warn(`Fallback to backend mock form failed. Attempting local file: ${fallbackFileUrl}`);
-          await this.withCancellation(
-            signal,
-            this.page!.goto(fallbackFileUrl, { waitUntil: 'load', timeout: 10000 })
-          );
+          if (fallbackFileUrl) {
+            console.warn(`Fallback to backend mock form failed. Attempting local file: ${fallbackFileUrl}`);
+            await this.withCancellation(
+              signal,
+              this.page!.goto(fallbackFileUrl, { waitUntil: 'load', timeout: 10000 })
+            );
+          }
         }
       } else {
         throw error;
@@ -877,9 +887,11 @@ export class BrowserManager {
     if (selector) {
       const candidate = this.page.locator(selector);
       const isVis = await candidate.isVisible().catch(() => false);
-      const isDis = await candidate.isDisabled().catch(() => true);
-      if (isVis && !isDis) {
-        target = candidate;
+      if (isVis) {
+        const isDis = await candidate.isDisabled({ timeout: 500 }).catch(() => true);
+        if (!isDis) {
+          target = candidate;
+        }
       }
     }
 
@@ -890,15 +902,17 @@ export class BrowserManager {
       for (let i = 0; i < count; i++) {
         const candidate = candidates.nth(i);
         const isVis = await candidate.isVisible().catch(() => false);
-        const isDis = await candidate.isDisabled().catch(() => true);
-        if (isVis && !isDis) {
-          const text =
-            (await candidate.textContent().catch(() => ''))?.trim() ||
-            (await candidate.getAttribute('value').catch(() => ''))?.trim() ||
-            '';
-          if (text.toLowerCase() === label.trim().toLowerCase()) {
-            target = candidate;
-            break;
+        if (isVis) {
+          const isDis = await candidate.isDisabled({ timeout: 500 }).catch(() => true);
+          if (!isDis) {
+            const text =
+              (await candidate.textContent().catch(() => ''))?.trim() ||
+              (await candidate.getAttribute('value').catch(() => ''))?.trim() ||
+              '';
+            if (text.toLowerCase() === label.trim().toLowerCase()) {
+              target = candidate;
+              break;
+            }
           }
         }
       }
@@ -914,7 +928,7 @@ export class BrowserManager {
     await this.clearHighlight().catch(() => {});
 
     // Allow page to settle
-    await this.page.waitForLoadState('domcontentloaded').catch(() => {});
+    await this.page.waitForLoadState('domcontentloaded', { timeout: 500 }).catch(() => {});
     await this.page.waitForTimeout(200).catch(() => {});
 
     return { success: true, label };

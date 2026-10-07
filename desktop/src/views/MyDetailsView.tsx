@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { FileUp, Plus, RefreshCw, Trash2, User, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FileUp, Plus, RefreshCw, RotateCw, Trash2, User, X } from 'lucide-react';
 import { bridge } from '../lib/bridge';
-import type { ExtractedFact, ProfileRecord, VaultField, VaultSection } from '../types/autofiller';
+import type { DocumentExtractionStage, ExtractedFact, ProfileRecord, VaultField, VaultSection } from '../types/autofiller';
 import { FieldEditModal } from './my-details/FieldEditModal';
 import { ImportDocumentModal } from './my-details/ImportDocumentModal';
 import { ProfileSectionCard } from './my-details/ProfileSectionCard';
@@ -84,6 +84,8 @@ export const MyDetailsView: React.FC<MyDetailsViewProps> = ({ onProfileSaved }) 
   const [showSensitive, setShowSensitive] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [importStage, setImportStage] = useState<DocumentExtractionStage>('idle');
+  const [importStageMessage, setImportStageMessage] = useState<string>('');
 
   const [editingField, setEditingField] = useState<{
     sectionId: string;
@@ -195,15 +197,34 @@ export const MyDetailsView: React.FC<MyDetailsViewProps> = ({ onProfileSaved }) 
       if (sel.canceled || !sel.filePath) return;
 
       setIsLoading(true);
+      setImportStage('uploading');
+      setImportStageMessage('Uploading and staging document securely...');
+
+      await new Promise((r) => setTimeout(r, 200));
+      setImportStage('reading_document');
+      setImportStageMessage('Reading document structure...');
+
+      await new Promise((r) => setTimeout(r, 200));
+      setImportStage('extracting_information');
+      setImportStageMessage('Extracting document facts...');
+
       const res = await bridge.extractDocument({ filePath: sel.filePath, documentName: sel.fileName });
       if ('error' in res) {
+        setImportStage('error');
+        setImportStageMessage(res.error || 'Extraction failed');
         setStatusMessage({ type: 'error', text: res.error });
         return;
       }
       if (res.facts.length === 0) {
+        setImportStage('error');
+        setImportStageMessage('No facts could be extracted from this document.');
         setStatusMessage({ type: 'error', text: 'No facts could be extracted from this document.' });
         return;
       }
+
+      setImportStage('organizing_facts');
+      setImportStageMessage('Organizing extracted facts for review...');
+      await new Promise((r) => setTimeout(r, 200));
 
       const selectMap: Record<string, boolean> = {};
       res.facts.forEach((f) => {
@@ -211,7 +232,11 @@ export const MyDetailsView: React.FC<MyDetailsViewProps> = ({ onProfileSaved }) 
       });
       setSelectedImportKeys(selectMap);
       setImportReview({ facts: res.facts, fileName: sel.fileName || 'document' });
+      setImportStage('completed');
+      setImportStageMessage(`Extracted ${res.facts.length} facts from ${sel.fileName || 'document'}.`);
     } catch (err: any) {
+      setImportStage('error');
+      setImportStageMessage(err?.message || 'Extraction failed');
       setStatusMessage({ type: 'error', text: err?.message || 'Extraction failed' });
     } finally {
       setIsLoading(false);
@@ -329,6 +354,105 @@ export const MyDetailsView: React.FC<MyDetailsViewProps> = ({ onProfileSaved }) 
           </button>
         </div>
       </div>
+
+      {/* Document Extraction Progress States */}
+      {importStage !== 'idle' && (
+        <div
+          style={{
+            padding: '14px 16px',
+            borderRadius: 'var(--radius-md)',
+            background: importStage === 'error' ? '#FEF2F2' : '#F0FDF4',
+            border: `1px solid ${importStage === 'error' ? '#FCA5A5' : '#86EFAC'}`,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {importStage === 'completed' && <CheckCircle2 size={18} color="#16654E" />}
+              {importStage === 'error' && <AlertTriangle size={18} color="#DC2626" />}
+              {importStage !== 'completed' && importStage !== 'error' && (
+                <RotateCw size={18} color="#16654E" className="animate-spin" />
+              )}
+              <span
+                style={{
+                  fontWeight: 700,
+                  fontSize: '0.875rem',
+                  color: importStage === 'error' ? '#991B1B' : '#0F2E23',
+                }}
+              >
+                {importStageMessage}
+              </span>
+            </div>
+            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+              {importStage === 'uploading' && '1/4 Uploading'}
+              {importStage === 'reading_document' && '2/4 Reading'}
+              {importStage === 'extracting_information' && '3/4 Extracting'}
+              {importStage === 'organizing_facts' && '4/4 Organizing'}
+              {importStage === 'completed' && 'Completed'}
+              {importStage === 'error' && 'Error'}
+            </span>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
+            {[
+              { id: 'uploading', label: '1. Uploading' },
+              { id: 'reading_document', label: '2. Reading' },
+              { id: 'extracting_information', label: '3. Extracting Facts' },
+              { id: 'organizing_facts', label: '4. Organizing' },
+            ].map((step, idx) => {
+              const order = ['uploading', 'reading_document', 'extracting_information', 'organizing_facts'];
+              const currentIdx = order.indexOf(importStage);
+              const isDone = importStage === 'completed' || currentIdx > idx;
+              const isActive = importStage === step.id;
+              const isFailed = importStage === 'error' && (currentIdx === idx || (currentIdx === -1 && idx === 0));
+
+              let pillBg = 'rgba(0, 0, 0, 0.04)';
+              let pillColor = 'var(--text-muted)';
+              let pillBorder = 'transparent';
+
+              if (isDone) {
+                pillBg = '#DCFCE7';
+                pillColor = '#16654E';
+                pillBorder = '#86EFAC';
+              } else if (isActive) {
+                pillBg = '#E0F2FE';
+                pillColor = '#0369A1';
+                pillBorder = '#7DD3FC';
+              } else if (isFailed) {
+                pillBg = '#FEE2E2';
+                pillColor = '#991B1B';
+                pillBorder = '#FCA5A5';
+              }
+
+              return (
+                <div
+                  key={step.id}
+                  style={{
+                    padding: '6px 8px',
+                    borderRadius: 'var(--radius-sm)',
+                    background: pillBg,
+                    color: pillColor,
+                    border: `1px solid ${pillBorder}`,
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    textAlign: 'center',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '4px',
+                  }}
+                >
+                  {isDone && <CheckCircle2 size={12} />}
+                  {isActive && <RotateCw size={12} className="animate-spin" />}
+                  <span>{step.label}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {statusMessage && (
         <div

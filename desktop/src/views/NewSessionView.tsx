@@ -19,6 +19,7 @@ import {
 import { bridge, hasElectronBridge } from '../lib/bridge';
 import type {
   AgentEventPayload,
+  DocumentExtractionStage,
   ExtractedFact,
   ProfileRecord,
   WorkflowState,
@@ -72,6 +73,8 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
   const [uploadedDocSize, setUploadedDocSize] = useState<number>(propDocumentSize || 0);
   const [docFacts, setDocFacts] = useState<ExtractedFact[]>(propFacts || []);
   const [isExtractingDoc, setIsExtractingDoc] = useState<boolean>(false);
+  const [extractionStage, setExtractionStage] = useState<DocumentExtractionStage>('idle');
+  const [extractionStageMessage, setExtractionStageMessage] = useState<string>('');
 
   // ID fields permission
   const [fillIdFields, setFillIdFields] = useState<boolean>(false);
@@ -196,21 +199,42 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
       setUploadedDocSize(sel.fileSize || 0);
 
       setIsExtractingDoc(true);
+      setExtractionStage('uploading');
+      setExtractionStageMessage('Uploading and staging document securely...');
+
+      await new Promise((r) => setTimeout(r, 200));
+      setExtractionStage('reading_document');
+      setExtractionStageMessage('Reading document structure and content...');
+
+      await new Promise((r) => setTimeout(r, 200));
+      setExtractionStage('extracting_information');
+      setExtractionStageMessage('Extracting document facts...');
+
       const res = await bridge.extractDocument({
         filePath: sel.filePath,
         documentName: sel.fileName,
       });
 
       if ('error' in res) {
+        setExtractionStage('error');
+        setExtractionStageMessage(res.error || 'Failed to extract document facts.');
         setLocalError(res.error);
         setDocFacts([]);
         onSetFacts([]);
       } else {
+        setExtractionStage('organizing_facts');
+        setExtractionStageMessage('Organizing and verifying extracted facts...');
+        await new Promise((r) => setTimeout(r, 200));
+
         const extracted = res.facts || [];
         setDocFacts(extracted);
         onSetFacts(extracted);
+        setExtractionStage('completed');
+        setExtractionStageMessage(`Extraction complete: ${extracted.length} facts organized.`);
       }
     } catch (err: any) {
+      setExtractionStage('error');
+      setExtractionStageMessage(err?.message || 'Document selection error');
       setLocalError(err?.message || 'Document selection error');
     } finally {
       setIsExtractingDoc(false);
@@ -419,6 +443,107 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                 <span>{uploadedDocName ? 'Change Document' : 'Choose Document'}</span>
               </button>
             </div>
+
+            {/* Document Extraction Progress States */}
+            {extractionStage !== 'idle' && (
+              <div
+                style={{
+                  marginTop: '14px',
+                  padding: '14px 16px',
+                  borderRadius: 'var(--radius-md)',
+                  background: extractionStage === 'error' ? '#FEF2F2' : '#F0FDF4',
+                  border: `1px solid ${extractionStage === 'error' ? '#FCA5A5' : '#86EFAC'}`,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {extractionStage === 'completed' && <CheckCircle2 size={18} color="#16654E" />}
+                    {extractionStage === 'error' && <AlertTriangle size={18} color="#DC2626" />}
+                    {extractionStage !== 'completed' && extractionStage !== 'error' && (
+                      <RotateCw size={18} color="#16654E" className="animate-spin" />
+                    )}
+                    <span
+                      style={{
+                        fontWeight: 700,
+                        fontSize: '0.875rem',
+                        color: extractionStage === 'error' ? '#991B1B' : '#0F2E23',
+                      }}
+                    >
+                      {extractionStageMessage}
+                    </span>
+                  </div>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                    {extractionStage === 'uploading' && '1/4 Uploading'}
+                    {extractionStage === 'reading_document' && '2/4 Reading'}
+                    {extractionStage === 'extracting_information' && '3/4 Extracting'}
+                    {extractionStage === 'organizing_facts' && '4/4 Organizing'}
+                    {extractionStage === 'completed' && 'Completed'}
+                    {extractionStage === 'error' && 'Error'}
+                  </span>
+                </div>
+
+                {/* Progressive Stage Steps */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
+                  {[
+                    { id: 'uploading', label: '1. Uploading' },
+                    { id: 'reading_document', label: '2. Reading Document' },
+                    { id: 'extracting_information', label: '3. Extracting Facts' },
+                    { id: 'organizing_facts', label: '4. Organizing' },
+                  ].map((step, idx) => {
+                    const order = ['uploading', 'reading_document', 'extracting_information', 'organizing_facts'];
+                    const currentIdx = order.indexOf(extractionStage);
+                    const isDone = extractionStage === 'completed' || (currentIdx > idx);
+                    const isActive = extractionStage === step.id;
+                    const isFailed = extractionStage === 'error' && (currentIdx === idx || (currentIdx === -1 && idx === 0));
+
+                    let pillBg = 'rgba(0, 0, 0, 0.04)';
+                    let pillColor = 'var(--text-muted)';
+                    let pillBorder = 'transparent';
+
+                    if (isDone) {
+                      pillBg = '#DCFCE7';
+                      pillColor = '#16654E';
+                      pillBorder = '#86EFAC';
+                    } else if (isActive) {
+                      pillBg = '#E0F2FE';
+                      pillColor = '#0369A1';
+                      pillBorder = '#7DD3FC';
+                    } else if (isFailed) {
+                      pillBg = '#FEE2E2';
+                      pillColor = '#991B1B';
+                      pillBorder = '#FCA5A5';
+                    }
+
+                    return (
+                      <div
+                        key={step.id}
+                        style={{
+                          padding: '6px 8px',
+                          borderRadius: 'var(--radius-sm)',
+                          background: pillBg,
+                          color: pillColor,
+                          border: `1px solid ${pillBorder}`,
+                          fontSize: '0.75rem',
+                          fontWeight: 700,
+                          textAlign: 'center',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '4px',
+                        }}
+                      >
+                        {isDone && <CheckCircle2 size={12} />}
+                        {isActive && <RotateCw size={12} className="animate-spin" />}
+                        <span>{step.label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

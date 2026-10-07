@@ -139,6 +139,8 @@ export interface StartSessionOptions {
   targetUrl: string;
   /** Explicit runtime permission to fill ID-number fields. */
   fillIdFields?: boolean;
+  /** Optional preflight required fact keys to verify before opening the target form. */
+  requiredFactKeys?: string[];
 }
 
 /** Result of a native document selection dialog. */
@@ -150,6 +152,16 @@ export interface DocumentSelection {
   fileSize?: number;
   error?: string;
 }
+
+/** User-visible progress states during document processing. */
+export type DocumentExtractionStage =
+  | 'idle'
+  | 'uploading'
+  | 'reading_document'
+  | 'extracting_information'
+  | 'organizing_facts'
+  | 'completed'
+  | 'error';
 
 /** A past automation session metadata persisted in the userData JSON store (no values). */
 export interface SessionRecord {

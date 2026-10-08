@@ -577,6 +577,9 @@ export const App: React.FC = () => {
               onSetTargetUrl={session.setTargetUrl}
               onSetInstruction={session.setInstruction}
               onStopSession={session.stopSession}
+              onOpenHistory={() => handleNavigate('History')}
+              onResetSession={session.resetSession}
+              onConfirmSubmission={() => void bridge.confirmSubmission()}
             />
           )}
 

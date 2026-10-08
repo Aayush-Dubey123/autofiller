@@ -86,6 +86,10 @@ export class AgentController {
   private eventListeners: Array<(event: AgentEventPayload) => void> = [];
   private clarificationListeners: Array<(prompt: ClarificationPromptPayload) => void> = [];
 
+  private lastTotalFields: number = 0;
+  private lastVerifiedCount: number = 0;
+  private submissionWatcherActive: boolean = false;
+
   /**
    * Create the agent controller.
    *
@@ -443,8 +447,102 @@ export class AgentController {
     }
 
     this.isRunning = false;
-    this.stateMachine.transition('IDLE');
-    this.emitEvent(this.buildEvent('STATE_CHANGED', 'Workflow stopped by user.'));
+    if (this.stateMachine.getState() !== 'COMPLETED') {
+      this.stateMachine.transition('IDLE');
+      this.emitEvent(this.buildEvent('STATE_CHANGED', 'Workflow stopped by user.'));
+    }
+  }
+
+  /**
+   * Passively monitor the active browser page in the background while at REVIEW_READY
+   * to detect when the human operator manually clicks Submit and the website confirms success.
+   */
+  private startSubmissionWatcher(): void {
+    if (this.submissionWatcherActive) return;
+    this.submissionWatcherActive = true;
+
+    (async () => {
+      try {
+        while (
+          !this.isStoppedState &&
+          this.stateMachine.getState() === 'REVIEW_READY' &&
+          !this.browserManager.isPageClosed()
+        ) {
+          const confirmed = await this.browserManager.checkSubmissionConfirmed();
+          if (confirmed) {
+            await this.finalizeSubmissionSuccess();
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 350));
+        }
+      } catch {
+        // Passive diagnostic watcher error is non-fatal
+      } finally {
+        this.submissionWatcherActive = false;
+      }
+    })();
+  }
+
+  /**
+   * Transition session to terminal COMPLETED state after manual submission confirmation,
+   * cleanly closing the browser and finalizing the session without losing history.
+   */
+  public async finalizeSubmissionSuccess(): Promise<void> {
+    if (this.stateMachine.getState() === 'COMPLETED') return;
+
+    this.stateMachine.transition('COMPLETED');
+    this.emitEvent(
+      this.buildEvent(
+        'STATE_CHANGED',
+        'Website confirmed submission success. AutoFiller session completed.',
+        {
+          metadata: {
+            status: 'COMPLETED',
+            totalFields: this.lastTotalFields || undefined,
+            verifiedCount: this.lastVerifiedCount || undefined,
+          },
+        }
+      )
+    );
+
+    // Drain persistence queue so all final events persist
+    await this.drainPersistenceQueue(2000).catch(() => {});
+
+    // Close and release Playwright browser cleanly
+    await this.browserManager.close().catch(() => {});
+
+    // Safely purge backend session
+    await this.purgeSessionSafely().catch(() => {});
+
+    this.isRunning = false;
+  }
+
+  /**
+   * Programmatic entrypoint for user to manually confirm submission from UI.
+   */
+  public async confirmManualSubmission(): Promise<void> {
+    await this.finalizeSubmissionSuccess();
+  }
+
+  /**
+   * Await manual submission confirmation on the active page.
+   *
+   * @param timeoutMs Maximum milliseconds to wait.
+   * @returns True if session reached COMPLETED.
+   */
+  public async waitForManualSubmission(timeoutMs: number = 5000): Promise<boolean> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (this.stateMachine.getState() === 'COMPLETED') return true;
+      if (this.isStoppedState) return false;
+      const confirmed = await this.browserManager.checkSubmissionConfirmed();
+      if (confirmed) {
+        await this.finalizeSubmissionSuccess();
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    return this.stateMachine.getState() === 'COMPLETED';
   }
 
   /**
@@ -1442,6 +1540,8 @@ export class AgentController {
       });
 
       if (allRequiredVerified && !hasFailedRequired && this.stateMachine.getState() !== 'CLARIFICATION_REQUIRED') {
+        this.lastTotalFields = mappings.length;
+        this.lastVerifiedCount = verifiedCount;
         this.stateMachine.transition('REVIEW_READY');
         const failureSummary =
           failedFields.length > 0
@@ -1456,10 +1556,16 @@ export class AgentController {
               metadata: {
                 failedFields,
                 submissionControls: submissionCheck.controls,
+                totalFields: mappings.length,
+                verifiedCount,
               },
             }
           )
         );
+
+        // Attach listener and start passive background watcher to detect operator manual submission
+        await this.browserManager.setupSubmissionListener().catch(() => {});
+        this.startSubmissionWatcher();
       } else {
         if (this.stateMachine.getState() !== 'CLARIFICATION_REQUIRED') {
           this.stateMachine.transition('CLARIFICATION_REQUIRED');

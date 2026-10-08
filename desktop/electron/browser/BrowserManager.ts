@@ -936,6 +936,130 @@ export class BrowserManager {
 
 
   /**
+   * Check whether the Playwright page is currently closed or uninitialized.
+   */
+  public isPageClosed(): boolean {
+    return !this.page || this.page.isClosed();
+  }
+
+  /**
+   * Attach non-intrusive listeners to the active page to detect custom submission events
+   * emitted by forms upon successful manual submission.
+   */
+  public async setupSubmissionListener(): Promise<void> {
+    if (!this.page || this.page.isClosed()) return;
+    try {
+      await this.page.evaluate(() => {
+        if ((window as any).__autofiller_listener_attached) return;
+        (window as any).__autofiller_listener_attached = true;
+        (window as any).__autofiller_submitted = false;
+
+        const markSubmitted = () => {
+          (window as any).__autofiller_submitted = true;
+        };
+
+        window.addEventListener('autofiller:submitted', markSubmitted, { passive: true });
+        window.addEventListener('formpilot:submitted', markSubmitted, { passive: true });
+      });
+    } catch {
+      // Ignored if page context is destroyed or unavailable
+    }
+  }
+
+  /**
+   * Check whether the active page displays an unambiguous post-submission confirmation state.
+   *
+   * Detects:
+   * 1. Window custom event flags (__autofiller_submitted).
+   * 2. Visible confirmation elements (#submitted-confirmation, .submitted-confirmation, etc.).
+   * 3. Typical confirmation copy in visible inner text.
+   * 4. Confirmation / thank-you URLs.
+   *
+   * @returns True if submission confirmation is active on the page.
+   */
+  public async checkSubmissionConfirmed(): Promise<boolean> {
+    if (!this.page || this.page.isClosed()) return false;
+    try {
+      return await this.page.evaluate(() => {
+        // 1. Check window event flag
+        if ((window as any).__autofiller_submitted) return true;
+
+        // 2. Check explicit ID/class confirmation elements
+        const idConf = document.getElementById('submitted-confirmation');
+        if (idConf) {
+          const style = window.getComputedStyle(idConf);
+          if (style.display !== 'none' && style.visibility !== 'hidden') {
+            return true;
+          }
+        }
+
+        const classConf = document.querySelector('.submitted-confirmation, [data-submitted]');
+        if (classConf) {
+          const style = window.getComputedStyle(classConf);
+          if (style.display !== 'none' && style.visibility !== 'hidden') {
+            return true;
+          }
+        }
+
+        // 3. Check page text for unambiguous submission confirmation indicators
+        const bodyText = document.body ? document.body.innerText : '';
+        const confirmationPatterns = [
+          /application submitted successfully/i,
+          /form submitted successfully/i,
+          /submitted successfully/i,
+          /submission received/i,
+          /thank you for your submission/i,
+          /thank you for submitting/i,
+          /your response has been recorded/i,
+        ];
+        for (const pattern of confirmationPatterns) {
+          if (pattern.test(bodyText)) {
+            return true;
+          }
+        }
+
+        // 4. Check URL pathname for redirect confirmation
+        const path = window.location.pathname.toLowerCase();
+        if (
+          path.includes('/submitted') ||
+          path.includes('/thank-you') ||
+          path.includes('/confirmation') ||
+          path.includes('/success')
+        ) {
+          return true;
+        }
+
+        return false;
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Wait for submission confirmation on the active page with a bounded timeout.
+   *
+   * @param timeoutMs Maximum milliseconds to wait.
+   * @param signal Cancellation signal.
+   * @returns True if confirmation was detected within timeoutMs.
+   */
+  public async waitForSubmissionConfirmation(
+    timeoutMs: number = 30000,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    if (!this.page || this.page.isClosed()) return false;
+    await this.setupSubmissionListener().catch(() => {});
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (signal?.aborted || !this.page || this.page.isClosed()) return false;
+      const confirmed = await this.checkSubmissionConfirmed();
+      if (confirmed) return true;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    return false;
+  }
+
+  /**
    * Close the Playwright browser and clear cached state.
    */
   public async close(): Promise<void> {
@@ -948,3 +1072,4 @@ export class BrowserManager {
     }
   }
 }
+

@@ -77,12 +77,18 @@ export const HistoryView: React.FC = () => {
 
   const getStatusBadge = (status: string) => {
     switch (status) {
-      case 'REVIEW_READY':
       case 'COMPLETED':
         return (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#F0FDF4', color: '#16654E', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 700, border: '1px solid #86EFAC' }}>
             <CheckCircle size={12} />
-            <span>Ready / Complete</span>
+            <span>Submitted</span>
+          </span>
+        );
+      case 'REVIEW_READY':
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#ECFDF5', color: '#047857', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 700, border: '1px solid #A7F3D0' }}>
+            <CheckCircle size={12} />
+            <span>Review Ready</span>
           </span>
         );
       case 'ERROR':
@@ -296,7 +302,7 @@ export const HistoryView: React.FC = () => {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexShrink: 0 }}>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '0.9375rem', fontWeight: 800, color: '#16654E' }}>
-                      {session.fieldsFilled} {session.totalFields ? `/ ${session.totalFields}` : ''}
+                      {session.fieldsFilled} {session.totalFields ? `/ ${Math.max(session.totalFields, session.fieldsFilled)}` : ''}
                     </div>
                     <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>Fields Filled</div>
                   </div>

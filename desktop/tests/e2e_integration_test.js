@@ -21,6 +21,7 @@ const DIST = path.resolve(__dirname, '../dist-electron');
 const { AgentController } = require(path.join(DIST, 'agent/AgentController'));
 const { BrowserManager } = require(path.join(DIST, 'browser/BrowserManager'));
 const { PolicyEngine } = require(path.join(DIST, 'policy/PolicyEngine'));
+const { HistoryStore } = require(path.join(DIST, 'services/HistoryStore'));
 
 const fs = require('fs');
 
@@ -1406,6 +1407,129 @@ async function runE2E() {
     );
 
     await controller.cleanup();
+  });
+
+  await test('Phase 9F: manual submit by user triggers automated detection, transitions to COMPLETED, and cleanly closes session', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    const controller = new AgentController(backend);
+
+    await controller.startSession({
+      documentText: 'Student Name: Aarav Sharma',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+    });
+
+    // 1. Agent halts at REVIEW_READY without submitting
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      'Agent must halt at REVIEW_READY before manual submission'
+    );
+
+    // 2. Browser remains open for operator review
+    const bm = controller.getBrowserManager();
+    assert.ok(bm.page && !bm.page.isClosed(), 'Browser must remain open for human review');
+
+    // 3. Operator reviews and clicks final submit on Section 5
+    await bm.page.evaluate(() => {
+      const submitBtn = document.querySelector('button[type="submit"], input[type="submit"]');
+      if (submitBtn) {
+        submitBtn.click();
+      } else {
+        const form = document.querySelector('form');
+        if (form) form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      }
+    });
+
+    // 4. Await manual submission detection
+    const completed = await controller.waitForManualSubmission(5000);
+    assert.strictEqual(completed, true, 'Controller must detect submission and reach COMPLETED');
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'COMPLETED',
+      'State machine must be in terminal COMPLETED state'
+    );
+
+    // 5. Browser must be cleanly closed after session completion
+    assert.strictEqual(
+      bm.page,
+      null,
+      'Browser must be cleanly closed after session completion'
+    );
+
+    await controller.cleanup();
+  });
+
+  await test('Phase 9F: session finalization preserves COMPLETED history status and accurate field counts without IDLE downgrade', async () => {
+    const scratchDir = path.join(__dirname, `scratch_test_history_${Date.now()}`);
+    if (!fs.existsSync(scratchDir)) fs.mkdirSync(scratchDir, { recursive: true });
+
+    try {
+      const historyStore = new HistoryStore(scratchDir);
+      const backend = makeStubBackend(FORM_URL);
+      const controller = new AgentController(backend);
+
+      // Wire historyStore to controller lifecycle
+      historyStore.beginSession({
+        targetUrl: FORM_URL,
+        profileName: 'Student Profile',
+        dataSource: 'both',
+        totalFields: 12, // Initial fact count
+      });
+
+      controller.onEvent((e) => historyStore.noteEvent(e));
+      controller.getStateMachine().onTransition((s) => historyStore.noteState(s));
+
+      await controller.startSession({
+        documentText: 'Student Name: Aarav Sharma',
+        documentName: 'student.pdf',
+        targetUrl: FORM_URL,
+      });
+
+      assert.strictEqual(controller.getStateMachine().getState(), 'REVIEW_READY');
+
+      // Operator manually submits
+      const bm = controller.getBrowserManager();
+      await bm.page.evaluate(() => {
+        const submitBtn = document.querySelector('button[type="submit"], input[type="submit"]');
+        if (submitBtn) submitBtn.click();
+      });
+
+      await controller.waitForManualSubmission(5000);
+      assert.strictEqual(controller.getStateMachine().getState(), 'COMPLETED');
+
+      // Operator later stops / clears active controller
+      await controller.stop();
+
+      // Verify history records
+      const sessions = historyStore.listSessions();
+      assert.strictEqual(sessions.length, 1);
+      const rec = sessions[0];
+
+      // Must be COMPLETED, not IDLE
+      assert.strictEqual(
+        rec.status,
+        'COMPLETED',
+        'History record must retain COMPLETED status and not be downgraded to IDLE'
+      );
+
+      // Fields ratio must be truthful: totalFields >= fieldsFilled, no "15 / 12"
+      assert.ok(rec.fieldsFilled > 0, 'fieldsFilled must be greater than zero');
+      assert.ok(
+        rec.totalFields >= rec.fieldsFilled,
+        `totalFields (${rec.totalFields}) must be >= fieldsFilled (${rec.fieldsFilled})`
+      );
+
+      // Strict privacy check: no raw personal values in history record
+      const serialized = JSON.stringify(rec);
+      assert.strictEqual(serialized.includes('Aarav Sharma'), false, 'No raw student name in history');
+      assert.strictEqual(serialized.includes('aarav@example.com'), false, 'No raw email in history');
+      assert.strictEqual(serialized.includes('9876543210'), false, 'No raw phone in history');
+
+      await controller.cleanup();
+    } finally {
+      if (fs.existsSync(scratchDir)) fs.rmSync(scratchDir, { recursive: true, force: true });
+    }
   });
 
   console.log(`\nAll ${passed} end-to-end assertions passed.`);

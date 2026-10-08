@@ -103,9 +103,22 @@ export class HistoryStore {
   public noteState(state: WorkflowState): void {
     const record = this.active();
     if (!record) return;
+
+    // Never downgrade a completed session to IDLE upon session stop/cleanup
+    if (record.status === 'COMPLETED' && state === 'IDLE') {
+      this.activeId = null;
+      return;
+    }
+
     record.status = state;
     if (FINISHED_STATES.has(state)) {
       if (state === 'ERROR') record.error = this.lastFailure || 'Session failed.';
+      if (state === 'COMPLETED') {
+        const currentTotal = record.totalFields ?? 0;
+        if (currentTotal > 0 && record.fieldsFilled > currentTotal) {
+          record.totalFields = record.fieldsFilled;
+        }
+      }
     }
     this.save();
   }
@@ -114,8 +127,29 @@ export class HistoryStore {
   public noteEvent(event: AgentEventPayload): void {
     const record = this.active();
     if (!record) return;
+
+    // Synchronize authoritative totalFields from mapping or completion metadata
+    if (typeof event.metadata?.totalFields === 'number' && event.metadata.totalFields > 0) {
+      record.totalFields = event.metadata.totalFields;
+      this.save();
+    }
+
+    // Synchronize verifiedCount if present
+    if (typeof event.metadata?.verifiedCount === 'number' && event.metadata.verifiedCount >= 0) {
+      record.fieldsFilled = event.metadata.verifiedCount;
+      const currentTotal = record.totalFields ?? 0;
+      if (currentTotal < record.fieldsFilled) {
+        record.totalFields = record.fieldsFilled;
+      }
+      this.save();
+    }
+
     if (event.type === 'TOOL_COMPLETED' && event.success === true && FILL_TOOLS.has(event.tool ?? '')) {
       record.fieldsFilled += 1;
+      const currentTotal = record.totalFields ?? 0;
+      if (currentTotal < record.fieldsFilled) {
+        record.totalFields = record.fieldsFilled;
+      }
       this.save();
     } else if (event.type === 'TOOL_FAILED') {
       // Store descriptive reason without field values
@@ -125,6 +159,20 @@ export class HistoryStore {
         this.save();
       }
     }
+  }
+
+  /** Mark the active session as cleanly completed. */
+  public completeSession(): void {
+    const record = this.active();
+    if (record) {
+      record.status = 'COMPLETED';
+      const currentTotal = record.totalFields ?? 0;
+      if (currentTotal > 0 && record.fieldsFilled > currentTotal) {
+        record.totalFields = record.fieldsFilled;
+      }
+      this.save();
+    }
+    this.activeId = null;
   }
 
   /** Delete a single session record by ID. */
@@ -178,11 +226,21 @@ export class HistoryStore {
 
   private save(): void {
     try {
-      const temp = `${this.filePath}.tmp`;
-      fs.writeFileSync(temp, JSON.stringify(this.data, null, 2), { mode: 0o600 });
-      fs.renameSync(temp, this.filePath);
+      const serialized = JSON.stringify(this.data, null, 2);
+      const temp = `${this.filePath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+      try {
+        fs.writeFileSync(temp, serialized, { mode: 0o600 });
+        fs.renameSync(temp, this.filePath);
+      } catch {
+        // Fallback for Windows file lock / EPERM race condition
+        fs.writeFileSync(this.filePath, serialized, { mode: 0o600 });
+        try {
+          if (fs.existsSync(temp)) fs.unlinkSync(temp);
+        } catch {}
+      }
     } catch (error) {
       console.error('Could not persist history store:', error);
     }
   }
 }
+

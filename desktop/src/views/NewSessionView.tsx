@@ -15,6 +15,7 @@ import {
   UploadCloud,
   User,
   Layers,
+  History,
 } from 'lucide-react';
 import { bridge, hasElectronBridge } from '../lib/bridge';
 import type {
@@ -45,6 +46,9 @@ interface NewSessionViewProps {
   onSetTargetUrl: (url: string) => void;
   onSetInstruction: (inst: string) => void;
   onStopSession?: () => void;
+  onOpenHistory?: () => void;
+  onResetSession?: () => void;
+  onConfirmSubmission?: () => void;
 }
 
 export const NewSessionView: React.FC<NewSessionViewProps> = ({
@@ -56,9 +60,14 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
   events,
   inlineError: propInlineError,
   isExtracting: propIsExtracting,
+  canStart: propCanStart,
+  disabledReason: propDisabledReason,
   onSetTargetUrl,
   onSetFacts,
   onStopSession,
+  onOpenHistory,
+  onResetSession,
+  onConfirmSubmission,
 }) => {
   const [dataSourceMode, setDataSourceMode] = useState<DataSourceMode>(() => {
     if (propFacts && propFacts.length > 0) return 'document';
@@ -317,6 +326,144 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
         >
           <AlertCircle size={18} />
           <span>{localError || propInlineError}</span>
+        </div>
+      )}
+
+      {/* Session Completed Banner */}
+      {state === 'COMPLETED' && (
+        <div
+          style={{
+            padding: '24px 28px',
+            borderRadius: 'var(--radius-lg)',
+            background: '#F0FDF4',
+            border: '2px solid #86EFAC',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px',
+            boxShadow: '0 4px 16px rgba(22, 101, 78, 0.08)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div
+              style={{
+                width: '44px',
+                height: '44px',
+                borderRadius: '50%',
+                background: '#DCFCE7',
+                color: '#16654E',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <CheckCircle2 size={24} />
+            </div>
+            <div>
+              <h3 style={{ fontSize: '1.125rem', fontWeight: 800, color: '#0F2E23' }}>
+                Application Submitted Successfully!
+              </h3>
+              <p style={{ fontSize: '0.875rem', color: '#16654E', marginTop: '2px' }}>
+                The web form was reviewed and manually submitted by the operator. AutoFiller has finalized the session and safely saved the metadata record.
+              </p>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', paddingTop: '4px' }}>
+            {onOpenHistory && (
+              <button
+                onClick={onOpenHistory}
+                style={{
+                  padding: '10px 20px',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'none',
+                  background: '#16654E',
+                  color: '#FFFFFF',
+                  fontWeight: 700,
+                  fontSize: '0.875rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  boxShadow: '0 2px 8px rgba(22, 101, 78, 0.25)',
+                }}
+              >
+                <History size={16} />
+                <span>View History</span>
+              </button>
+            )}
+            {onResetSession && (
+              <button
+                onClick={onResetSession}
+                style={{
+                  padding: '10px 18px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid #A5DCB4',
+                  background: '#FFFFFF',
+                  color: '#0F2E23',
+                  fontWeight: 700,
+                  fontSize: '0.875rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <RotateCw size={14} />
+                <span>Start Another Session</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Review Ready Notification Banner */}
+      {state === 'REVIEW_READY' && (
+        <div
+          style={{
+            padding: '20px 24px',
+            borderRadius: 'var(--radius-lg)',
+            background: '#ECFDF5',
+            border: '2px solid #6EE7B7',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <CheckCircle2 size={22} color="#047857" />
+            <div>
+              <div style={{ fontWeight: 800, fontSize: '1rem', color: '#065F46' }}>
+                Form Filled & Verified — Ready for Human Review
+              </div>
+              <div style={{ fontSize: '0.8125rem', color: '#047857', marginTop: '2px' }}>
+                Automation has stopped per the Never-Submit safety policy. Please review the filled fields in the browser window and click Submit on the website when ready.
+              </div>
+            </div>
+          </div>
+          {onConfirmSubmission && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px' }}>
+              <button
+                onClick={onConfirmSubmission}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid #059669',
+                  background: '#059669',
+                  color: '#FFFFFF',
+                  fontWeight: 700,
+                  fontSize: '0.8125rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <CheckCircle2 size={14} />
+                <span>I Have Submitted</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -742,6 +889,11 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                 <>
                   <RotateCw size={18} className="animate-spin" />
                   <span>Session Active...</span>
+                </>
+              ) : state === 'COMPLETED' ? (
+                <>
+                  <CheckCircle2 size={18} />
+                  <span>Submitted</span>
                 </>
               ) : (
                 <>

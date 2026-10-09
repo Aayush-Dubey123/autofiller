@@ -1,337 +1,349 @@
-# AutoFiller AI — Comprehensive Independent QA Audit Report (Version 1)
+# AutoFiller AI — System Specification, Vulnerability Remediation, & Development Status (Version 1)
 
-**Audit Date:** October 4, 2026  
-**Auditor:** Independent QA Tester & Security Auditor  
-**Scope:** `backend/` and `desktop/` source trees, configuration, live execution, and test suites.  
-**Git Policy Adherence:** Zero code modifications made; zero commits/pushes; all findings documented with exact evidence and reproducible steps.
-
----
-
-## Executive Summary
-
-The AutoFiller AI codebase demonstrates an exceptionally robust architecture in local cryptographic vault storage, desktop IPC sandboxing, and autonomous submission policy enforcement. The state machine rigorously enforces the `REVIEW_READY` safety boundary, with zero autonomous pathways capable of executing final form submission. The V2 VaultService crypto path (AES-256-GCM, PBKDF2/scrypt, OS safeStorage key-wrapping, recovery code single-use re-keying, and atomic writes) is mathematically and operationally solid, cleanly rejecting ciphertext and authentication tag tampering. However, the audit uncovered **1 Critical**, **2 High**, **2 Medium**, and **3 Low** severity issues. The most significant vulnerabilities are:
-1. **Critical:** A path containment bypass in `backend/core/services/document_service.py` where `Path.home()` is included in `_allowed_roots()`, allowing document extraction to read arbitrary files anywhere in the user's home directory (e.g., `.env`, SSH private keys, token files).
-2. **High:** Execution event payloads emitted over IPC and persisted to the backend audit log leak raw sensitive field values within their `metadata` objects (e.g., `mappings[].fact_value`, `actualValue`, `expectedValue`), violating the zero-value audit persistence contract.
-3. **High:** A gap in `PolicyEngine.ts` submission button regex matching that allows non-standard but prevalent submission button labels (such as `"Place Order"`, `"Finish Application"`, `"Register Now"`, and `"Continue to Payment"`) to bypass submission blocking.
-
-Overall, the core desktop orchestration, browser automation, and vault encryption are **solid**, while the backend document containment and audit event sanitization are **fragile** and require immediate remediation.
+**Last Updated:** October 9, 2026  
+**Original Audit Baseline:** October 4, 2026  
+**Repository:** [`github.com/Aayush-Dubey123/autofiller`](https://github.com/Aayush-Dubey123/autofiller)  
+**Scope:** `backend/`, `desktop/`, end-to-end security boundaries, state machines, test suites, and operational workflows.
 
 ---
 
-## Audit Breakdown by Module
+## 1. Executive Summary & Remediation Dashboard
 
-### Part 1: Backend (`backend/`)
+Following the comprehensive QA audit on October 4, 2026, the AutoFiller AI codebase underwent targeted security hardening, architectural refinement, and feature maturation. **All 8 identified audit vulnerabilities (1 Critical, 2 High, 2 Medium, 3 Low) have been completely resolved, verified live, and locked down with automated regression tests.**
 
-| Area | What Was Tested | Method | Result | Evidence (file:line or output) | Severity if Failed |
+In addition to vulnerability resolution, major engineering milestones were completed:
+1. **Multi-Step Wizard Automation:** The agent loop autonomously drives multi-section forms via policy-gated `click_pagination` tools, validating and verifying each step until reaching the terminal `REVIEW_READY` state.
+2. **Strict Zero-Value Privacy Contract:** Sensitive field values (`fact_value`, `actualValue`, `expectedValue`) are stripped prior to IPC emissions and backend audit persistence. Verification records now persist strictly safe boolean metadata (`verified: bool`).
+3. **Dead Programmatic Submit Removal:** All legacy operator/programmatic submission functions (`submitFormAsOperator`, `submitFormManually`, `autofiller:submit-form` IPC) were eliminated. Form submission remains 100% user-controlled.
+4. **Sequential Clarification & Information Preflight:** Ambiguous or missing required fields are identified prior to navigation or dynamically during execution, queuing interactive user prompts with sequential stepper counters without dropping fields.
+5. **Fast AI Failover & Model Health Registry:** Implemented multi-tier model fallback (Gemini Flash → Flash-Lite → 3.6 Flash → OpenRouter / Heuristic) with circuit breakers for dead/rate-limited models.
+6. **Manual Submission Watcher:** During `REVIEW_READY`, user submission in the Chromium window is detected automatically, cleanly finalizing history records as `COMPLETED` and shutting down browser sessions without downgrading state.
+
+### Vulnerability Remediation Status Matrix
+
+| ID | Initial Severity | Area / Module | Finding Summary | Status | Remediation Location & Test Evidence |
 |---|---|---|---|---|---|
-| **1.1 Startup & Lifecycle** | Startup with GEMINI_API_KEY present, empty, malformed; CORS allowlist; lifespan DB init/close; 500 error leak prevention | White-box & Black-box | **PASS / MINOR GAP** | `api.py:111` allow_methods lacks `"DELETE"`. 500 handler returns `{"detail": "Internal server error"}` with zero traceback leak. | Medium (`api.py:111`) |
-| **1.2 Auth Bridge** | `hmac.compare_digest` timing-safe check; token file permissions (`0o600`); `.formpilot_token` migration; startup refusal on `ALLOW_ANONYMOUS`; empty/malformed/whitespace Bearer headers | White-box & Black-box | **PASS** | `auth.py:18` uses `hmac.compare_digest`. Anonymous flag raises `RuntimeError`. Malformed/whitespace tokens rejected with 401. | Solid |
-| **1.3 Pydantic Data Models** | `FormFieldType`, `SessionStatus`, `ExtractedFact`, `FieldMapping`, `SessionModel` validation, invalid enums, out-of-range confidence scores (<0.0 or >1.0) | White-box & Black-box | **PASS** | `session_model.py:46,67` Pydantic v2 rejects invalid enums and out-of-range scores with `ValidationError`. | Solid |
-| **1.4 Session Router** | POST `/v1/sessions` (201), GET (200/404), DELETE `/v1/sessions/{id}` (200), idempotent delete (200), DELETE `/v1/sessions` (purge all), unauthenticated requests (401) | White-box & Black-box | **PASS** | `session_router.py:126-174` returns correct status codes. Unauthenticated requests return 401. | Solid |
-| **1.5 Document Service** | `KEY_ALIASES` coverage vs 16 demo fields; path containment checks; 25MB file & 100k char caps; corrupt/encrypted/empty PDFs; unsupported file extensions | White-box & Black-box | **FAIL (CRITICAL)** | `document_service.py:127` includes `Path.home()`, permitting extraction of arbitrary user files like `backend/.env`. Corrupt/unsupported files raise unhandled exceptions. | **Critical** (`document_service.py:127`) |
-| **1.6 Gemini Service** | Fallback model chain (`gemini-3.5-flash` -> `lite` -> `3.6-flash`); heuristic fallback engagement; `format_to_strict_dd_mm_yyyy`; `_strip_code_fences`; raw prompt privacy audit | White-box & Black-box | **CONFIRMED** | `gemini_service.py:112` raw prompt sends `json.dumps([f.model_dump() for f in facts])`, confirming field values ARE sent to Gemini. Date normalizer handles ambiguous dates; two-digit years unexpanded. | Informational / Privacy Confirmation |
-| **1.7 Database & In-Memory Store** | In-memory fallback on bad Mongo URL; race condition under 50 concurrent updates; session delete & purge in both modes | White-box & Black-box | **PASS** | `database.py:65` seamlessly falls back to `InMemorySessionDatabase`. 50 concurrent async updates executed with zero race conditions. | Solid |
-| **1.8 Security Scripts** | Live execution of `verify_security_live.py` and `check_wire_contract.py` | Black-box | **PASS (WITH CAVEAT)** | `verify_security_live.py` tested `../../backend/.env` (outside home dir), which passed, giving false sense of containment security. Wire contract passed 100%. | Informational |
-| **1.9 Backend Test Suite** | Full execution of `pytest tests/test_backend.py -v` | Black-box | **PASS** | 25 passed in 0.98s. | Solid |
+| **Finding 1** | **Critical** | Backend Document Service | Path containment bypass allowed reading arbitrary files under `Path.home()` (e.g. `.env`, SSH keys). | **RESOLVED** | [`document_service.py`](file:///c:/Users/aayus/autofiller/backend/core/services/document_service.py#L129): Restricted `_allowed_roots()` strictly to upload/temp folders. Verified by [`verify_security_live.py`](file:///c:/Users/aayus/autofiller/verify_security_live.py) and [`test_backend.py`](file:///c:/Users/aayus/autofiller/backend/tests/test_backend.py). |
+| **Finding 2** | **High** | Desktop Agent & Backend Persistence | Raw sensitive field values leaked into IPC events and persisted audit logs (`actualValue`, `fact_value`). | **RESOLVED** | [`AgentController.ts`](file:///c:/Users/aayus/autofiller/desktop/electron/agent/AgentController.ts#L183-L240): `sanitizePayload` purges raw values prior to IPC and persistence. [`session_model.py`](file:///c:/Users/aayus/autofiller/backend/core/models/session_model.py#L98): `VerificationRecord` stores `verified: bool` only. Verified by desktop E2E zero-value test. |
+| **Finding 3** | **High** | Desktop Policy Engine | Final submission guard regex missed common labels (`"Place Order"`, `"Register Now"`, `"Continue to Payment"`). | **RESOLVED** | [`PolicyEngine.ts`](file:///c:/Users/aayus/autofiller/desktop/electron/policy/PolicyEngine.ts#L52): Added regex patterns for checkout, order, and payment buttons. Verified by 18 assertions in [`policy_test.js`](file:///c:/Users/aayus/autofiller/desktop/tests/policy_test.js). |
+| **Finding 4** | **Medium** | Backend API CORS | CORS `allow_methods` omitted `"DELETE"`, blocking cross-origin session deletion preflight. | **RESOLVED** | [`api.py`](file:///c:/Users/aayus/autofiller/backend/core/apis/api.py#L114): Added `"DELETE"` to `allow_methods`. Verified by `test_finding_4_cors_preflight_for_delete_session` in [`test_backend.py`](file:///c:/Users/aayus/autofiller/backend/tests/test_backend.py). |
+| **Finding 5** | **Medium** | Backend Document Service | Empty/scanned PDFs without Gemini Vision triggered unhandled HTTP 500 runtime errors. | **RESOLVED** | [`document_service.py`](file:///c:/Users/aayus/autofiller/backend/core/services/document_service.py#L351): Added `DocumentEmptyError` returning HTTP 422 with actionable diagnostic details. Verified by `test_finding_5_empty_and_scanned_pdf_error_handling`. |
+| **Finding 6** | **Low** | Desktop Policy Engine | Cross-origin navigation guard permitted `javascript:` and `data:` pseudo-protocols due to empty host evaluations. | **RESOLVED** | [`PolicyEngine.ts`](file:///c:/Users/aayus/autofiller/desktop/electron/policy/PolicyEngine.ts#L225): Whitelisted target protocols strictly to `http:`, `https:`, and `file:`. Verified in [`policy_test.js`](file:///c:/Users/aayus/autofiller/desktop/tests/policy_test.js). |
+| **Finding 7** | **Low** | Backend Document Service | Binary files (`.exe`, `.bin`, `.dll`) fell through to plaintext reader, parsing garbage facts. | **RESOLVED** | [`document_service.py`](file:///c:/Users/aayus/autofiller/backend/core/services/document_service.py#L264): Strict file extension whitelist (`.pdf`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.txt`), rejecting others with HTTP 415. Verified by `test_finding_7_whitelist_extensions_rejects_exe_and_bin_with_415`. |
+| **Finding 8** | **Low** | Backend Document Service | `KEY_ALIASES` lacked canonical demographic mappings (`sex` → `gender`, `town` → `city`, `province` → `state`). | **RESOLVED** | [`document_service.py`](file:///c:/Users/aayus/autofiller/backend/core/services/document_service.py#L42-L90): Added missing aliases for direct rule matching without requiring LLM inference. Verified by `test_finding_8_key_aliases_common_demographics`. |
 
 ---
 
-### Part 2: Electron Main Process (`desktop/electron/`)
-
-| Area | What Was Tested | Method | Result | Evidence (file:line or output) | Severity if Failed |
-|---|---|---|---|---|---|
-| **2.1 Window & Process Security** | `contextIsolation`, `sandbox`, `nodeIntegration`, `webSecurity`; CSP headers; backend spawn error handling; 20s health poll timeout | White-box & Black-box | **PASS** | `main.ts:88-93` all 4 flags set to secure values. CSP blocks inline scripts. Backend health probe retries 40 times (20s) before alerting. | Solid |
-| **2.2 VaultService Cryptography** | Full crypto path: create, lock, unlock, wrong key exponential backoff, tampered ciphertext (1 hex char flip), tampered authTag, corrupt JSON, V1 scrypt params, recovery code re-keying, atomic write `.tmp` -> `.bak` | White-box & Black-box | **PASS** | `VaultService.ts:384-512` GCM rejects tampered ciphertext and authTag with `Unsupported state or unable to authenticate data`. Recovery unlock forces key rotation. | Solid |
-| **2.3 Agent Controller** | 50-step loop bound; AbortController cancellation; REVIEW_READY never auto-submits; clarification 10m timeout; FIFO persistence queue; event value leak inspection | White-box & Black-box | **FAIL (HIGH)** | 50-step bound halts at step 50. Loop halts strictly at REVIEW_READY. But `AgentController.ts:445,719` leaks raw values in `metadata` of `STATE_CHANGED`, `fill_text`, and `verify_field`. | **High** (`AgentController.ts:445,719`) |
-| **2.4 Tool Registry** | Tool dispatch with malformed args (missing fieldRef, wrong type, non-`field_NNN` format); unregistered tool refusal | White-box & Black-box | **PASS** | `ToolRegistry.ts:334` throws `TOOL_NOT_REGISTERED`. Mutating tools missing fieldRef or using invalid format reject with `INVALID_FIELD_REFERENCE`. | Solid |
-| **2.5 Policy Engine** | Submission guard regex against button labels; pagination allowlist against demo form; cross-origin navigation guard; `field_NNN` format check | White-box & Black-box | **FAIL (HIGH)** | `PolicyEngine.ts:51` blocks `"Submit & Pay"` and `"Submit"`, but misses `"Place Order"`, `"finish Application"`, `"Continue to Payment"`, and `"Register Now"`. Navigation guard allows `javascript:` URIs. | **High** (`PolicyEngine.ts:51`) |
-| **2.6 Form Scanner & Browser Manager** | Mock form scan (16 fields, 3 visible, 13 hidden across 5 sections, 2 collapsed radio groups); date normalization variants; cancellation mid-delay and mid-navigation | White-box & Black-box | **PASS** | Playwright detects 16 fields, collapses radio groups, detects 4 Continue buttons and 1 Submit control. Date normalizer converts formats to YYYY-MM-DD. Cancellations trigger `OperationCancelledError`. | Solid |
-| **2.7 IPC Bridge & Preload** | Enumeration of all 28 exposed channels; input validation; verification that no raw Node/Electron APIs are exposed | White-box | **PASS** | `preload.ts:28-156` contextBridge exposes only typed API. `targetUrl` validated for `http:`/`https:`. No raw `ipcRenderer` or Node modules leaked. | Solid |
-
----
-
-### Part 3: Renderer UI (`desktop/src/`)
-
-| Area | What Was Tested | Method | Result | Evidence (file:line or output) | Severity if Failed |
-|---|---|---|---|---|---|
-| **3.1 First Run & Home CTA** | Launch with empty userData: no key prompt on start; HomeView "Add your details once" banner; save in MyDetails persists to encrypted disk file | Black-box & White-box | **PASS** | `App.tsx:72` only prompts for unlock if passphrase slot exists and vault is locked. Details save persists across app restarts. | Solid |
-| **3.2 Settings Wizard** | Step 1 -> Step 2 -> Step 3 navigation; cancel mid-wizard; re-open; passphrase strength meter; mismatch between passphrase and confirm passphrase | Black-box & White-box | **PASS** | `SettingsView.tsx:105-167` wizard validates length (>=10 chars), prevents submission on mismatch, presents Copy/Download on Step 3 with no auto-close timers. | Solid |
-| **3.3 History Management** | Single delete, multi-select delete, Clear All; disk inspection of `autofiller-history.json` for value leaks | Black-box & White-box | **PASS** | `HistoryStore.ts:47-99` records only `id`, `date`, `hostAndPath`, `status`, `fieldsFilled`, `totalFields`, `profileName`. Zero field values saved to disk. | Solid |
-| **3.4 Theme Persistence** | Theme toggle between light and dark modes across application restart | Black-box & White-box | **PASS** | `App.tsx:31,57` persists theme to `localStorage.autofiller_theme` and reloads on startup. | Solid |
-| **3.5 DevTools & Console** | Console warning and error audit during standard operation and form stepping | Black-box | **PASS** | Zero unhandled rejections or runtime syntax errors observed during normal execution. | Solid |
-
----
-
-### Part 4: Integration & Automated Test Suite Outputs
-
-#### 4.1 Automated Suite Raw Outputs
-
-##### A. Backend Pytest (`pytest tests/test_backend.py -v`)
-```
-============================= test session starts =============================
-platform win32 -- Python 3.13.2, pytest-8.3.4, pluggy-1.5.0 -- C:\Users\aayus\autofiller\venv\Scripts\python.exe
-cachedir: .pytest_cache
-rootdir: C:\Users\aayus\autofiller
-configfile: pytest.ini
-plugins: anyio-4.8.0, asyncio-0.25.3
-asyncio: mode=Mode.STRICT, default_loop_scope=None
-collecting ... collected 25 items
-
-tests/test_backend.py::test_auth_missing_header PASSED                   [  4%]
-tests/test_backend.py::test_auth_invalid_token PASSED                    [  8%]
-tests/test_backend.py::test_auth_valid_token PASSED                      [ 12%]
-tests/test_backend.py::test_auth_dual_token_both_accepted PASSED         [ 16%]
-tests/test_backend.py::test_create_session PASSED                        [ 20%]
-tests/test_backend.py::test_create_session_defaults PASSED               [ 24%]
-tests/test_backend.py::test_get_session PASSED                           [ 28%]
-tests/test_backend.py::test_get_session_not_found PASSED                 [ 32%]
-tests/test_backend.py::test_append_events PASSED                         [ 36%]
-tests/test_backend.py::test_append_events_with_verifications PASSED      [ 40%]
-tests/test_backend.py::test_map_form_endpoint PASSED                     [ 44%]
-tests/test_backend.py::test_answer_clarification PASSED                  [ 48%]
-tests/test_backend.py::test_extract_document_facts_text PASSED           [ 52%]
-tests/test_backend.py::test_extract_document_path_containment PASSED     [ 56%]
-tests/test_backend.py::test_extract_document_size_cap PASSED             [ 60%]
-tests/test_backend.py::test_heuristic_mapping_fallback PASSED           [ 64%]
-tests/test_backend.py::test_security_headers_present PASSED              [ 68%]
-tests/test_backend.py::test_health_endpoint PASSED                       [ 72%]
-tests/test_backend.py::test_session_model_validation PASSED              [ 76%]
-tests/test_backend.py::test_session_status_transitions PASSED            [ 80%]
-tests/test_backend.py::test_event_value_sanitization PASSED              [ 84%]
-tests/test_backend.py::test_delete_session_endpoint PASSED               [ 88%]
-tests/test_backend.py::test_delete_session_not_found PASSED              [ 92%]
-tests/test_backend.py::test_purge_all_sessions_endpoint PASSED           [ 96%]
-tests/test_backend.py::test_purge_requires_auth PASSED                   [100%]
-
-============================= 25 passed in 0.98s ==============================
-```
-
-##### B. Wire Contract Test (`python check_wire_contract.py`)
-```
-============================================================
-CHECKING DESKTOP <-> BACKEND WIRE CONTRACT
-============================================================
-1. Checking POST /v1/sessions contract...
-   [OK] matches {document_name, target_url} -> {id, ...}
-2. Checking POST /v1/sessions/{session_id}/events contract...
-   [OK] matches {events: [...], verifications: [...]}
-3. Checking POST /v1/documents/extract contract...
-   [OK] matches {filePath, rawText, documentName} -> {facts, ...}
-4. Checking POST /v1/sessions/{session_id}/map contract...
-   [OK] matches {form_snapshot, facts} -> {mappings, clarifications_required}
-5. Checking POST /v1/sessions/{session_id}/clarifications/{id} contract...
-   [OK] matches {answer: string}
-6. Checking GET /health and /v1/sessions/{session_id} contract...
-   [OK] GET endpoints match expected shapes.
-
-[SUCCESS] All desktop requests match backend FastAPI route expectations!
-```
-
-##### C. Desktop Test Suite (`npm test`)
-```
-> autofiller-desktop@1.0.0 test
-> npm run build && node tests/policy_test.js && node tests/tool_registry_test.js && node tests/scanner_test.js && node tests/vault_test.js && node tests/e2e_integration_test.js
-
-
-> autofiller-desktop@1.0.0 build
-> npm run typecheck && vite build && tsc -p tsconfig.electron.json
-
-
-> autofiller-desktop@1.0.0 typecheck
-> tsc --noEmit && tsc --noEmit -p tsconfig.electron.json
-
-vite v6.1.0 building for production...
-transforming...
-✓ 1595 modules transformed.
-rendering chunks...
-computing gzip size...
-dist/index.html                   1.05 kB │ gzip:  0.57 kB
-dist/assets/index-DDmWhSG2.css    2.71 kB │ gzip:  1.14 kB
-dist/assets/index-BQkZ2R0Z.js   255.86 kB │ gzip: 69.55 kB
-✓ built in 2.08s
-Running AutoFiller PolicyEngine tests against dist-electron...
-  ok - blocks Submit Application
-  ok - blocks Submit
-  ok - blocks Apply Now
-  ok - blocks any structural submit control
-  ok - allows wizard pagination buttons
-  ok - never treats a submission control as pagination
-  ok - refuses unregistered and shell-like tools
-  ok - permits registered read-only tools
-  ok - refuses mutating tools without a validated field reference
-  ok - derives submission detection from real page controls
-  ok - treats buttons without explicit type as submit controls
-  ok - does NOT treat type="button" and type="reset" as final submission controls
-  ok - treats input[type="submit"] and input[type="image"] as submit controls
-  ok - denies cross-host navigation
-
-All 14 PolicyEngine assertions passed.
-Running AutoFiller ToolRegistry dispatch tests...
-  ok - refuses an unregistered tool without touching the browser
-  ok - refuses a mutating tool with no field reference
-  ok - refuses a crafted selector passed as a field reference
-  ok - executes a valid fill_text through to the browser
-  ok - executes typed mutating tools with the correct browser call
-  ok - rejects malformed arguments before executing
-
-All 6 ToolRegistry assertions passed.
-Running FormScanner & BrowserManager submission controls Playwright test...
-Discovered 16 form fields in FormSnapshot (3 visible, 13 hidden).
-Discovered 5 submission control(s): [
-  {
-    label: 'Continue',
-    selector: 'button:nth-of-type(1)',
-    isSubmitType: false,
-    type: 'button'
-  },
-  {
-    label: 'Continue',
-    selector: 'button:nth-of-type(2)',
-    isSubmitType: false,
-    type: 'button'
-  },
-  {
-    label: 'Continue',
-    selector: 'button:nth-of-type(3)',
-    isSubmitType: false,
-    type: 'button'
-  },
-  {
-    label: 'Continue',
-    selector: 'button:nth-of-type(4)',
-    isSubmitType: false,
-    type: 'button'
-  },
-  {
-    label: 'Submit Application',
-    selector: '#submitBtn',
-    isSubmitType: true,
-    type: 'submit'
-  }
-]
-✓ FormScanner & submission controls test passed successfully!
-=== Running VaultService Encryption & Security Tests (V2 Key Slots) ===
-✓ All VaultService V2 encryption, key slots, and security tests passed cleanly!
-=== AutoFiller End-to-End AgentController Verification ===
-  ok - FormScanner collapses radio groups into descriptive scoped fields
-  ok - the real agent fills fields and halts at REVIEW_READY
-  ok - field fills are verified and reported truthfully
-  ok - the agent never clicks a submission control
-  ok - real submit controls are detected separately from fillable fields
-  ok - agent events are persisted to the session audit timeline
-  ok - concurrent session starts are refused
-
-All 7 end-to-end assertions passed.
-```
-
----
-
-## Detailed Findings
+## 2. Detailed Vulnerability Remediation Reports
 
 ### Finding 1: Path Containment Bypass Allows Reading Arbitrary User Files
 - **Severity:** Critical (Security Vulnerability)
-- **Location:** `backend/core/services/document_service.py:127`
-- **Reproduction Steps:**
-  1. Make a POST request to `/v1/documents/extract` with payload:
-     `{"filePath": "C:/Users/aayus/autofiller/backend/.env"}`.
-  2. Because `_allowed_roots()` includes `Path.home().resolve()` (`C:\Users\aayus`), `_is_contained()` returns `True`.
-  3. The backend extracts text and sensitive facts from `.env`, `.autofiller_token`, SSH keys, or browser histories located anywhere under the user's home folder.
-- **Suggested Fix:** Restrict `_allowed_roots()` strictly to user-designated document upload folders (e.g. `Downloads`, `Documents`, `Desktop`, or temporary application directories) rather than the broad user root `Path.home()`.
+- **Vulnerability Mechanism:** `_allowed_roots()` in [`document_service.py`](file:///c:/Users/aayus/autofiller/backend/core/services/document_service.py) originally included `Path.home().resolve()`. Because the backend runs under the user's OS profile, any path within the user's home directory (such as `~/.ssh/id_rsa`, `~/.aws/credentials`, or `backend/.env`) was classified as contained, allowing unauthorized document fact extraction.
+- **Remediation Implemented:**
+  - `Path.home()` was removed from `_allowed_roots()`.
+  - Allowed roots are restricted strictly to: system temporary directories (`tempfile.gettempdir()`), the dedicated application uploads directory (`userData/uploads/`), and explicit test fixtures directories.
+  - Path canonicalization resolves symlinks and relative path components before running boundary checks. Traversal attempts return `HTTP 403 Forbidden`.
+- **Verification Evidence:**
+  - [`verify_security_live.py`](file:///c:/Users/aayus/autofiller/verify_security_live.py):
+    - `POST /v1/documents/extract` with `C:/Windows/System32/drivers/etc/hosts` returns 403.
+    - `POST /v1/documents/extract` with `../../backend/.env` returns 403.
+  - [`test_backend.py`](file:///c:/Users/aayus/autofiller/backend/tests/test_backend.py): `test_extract_document_endpoint_rejects_home_dir_and_env_with_403` passed.
 
----
-
-### Finding 2: Sensitive Field Values Leak into Event Objects and Persisted Audit Logs
+### Finding 2: Sensitive Field Values Leaking into IPC Events & Persisted Audit Records
 - **Severity:** High (Privacy & Data Leakage)
-- **Location:** `desktop/electron/agent/AgentController.ts:445, 703, 719`
-- **Reproduction Steps:**
-  1. Start an automation session with sensitive facts (e.g., student name, email, parent contact).
-  2. Inspect the `AgentEventPayload` objects emitted to IPC and queued in `persistenceQueue` for backend storage:
-     - `STATE_CHANGED` event includes `metadata.mappings`, containing raw `fact_value` for all mapped fields.
-     - `TOOL_COMPLETED` for `fill_text` includes `metadata.actualValue` and `metadata.expectedValue`.
-     - `TOOL_COMPLETED` for `verify_field` includes `metadata.actualValue` and `metadata.expectedValue`.
-- **Suggested Fix:** Sanitize the tool result objects and mapping lists before assigning them to `AgentEventPayload.metadata`, removing all instances of `actualValue`, `expectedValue`, and `fact_value`.
+- **Vulnerability Mechanism:** Agent execution events emitted over Electron IPC to the renderer and saved to session storage contained raw personal values within `metadata.mappings` (`fact_value`) and tool outputs (`actualValue`, `expectedValue`). Similarly, `VerificationRecord` persisted raw input and DOM values.
+- **Remediation Implemented:**
+  - Implemented `sanitizePayload(obj)` in [`AgentController.ts`](file:///c:/Users/aayus/autofiller/desktop/electron/agent/AgentController.ts#L183-L215). Deeply strips keys: `fact_value`, `factValue`, `actualValue`, `actual_value`, `expectedValue`, `expected_value`, `selectedValue`, `selected_value`, `selectedOption`, `selected_option`, `expectedOption`, `expected_option`, `currentValue`, `current_value`, and `value`.
+  - Both renderer-bound events (`emitEvent`) and backend persistence queues sanitize payloads before dispatch.
+  - Refactored `VerificationRecord` in [`session_model.py`](file:///c:/Users/aayus/autofiller/backend/core/models/session_model.py#L98-L107) and [`AgentController.ts`](file:///c:/Users/aayus/autofiller/desktop/electron/agent/AgentController.ts#L26) to store only safe metadata: `field_ref`, `field_label`, and `verified: bool`.
+- **Verification Evidence:**
+  - Desktop E2E Test assertion: `ok - zero-value contract: IPC events, persisted events, and verifications contain no raw values across fill-and-verify` passed.
+  - Backend pytest: `test_verifications_persist_safe_metadata_only_without_values` passed.
 
----
+### Finding 3: Final Submission Guard Regex Missed Checkout / Application Buttons
+- **Severity:** High (Safety Boundary Bypass)
+- **Vulnerability Mechanism:** `PolicyEngine.ts` evaluated button text against submit terms, but missed common checkout/application terms such as `"Place Order"`, `"Finish Application"`, `"Register Now"`, and `"Continue to Payment"`.
+- **Remediation Implemented:**
+  - Expanded `forbiddenButtonTerms` in [`PolicyEngine.ts`](file:///c:/Users/aayus/autofiller/desktop/electron/policy/PolicyEngine.ts#L52) to include regex patterns matching: `place\s+order`, `finish(\s+application)?`, `register(\s+now)?`, `complete(\s+order|\s+registration)?`, `continue\s+to\s+payment`, and `/\bpayment\b/i`.
+  - Retained strict separation between wizard pagination (`Continue`, `Next`, `Save & Continue`) and submission actions.
+- **Verification Evidence:**
+  - [`policy_test.js`](file:///c:/Users/aayus/autofiller/desktop/tests/policy_test.js): 18 unit tests passed verifying blocking of all payment, order, register, and submission variants.
 
-### Finding 3: Final Submission Guard Regex Misses Prevalent Checkout and Application Buttons
-- **Severity:** High (Safety Boundary Gap)
-- **Location:** `desktop/electron/policy/PolicyEngine.ts:51-52, 126-129`
-- **Reproduction Steps:**
-  1. Invoke `policyEngine.validateBrowserAction('click', 'Place Order', false)`.
-  2. Invoke `policyEngine.validateBrowserAction('click', 'finish Application', false)`.
-  3. Invoke `policyEngine.validateBrowserAction('click', 'Continue to Payment', false)`.
-  4. Invoke `policyEngine.validateBrowserAction('click', 'Register Now', false)`.
-  5. All calls return `{ allowed: true, code: 'ACTION_ALLOWED' }` instead of `DENIED_FINAL_SUBMISSION`.
-- **Suggested Fix:** Expand `forbiddenButtonTerms` regex to match `place\s+order`, `finish(\s+application)?`, `register(\s+now)?`, `complete(\s+order|\s+registration)?`, and any control referencing `payment`.
-
----
-
-### Finding 4: CORS Middleware Omits DELETE Method, Breaking Preflight Requests
+### Finding 4: CORS Middleware Omission of DELETE Method
 - **Severity:** Medium (API / Integration)
-- **Location:** `backend/core/apis/api.py:111`
-- **Reproduction Steps:**
-  1. Send an HTTP `OPTIONS /v1/sessions/test-session-id` with `Access-Control-Request-Method: DELETE`.
-  2. FastAPI's CORSMiddleware returns HTTP 400 Bad Request because `allow_methods` only specifies `["GET", "POST"]`.
-  3. Browser or cross-origin web client attempting session deletion via DELETE method is blocked by CORS.
-- **Suggested Fix:** Add `"DELETE"` to `allow_methods` in `api.py:111`.
+- **Vulnerability Mechanism:** `CORSMiddleware` in [`api.py`](file:///c:/Users/aayus/autofiller/backend/core/apis/api.py) only permitted `["GET", "POST"]`. Cross-origin preflight `OPTIONS` requests for session deletion (`DELETE /v1/sessions/{id}`) failed with HTTP 400.
+- **Remediation Implemented:** Added `"DELETE"` to `allow_methods` in [`api.py`](file:///c:/Users/aayus/autofiller/backend/core/apis/api.py#L114).
+- **Verification Evidence:** [`test_backend.py`](file:///c:/Users/aayus/autofiller/backend/tests/test_backend.py): `test_finding_4_cors_preflight_for_delete_session` passed.
 
----
-
-### Finding 5: Empty or Scanned PDFs Without Gemini Vision Trigger Unhandled Server Errors
+### Finding 5: Empty/Scanned PDFs Triggered Unhandled Server Errors
 - **Severity:** Medium (Robustness / Error Handling)
-- **Location:** `backend/core/services/document_service.py:288-313`
-- **Reproduction Steps:**
-  1. Upload a PDF that contains no extractable digital text (e.g. blank page or image scan).
-  2. If `GEMINI_API_KEY` is absent or quota-exhausted, `extract_document_facts` raises `RuntimeError("Google Gemini API is not configured or failed extraction...")`.
-  3. The request terminates with HTTP 500 rather than returning an empty fact list or clean user-facing error.
-- **Suggested Fix:** Catch Vision extraction errors when digital text extraction yields empty text and return an empty fact list with a warning or raise HTTP 422.
+- **Vulnerability Mechanism:** When parsing a blank or scanned PDF where PyMuPDF extracted 0 text characters, failure in Gemini Vision caused unhandled `RuntimeError` exceptions resulting in HTTP 500.
+- **Remediation Implemented:** Defined `DocumentEmptyError` in [`document_service.py`](file:///c:/Users/aayus/autofiller/backend/core/services/document_service.py#L351), caught at the controller layer and mapped to a structured `HTTP 422 Unprocessable Entity` response with diagnostic guidance.
+- **Verification Evidence:** [`test_backend.py`](file:///c:/Users/aayus/autofiller/backend/tests/test_backend.py): `test_finding_5_empty_and_scanned_pdf_error_handling` passed.
 
----
-
-### Finding 6: Cross-Origin Navigation Guard Allows `javascript:` Pseudo-Protocols
+### Finding 6: Cross-Origin Navigation Protocol Guardrail Gap
 - **Severity:** Low (Security Guardrail)
-- **Location:** `desktop/electron/policy/PolicyEngine.ts:221-239`
-- **Reproduction Steps:**
-  1. Call `policyEngine.validateNavigation('school.edu', 'javascript:alert(1)')`.
-  2. `new URL('javascript:alert(1)').host` evaluates to `""`.
-  3. The conditional check `currentHost && targetHost && currentHost !== targetHost` evaluates to false, returning `{ allowed: true, code: 'NAVIGATION_ALLOWED' }`.
-- **Suggested Fix:** Validate that the target URL protocol belongs strictly to `['http:', 'https:', 'file:']` and deny all others.
-
----
+- **Vulnerability Mechanism:** `PolicyEngine.validateNavigation` checked host differences between URLs. For `javascript:`, `data:`, or `blob:` pseudo-protocols, `URL.host` evaluates to `""`, bypassing the check.
+- **Remediation Implemented:** Enforced a strict protocol whitelist in [`PolicyEngine.ts`](file:///c:/Users/aayus/autofiller/desktop/electron/policy/PolicyEngine.ts#L225) permitting only `http:`, `https:`, and `file:`. Any alternative protocol is denied with `UNSUPPORTED_PROTOCOL`.
+- **Verification Evidence:** [`policy_test.js`](file:///c:/Users/aayus/autofiller/desktop/tests/policy_test.js) test asserting `javascript:alert(1)` denial passed.
 
 ### Finding 7: Binary Executables Fall Through to Plaintext Decoder
-- **Severity:** Low (Code Quality)
-- **Location:** `backend/core/services/document_service.py:344`
-- **Reproduction Steps:**
-  1. Submit a binary file (e.g. `.exe`, `.bin`, `.dll`) to `/v1/documents/extract`.
-  2. Because the extension is unrecognized, execution falls through to `path.read_text(encoding="utf-8", errors="ignore")`, attempting regex fact matching on binary junk.
-- **Suggested Fix:** Explicitly whitelist permitted file extensions (`.pdf`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.txt`) and reject all others with an HTTP 415 or 400 error.
-
----
+- **Severity:** Low (Input Sanitization)
+- **Vulnerability Mechanism:** Uploading non-document files (`.exe`, `.bin`, `.dll`) fell through to `path.read_text(errors="ignore")`, attempting regex fact matching on binary junk.
+- **Remediation Implemented:** Added strict file extension validation in [`document_service.py`](file:///c:/Users/aayus/autofiller/backend/core/services/document_service.py#L264). Permitted extensions: `.pdf`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.txt`. Unsupported extensions return `HTTP 415 Unsupported Media Type`.
+- **Verification Evidence:** [`test_backend.py`](file:///c:/Users/aayus/autofiller/backend/tests/test_backend.py): `test_finding_7_whitelist_extensions_rejects_exe_and_bin_with_415` passed.
 
 ### Finding 8: `KEY_ALIASES` Missing Canonical Aliases for Common Demographics
 - **Severity:** Low (Form Filling Accuracy)
-- **Location:** `backend/core/services/document_service.py:41-86`
-- **Reproduction Steps:**
-  1. Extract a document containing `"Sex: Male"` or `"Town: Springfield"`.
-  2. Facts are recorded with keys `sex` and `town`.
-  3. `KEY_ALIASES` does not map `sex` -> `gender` or `town` -> `city`, forcing the system to rely entirely on LLM semantic inference rather than the direct rule-based matcher.
-- **Suggested Fix:** Add mappings for `sex` -> `gender`, `town` -> `city`, and `province` -> `state` to `KEY_ALIASES`.
+- **Vulnerability Mechanism:** Key normalization lacked aliases for common demographic equivalents (e.g., `sex` for `gender`, `town` for `city`), forcing unnecessary reliance on LLM semantic matching.
+- **Remediation Implemented:** Updated `KEY_ALIASES` in [`document_service.py`](file:///c:/Users/aayus/autofiller/backend/core/services/document_service.py#L42-L90) with aliases for `sex` → `gender`, `town` → `city`, `province` → `state`.
+- **Verification Evidence:** [`test_backend.py`](file:///c:/Users/aayus/autofiller/backend/tests/test_backend.py): `test_finding_8_key_aliases_common_demographics` passed.
 
 ---
 
-## Confirmed Working Architecture
+## 3. Recent Engineering Developments (Phases 9A – 9F & Beyond)
 
-The following components were thoroughly tested (both white-box and black-box) and confirmed solid:
-- **Never-Submit Safety Boundary:** The agent workflow transitions from `VERIFYING` directly to `REVIEW_READY` and completely halts. Neither `AgentController.ts`, `PolicyEngine.ts`, nor `ToolRegistry.ts` contains any code path allowing autonomous triggering of `submitFormAsOperator()`.
-- **Stepped Form Compatibility:** FormScanner and BrowserManager cleanly handle multi-step wizards (`mock_school_form.html`), distinguishing active visible controls from hidden sections and maintaining correct field references across all 5 sections.
-- **Radio Group Scoping:** Radio buttons sharing a `name` attribute are collapsed into single logical entities with options mapped and values scoped to their fieldset/group label.
-- **Vault V2 Encryption & Key Slots:**
-  - AES-256-GCM authenticated encryption rejects all bit-flipped ciphertext and tampered authentication tags.
-  - OS safeStorage DEK wrapping works seamlessly when available.
-  - Rate-limiting exponential backoff on wrong password attempts is enforced.
-  - Recovery codes force a mandatory key reset upon unlocking.
-  - V1 vault files with custom scrypt parameters load smoothly without data loss.
-- **Zero-Value History Store:** `HistoryStore.ts` writes strictly sanitized metadata records to `autofiller-history.json`. No personal values, passwords, or document bodies are ever written to the history log.
-- **Dual-Token Backend Auth:** HMAC timing-safe validation correctly authenticates the dual-token bridge between Electron and FastAPI, and refuses execution when anonymous access flags are set.
-- **In-Memory Concurrency:** High-concurrency operations on the backend in-memory database execute with zero race conditions or state corruption.
+### 3.1 Autonomous Multi-Step / Section-by-Section Form Stepping
+- **Tool Registration:** Registered `click_pagination` in [`ToolRegistry.ts`](file:///c:/Users/aayus/autofiller/desktop/electron/agent/ToolRegistry.ts) and [`PolicyEngine.ts`](file:///c:/Users/aayus/autofiller/desktop/electron/policy/PolicyEngine.ts).
+- **Policy Enforcement:** `PolicyEngine.validateToolInvocation` evaluates `click_pagination` against `validateBrowserAction`:
+  - Legitimate wizard pagination labels (`"Continue"`, `"Next"`, `"Save & Continue"`, `"Proceed"`, `"Step N"`) are permitted.
+  - Any button with submit text or `type="submit"` triggers `DENIED_FINAL_SUBMISSION`.
+- **Browser Interaction:** Added `clickPagination(label, selector, signal)` in [`BrowserManager.ts`](file:///c:/Users/aayus/autofiller/desktop/electron/browser/BrowserManager.ts) with element highlighting, scrolling, and cancellation handling.
+- **State-Aware Section Loop:** In [`AgentController.ts`](file:///c:/Users/aayus/autofiller/desktop/electron/agent/AgentController.ts), the agent executes an adaptive section loop (`sectionIndex <= MAX_SECTIONS`):
+  1. Scans visible active section fields (`scanActiveForm`).
+  2. Augments field mappings for newly discovered fields (`map_form_fields`).
+  3. Fills visible, unpopulated, enabled fields (`fillField`).
+  4. Verifies populated fields against expected DOM state (`verify_field`).
+  5. Scans for legitimate pagination buttons (`findPaginationControl`).
+  6. Dispatches `click_pagination` and waits for DOM section transition (`waitForSectionTransition`).
+  7. Loops until the final section is reached. When no pagination button remains and final submit is detected, PolicyEngine records `POLICY_BLOCKED`, and the agent transitions to `REVIEW_READY`.
+
+### 3.2 Purge of Dead Programmatic Submit Paths
+To enforce the strict human-in-the-loop guarantee, all autonomous form submission code was purged:
+- Removed `submitFormAsOperator()` from `AgentController.ts`.
+- Removed `submitFormManually()` from `BrowserManager.ts`.
+- Removed `autofiller:submit-form` IPC handler from `ipcHandlers.ts`.
+- Removed `submitForm` from preload bridge and renderer `bridge.ts`.
+- Removed submit buttons from UI `ControlBar.tsx`.
+- Form submission remains strictly an operator action executed directly in the live browser window.
+
+### 3.3 Information Preflight & Sequential Clarification Queue
+- **Preflight Inspection:** Prior to launching the browser, known required fields are compared against extracted facts and vault profile values.
+- **Sequential Clarification Stepper:** Missing required fields generate clarification requests with truthful progress counters (`currentIndex` / `total`) in the UI, rather than halting or ignoring missing data.
+- **Atomic Preflight Completion:** Browser launch and form filling only proceed once all required preflight items are satisfied or acknowledged.
+- **Mid-Fill Clarification:** Missing required fields encountered during live navigation pause the workflow, prompt the operator, and seamlessly resume upon answer.
+
+### 3.4 Manual Submission Detection & Session Finalization
+- During `REVIEW_READY`, `BrowserManager` actively watches the target page for user-initiated form submission (e.g. form submission events, thank-you/confirmation DOM nodes, URL navigation).
+- Upon detecting manual submission, `AgentController`:
+  - Transitions state to `COMPLETED`.
+  - Persists truthful final history records via [`HistoryStore.ts`](file:///c:/Users/aayus/autofiller/desktop/electron/services/HistoryStore.ts) preserving `COMPLETED` status and field counts.
+  - Gracefully closes the Playwright Chromium browser and cleans up memory.
+
+### 3.5 Fast Multi-Model AI Failover & Model Health Registry
+- Integrated dynamic fallback hierarchy in [`gemini_service.py`](file:///c:/Users/aayus/autofiller/backend/core/services/gemini_service.py): `gemini-3.5-flash` → `gemini-3.5-flash-lite` → `gemini-3.6-flash` → OpenRouter / Heuristic.
+- Built-in circuit breaker marks failed or quota-exhausted models and skips them on subsequent calls during the same session.
+- Added strict timeout budgets (15s–30s per model tier) preventing automation hangs during network degradation.
+
+---
+
+## 4. System Architecture & End-to-End Workflow
+
+```
++---------------------------------------------------------------------------------------------------+
+|                                      DESKTOP RENDERER (React 19)                                  |
+|   NewSessionView  |  DocumentViewer  |  FieldMappingTable  |  AgentTimeline  |  ClarificationModal|
++---------------------------------------------------------------------------------------------------+
+                                           |  contextBridge (preload.ts)
+                                           v
++---------------------------------------------------------------------------------------------------+
+|                                  ELECTRON MAIN PROCESS (TypeScript)                               |
+|                                                                                                   |
+|  +--------------------+     +---------------------+     +-------------------------------------+   |
+|  |   VaultService     |     |   AgentController   |     |           PolicyEngine              |   |
+|  | - AES-256-GCM      |     | - Bounded Loop      |     | - Whitelisted tools                 |   |
+|  | - OS safeStorage   |     | - Section Stepper   |<--->| - DENIED_FINAL_SUBMISSION (strict)  |   |
+|  | - Scrypt KDF       |     | - Sanitized IPC     |     | - Navigation allowlist              |   |
+|  | - Zero Plaintext   |     | - Event Queue       |     | - Pagination allowlist              |   |
+|  +--------------------+     +---------------------+     +-------------------------------------+   |
+|                                        |                                                          |
+|                                        v                                                          |
+|                             +---------------------+                                               |
+|                             |   BrowserManager    |                                               |
+|                             | - Playwright Engine |                                               |
+|                             | - FormScanner       |                                               |
+|                             | - Highlighting & UX |                                               |
+|                             | - Submit Watcher    |                                               |
+|                             +---------------------+                                               |
++---------------------------------------------------------------------------------------------------+
+             | (Bearer Token HMAC)                                     | (Chromium Automation)
+             v                                                         v
++--------------------------------------+             +--------------------------------------+
+|        FASTAPI BACKEND (Python)      |             |         TARGET WEB FORM              |
+|                                      |             |                                      |
+| - DocumentService (PyMuPDF, 25MB)   |             |  Section 1 -> Section 2 -> ...       |
+| - GeminiService (Multimodal AI)      |             |  Continue / Next (Agent Permitted)   |
+| - SessionRouter (CRUD & Events)      |             |  Submit Button (USER ONLY)           |
+| - In-Memory / Motor DB (Zero Values) |             +--------------------------------------+
++--------------------------------------+
+```
+
+### Workflow State Progression
+
+```
+[IDLE]
+  |
+  | User selects document & target form URL
+  v
+[EXTRACTING_DOC]
+  | PyMuPDF / Gemini Vision extracts facts (capped at 25MB, path-contained)
+  v
+[INFORMATION PREFLIGHT]
+  | Compares extracted facts + vault profile against required fields
+  | If missing required data:
+  |   -> [CLARIFICATION_REQUIRED] (Sequential UI prompts with stepper counters)
+  v
+[SCANNING_FORM]
+  | Playwright launches Chromium; FormScanner scans active section
+  v
+[MAPPING_FIELDS]
+  | Gemini maps facts to visible DOM fields (with heuristic fallback)
+  v
+[FILLING_FORM]
+  | BrowserManager fills active fields with highlighting (ToolRegistry gated)
+  v
+[VERIFYING]
+  | Re-reads DOM values; records verified: bool metadata (zero values persisted)
+  |
+  +---> [Has More Sections?] 
+  |       | Yes: PolicyEngine validates 'Continue' -> clicks -> returns to [SCANNING_FORM]
+  |       | No: Final Submit control detected -> PolicyEngine blocks click
+  v
+[REVIEW_READY]  <--- STRICT TERMINAL BOUNDARY (Agent halts completely)
+  |
+  | User inspects filled fields in live Chromium window
+  | User manually clicks "Submit Application"
+  v
+[MANUAL SUBMIT WATCHER]
+  | Detects submission confirmation in DOM
+  v
+[COMPLETED]
+  | Saves session metadata to HistoryStore (zero values); cleanly shuts down browser
+```
+
+---
+
+## 5. Verification Baseline & Test Results
+
+All test suites were executed live on October 9, 2026. Every check passed with zero failures.
+
+### 5.1 Backend Test Suite (`pytest`)
+**Command:** `venv\Scripts\pytest.exe tests/test_backend.py -v`  
+**Result:** **39 passed in 35.34s** (100% passing)
+
+```
+tests/test_backend.py::test_document_service_extracts_facts_from_text PASSED
+tests/test_backend.py::test_document_service_rejects_oversized_text PASSED
+tests/test_backend.py::test_document_service_blocks_path_outside_allowed_roots PASSED
+tests/test_backend.py::test_extract_document_endpoint_rejects_home_dir_and_env_with_403 PASSED
+tests/test_backend.py::test_internal_token_uses_constant_time_comparison PASSED
+tests/test_backend.py::test_startup_security_rejects_anonymous_flag PASSED
+tests/test_backend.py::test_settings_routes_are_removed PASSED
+tests/test_backend.py::test_session_routes_require_authentication PASSED
+tests/test_backend.py::test_health_endpoint_is_public PASSED
+tests/test_backend.py::test_health_reports_gemini_configured_as_boolean_only PASSED
+tests/test_backend.py::test_authenticated_session_extract_and_map_flow PASSED
+tests/test_backend.py::test_map_form_rejects_excessive_fact_payload PASSED
+tests/test_backend.py::test_events_are_persisted_to_session_timeline PASSED
+tests/test_backend.py::test_clarification_answer_updates_mapping PASSED
+tests/test_backend.py::test_gemini_service_requires_configuration PASSED
+tests/test_backend.py::test_gemini_service_parses_mapping_response PASSED
+tests/test_backend.py::test_document_service_extracts_facts_from_image PASSED
+tests/test_backend.py::test_gemini_service_extract_facts_from_image_parses_json PASSED
+tests/test_backend.py::test_document_service_multiline_admission_form_extraction PASSED
+tests/test_backend.py::test_gemini_service_extract_facts_from_text_parses_json PASSED
+tests/test_backend.py::test_mock_school_form_endpoint_is_accessible PASSED
+tests/test_backend.py::test_map_form_fields_uses_heuristic_fallback_when_gemini_fails PASSED
+tests/test_backend.py::test_openrouter_fallback_when_gemini_fails PASSED
+tests/test_backend.py::test_events_accept_camel_case_event_id_from_desktop PASSED
+tests/test_backend.py::test_clarification_accepts_the_payload_the_desktop_sends PASSED
+tests/test_backend.py::test_clarification_rejects_an_unusable_answer PASSED
+tests/test_backend.py::test_delete_session_and_purge_all_endpoints PASSED
+tests/test_backend.py::test_verifications_persist_safe_metadata_only_without_values PASSED
+tests/test_backend.py::test_finding_4_cors_preflight_for_delete_session PASSED
+tests/test_backend.py::test_finding_5_empty_and_scanned_pdf_error_handling PASSED
+tests/test_backend.py::test_finding_7_whitelist_extensions_rejects_exe_and_bin_with_415 PASSED
+tests/test_backend.py::test_finding_8_key_aliases_common_demographics PASSED
+tests/test_backend.py::test_fast_ai_failover_gemini_to_gemini_fallback PASSED
+tests/test_backend.py::test_fast_ai_failover_gemini_to_openrouter PASSED
+tests/test_backend.py::test_ai_provider_configuration_and_timeouts PASSED
+tests/test_backend.py::test_ai_mapping_timeout_configuration PASSED
+tests/test_backend.py::test_model_health_registry_and_catalog_filtering PASSED
+tests/test_backend.py::test_dead_gemini_model_skipped_fast_on_subsequent_request PASSED
+tests/test_backend.py::test_gemini_service_supplements_partial_ai_mapping_with_heuristic PASSED
+======================= 39 passed in 35.34s =======================
+```
+
+### 5.2 Live Security Boundary Verification
+**Command:** `venv\Scripts\python.exe verify_security_live.py`  
+**Result:** **11/11 Checks Passed** (Zero security leaks)
+
+```
+[PASS] POST /v1/documents/extract without token is refused  (status=401)
+[PASS] POST /v1/sessions without token is refused  (status=401)
+[PASS] GET /v1/sessions/{id} with wrong token is refused  (status=401)
+[PASS] valid token passes auth (unknown session is 404)  (status=404)
+[PASS] removed route /v1/settings is gone  (status=404)
+[PASS] removed route /v1/settings/update is gone  (status=404)
+[PASS] removed route /v1/settings/test-gemini is gone  (status=404)
+[PASS] absolute path outside allowed roots is refused  (status=403)
+[PASS] relative traversal to .env is refused  (status=403)
+[PASS] GET /health stays public for startup polling  (status=200)
+[PASS] /health exposes only a boolean for the Gemini key  (status=['gemini_configured', 'service', 'status'])
+====================================================================
+All security checks passed.
+```
+
+### 5.3 Wire Contract Verification
+**Command:** `venv\Scripts\python.exe backend/scripts/check_wire_contract.py`  
+**Result:** **Pass (Exit Code 0)** — Electron payloads strictly match FastAPI Pydantic v2 schemas.
+
+### 5.4 Desktop Application Test Suites (`npm test`)
+**Command:** `npm test`  
+**Result:** **All Desktop Suites Passed**
+- **Typecheck & Build:** 0 errors (`tsc --noEmit`, Vite build, Electron compilation).
+- **PolicyEngine Tests (`policy_test.js`):** 18 assertions passed (blocks Submit, Apply Now, Place Order, Continue to Payment; permits registered tools and wizard pagination; denies cross-host and non-http/https navigation).
+- **ToolRegistry Tests (`tool_registry_test.js`):** 7 assertions passed (blocks unregistered tools, verifies mutating tools require `field_NNN`, executes `click_pagination` correctly).
+- **FormScanner Tests (`scanner_test.js`):** Passed (scans 16 fields, collapses radio groups, detects 4 pagination controls and 1 final submit control).
+- **VaultService Tests (`vault_test.js`):** 12 assertions passed (AES-256-GCM authentication tag tampering rejected, recovery rotation enforced, forbidden payment keys rejected, scrypt derivation verified).
+- **End-to-End Integration Suite (`e2e_integration_test.js`):** **27 assertions passed**, including:
+  - Radio group collapsing.
+  - Zero-value contract verification (zero raw values in IPC events, persisted logs, or verifications).
+  - Multi-step 5-section autonomous navigation via Continue.
+  - Strict Never-Submit boundary halt at `REVIEW_READY`.
+  - Sequential preflight clarification without dropping requirements.
+  - User manual submit detection and clean session transition to `COMPLETED`.
+
+---
+
+## 6. Actionable Roadmap for Advancing Further
+
+With all security vulnerabilities resolved and the multi-step form-filling engine stabilized, development can advance along the following priority tracks:
+
+### Phase 10: Complex & Real-World Form Adaptations
+- **Dynamic JavaScript Forms:** Enhance `FormScanner` to support non-standard inputs (custom React/MUI select dropdowns, div-based radio groups, shadow DOM elements).
+- **CAPTCHA & Bot Detection Awareness:** Add heuristic detection for Cloudflare Turnstile, hCaptcha, and Google reCAPTCHA. Pause automation with an informative user prompt to allow manual completion before resuming.
+- **File Upload Fields:** Add an agent capability allowing users to map uploaded documents (e.g. student photo, birth certificate PDF) directly into file upload input controls (`<input type="file">`).
+
+### Phase 11: Production Packaging & Distribution
+- **Executable Builds:** Generate and verify signed production installers for Windows (`.exe`/NSIS) using `electron-builder`.
+- **Backend Binary Bundling:** Package the Python FastAPI backend into a standalone executable via PyInstaller or embeddable Python distribution to eliminate external Python environment dependencies on end-user machines.
+- **Auto-Update Mechanism:** Integrate Electron's `autoUpdater` with GitHub Releases for seamless in-app security updates.
+
+### Phase 12: Chrome Extension Companion
+- **Browser Overlay Mode:** Develop an optional lightweight Chrome/Chromium extension that allows users to trigger AutoFiller directly from their everyday browser without opening a separate Playwright Chromium instance.
+- **Native Messaging Bridge:** Connect the extension securely to the local Electron VaultService via Chrome Native Messaging for shared profile access.
+
+### Phase 13: Advanced Multi-Document Processing
+- **Multi-Document Ingestion:** Enable uploading multiple documents simultaneously (e.g., Aadhaar card + previous report card + birth certificate) and merging extracted facts into a single consolidated profile.
+- **Conflict Resolution UI:** Provide an interactive diff review when newly extracted documents contain conflicting values with existing vault records.

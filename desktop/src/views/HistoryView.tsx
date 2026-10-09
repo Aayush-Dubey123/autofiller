@@ -99,6 +99,7 @@ export const HistoryView: React.FC = () => {
           </span>
         );
       case 'INTERRUPTED':
+      case 'IDLE':
         return (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#FFFBEB', color: '#B45309', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 700, border: '1px solid #FCD34D' }}>
             <Clock size={12} />
@@ -302,7 +303,7 @@ export const HistoryView: React.FC = () => {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexShrink: 0 }}>
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '0.9375rem', fontWeight: 800, color: '#16654E' }}>
-                      {session.fieldsFilled} {session.totalFields ? `/ ${Math.max(session.totalFields, session.fieldsFilled)}` : ''}
+                      {session.fieldsFilled} {session.totalFields ? `/ ${session.totalFields}` : ''}
                     </div>
                     <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>Fields Filled</div>
                   </div>

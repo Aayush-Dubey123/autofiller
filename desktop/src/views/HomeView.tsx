@@ -311,7 +311,13 @@ export const HomeView: React.FC<HomeViewProps> = ({
                           : '#92400E',
                     }}
                   >
-                    {session.status}
+                    {session.status === 'COMPLETED'
+                      ? 'Submitted'
+                      : session.status === 'REVIEW_READY'
+                      ? 'Review Ready'
+                      : session.status === 'IDLE' || session.status === 'INTERRUPTED'
+                      ? 'Interrupted'
+                      : session.status}
                   </span>
                 </div>
               ))}

@@ -1469,12 +1469,12 @@ async function runE2E() {
       const backend = makeStubBackend(FORM_URL);
       const controller = new AgentController(backend);
 
-      // Wire historyStore to controller lifecycle
+      // Wire historyStore to controller lifecycle (totalFields 0 initially, synchronized from form)
       historyStore.beginSession({
         targetUrl: FORM_URL,
         profileName: 'Student Profile',
         dataSource: 'both',
-        totalFields: 12, // Initial fact count
+        totalFields: 0,
       });
 
       controller.onEvent((e) => historyStore.noteEvent(e));
@@ -1527,6 +1527,117 @@ async function runE2E() {
       assert.strictEqual(serialized.includes('9876543210'), false, 'No raw phone in history');
 
       await controller.cleanup();
+    } finally {
+      if (fs.existsSync(scratchDir)) fs.rmSync(scratchDir, { recursive: true, force: true });
+    }
+  });
+
+  await test('Phase 9F: failed or ambiguous submission does not falsely report success and preserves REVIEW_READY', async () => {
+    const backend = makeStubBackend(FORM_URL);
+    const controller = new AgentController(backend);
+
+    await controller.startSession({
+      documentText: 'Student Name: Aarav Sharma',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+    });
+
+    assert.strictEqual(controller.getStateMachine().getState(), 'REVIEW_READY');
+
+    const bm = controller.getBrowserManager();
+
+    // Inject an error element into the page simulating failed submission
+    await bm.page.evaluate(() => {
+      const err = document.createElement('div');
+      err.className = 'error-message';
+      err.textContent = 'Submission failed: Please correct the errors below.';
+      document.body.prepend(err);
+    });
+
+    const isConfirmed = await bm.checkSubmissionConfirmed();
+    assert.strictEqual(isConfirmed, false, 'Error on page must prevent submission confirmation');
+
+    const completed = await controller.waitForManualSubmission(800);
+    assert.strictEqual(completed, false, 'Failed submission must not transition to COMPLETED');
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      'Session must remain in REVIEW_READY for user verification'
+    );
+
+    await controller.cleanup();
+  });
+
+  await test('Phase 9F: stopping at REVIEW_READY preserves REVIEW_READY in history and never downgrades to IDLE', async () => {
+    const scratchDir = path.join(__dirname, `scratch_test_history_stop_${Date.now()}`);
+    if (!fs.existsSync(scratchDir)) fs.mkdirSync(scratchDir, { recursive: true });
+
+    try {
+      const historyStore = new HistoryStore(scratchDir);
+      const backend = makeStubBackend(FORM_URL);
+      const controller = new AgentController(backend);
+
+      historyStore.beginSession({
+        targetUrl: FORM_URL,
+        profileName: 'Review Session',
+        dataSource: 'profile',
+        totalFields: 0,
+      });
+
+      controller.onEvent((e) => historyStore.noteEvent(e));
+      controller.getStateMachine().onTransition((s) => historyStore.noteState(s));
+
+      await controller.startSession({
+        documentText: 'Student Name: Aarav Sharma',
+        documentName: 'student.pdf',
+        targetUrl: FORM_URL,
+      });
+
+      assert.strictEqual(controller.getStateMachine().getState(), 'REVIEW_READY');
+
+      // Operator stops without submitting
+      await controller.stop();
+
+      const sessions = historyStore.listSessions();
+      assert.strictEqual(sessions.length, 1);
+      assert.strictEqual(
+        sessions[0].status,
+        'REVIEW_READY',
+        'History record must stay REVIEW_READY and not become IDLE'
+      );
+      assert.ok(sessions[0].fieldsFilled > 0, 'fieldsFilled must be > 0');
+      assert.ok(sessions[0].totalFields >= sessions[0].fieldsFilled, 'totalFields >= fieldsFilled');
+
+      await controller.cleanup();
+    } finally {
+      if (fs.existsSync(scratchDir)) fs.rmSync(scratchDir, { recursive: true, force: true });
+    }
+  });
+
+  await test('Phase 9F: stopping in-flight active session records INTERRUPTED in history, not IDLE', async () => {
+    const scratchDir = path.join(__dirname, `scratch_test_history_interrupted_${Date.now()}`);
+    if (!fs.existsSync(scratchDir)) fs.mkdirSync(scratchDir, { recursive: true });
+
+    try {
+      const historyStore = new HistoryStore(scratchDir);
+      historyStore.beginSession({
+        targetUrl: 'http://example.com/form',
+        profileName: 'Cancelled Session',
+        dataSource: 'profile',
+        totalFields: 5,
+      });
+
+      // Simulate in-flight state and user stop
+      historyStore.noteState('FILLING_FORM');
+      historyStore.noteState('IDLE');
+
+      const sessions = historyStore.listSessions();
+      assert.strictEqual(sessions.length, 1);
+      assert.strictEqual(
+        sessions[0].status,
+        'INTERRUPTED',
+        'Interrupted in-flight session must be saved as INTERRUPTED, not IDLE'
+      );
     } finally {
       if (fs.existsSync(scratchDir)) fs.rmSync(scratchDir, { recursive: true, force: true });
     }

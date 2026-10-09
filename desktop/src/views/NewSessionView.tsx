@@ -262,6 +262,20 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
     state === 'FILLING_FORM' ||
     state === 'VERIFYING';
 
+  // Derive completion field counts truthfully from latest events if available
+  const completionStats = (() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const meta = events[i]?.metadata;
+      if (typeof meta?.verifiedCount === 'number' && typeof meta?.totalFields === 'number') {
+        return {
+          verifiedCount: meta.verifiedCount as number,
+          totalFields: meta.totalFields as number,
+        };
+      }
+    }
+    return null;
+  })();
+
   const canStart = finalFacts.length > 0 && isValidUrl && state === 'IDLE';
 
   let disabledReason = '';
@@ -330,6 +344,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
       )}
 
       {/* Session Completed Banner */}
+      {/* Session Completed Banner */}
       {state === 'COMPLETED' && (
         <div
           style={{
@@ -364,7 +379,9 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                 Application Submitted Successfully!
               </h3>
               <p style={{ fontSize: '0.875rem', color: '#16654E', marginTop: '2px' }}>
-                The web form was reviewed and manually submitted by the operator. AutoFiller has finalized the session and safely saved the metadata record.
+                {completionStats
+                  ? `All ${completionStats.verifiedCount} of ${completionStats.totalFields} form fields were verified and submitted. AutoFiller has saved the metadata record to history.`
+                  : 'The web form was reviewed and manually submitted by the operator. AutoFiller has finalized the session and safely saved the metadata record.'}
               </p>
             </div>
           </div>
@@ -373,6 +390,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
             {onOpenHistory && (
               <button
                 onClick={onOpenHistory}
+                data-testid="view-history-button"
                 style={{
                   padding: '10px 20px',
                   borderRadius: 'var(--radius-md)',
@@ -437,7 +455,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                 Form Filled & Verified — Ready for Human Review
               </div>
               <div style={{ fontSize: '0.8125rem', color: '#047857', marginTop: '2px' }}>
-                Automation has stopped per the Never-Submit safety policy. Please review the filled fields in the browser window and click Submit on the website when ready.
+                Automation has stopped per the Never-Submit safety policy. Please review the filled fields in the browser window and click Submit on the website when ready. AutoFiller will automatically detect submission, or you can confirm below.
               </div>
             </div>
           </div>
@@ -445,6 +463,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px' }}>
               <button
                 onClick={onConfirmSubmission}
+                data-testid="confirm-submission-button"
                 style={{
                   padding: '8px 16px',
                   borderRadius: 'var(--radius-md)',

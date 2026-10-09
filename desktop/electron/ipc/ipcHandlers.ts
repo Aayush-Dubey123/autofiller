@@ -178,7 +178,7 @@ export function registerIpcHandlers(
       targetUrl: options.targetUrl,
       profileName: options.documentName ? 'Document & Profile' : 'Profile Facts',
       dataSource: options.documentPath ? (options.facts ? 'both' : 'document') : 'profile',
-      totalFields: options.facts?.length || 0,
+      totalFields: 0,
     });
 
     agentController.startSession(options).catch((error: Error) => {

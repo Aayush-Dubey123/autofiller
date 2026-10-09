@@ -981,6 +981,31 @@ export class BrowserManager {
     if (!this.page || this.page.isClosed()) return false;
     try {
       return await this.page.evaluate(() => {
+        // 0. Check for explicit visible error states / failure banners. If error is visible, do not report confirmed!
+        const errorElements = document.querySelectorAll(
+          '#error-summary, .error-message, .alert-danger, .submission-error, .form-errors, [data-error]'
+        );
+        for (const el of Array.from(errorElements)) {
+          const style = window.getComputedStyle(el);
+          if (style.display !== 'none' && style.visibility !== 'hidden' && (el as HTMLElement).offsetParent !== null) {
+            return false;
+          }
+        }
+
+        const bodyText = document.body ? document.body.innerText : '';
+        const errorPatterns = [
+          /submission failed/i,
+          /failed to submit/i,
+          /there was an error submitting/i,
+          /please fix the errors/i,
+          /please correct the errors/i,
+        ];
+        for (const errPat of errorPatterns) {
+          if (errPat.test(bodyText)) {
+            return false;
+          }
+        }
+
         // 1. Check window event flag
         if ((window as any).__autofiller_submitted) return true;
 
@@ -1002,7 +1027,6 @@ export class BrowserManager {
         }
 
         // 3. Check page text for unambiguous submission confirmation indicators
-        const bodyText = document.body ? document.body.innerText : '';
         const confirmationPatterns = [
           /application submitted successfully/i,
           /form submitted successfully/i,

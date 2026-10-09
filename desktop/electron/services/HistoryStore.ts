@@ -85,7 +85,7 @@ export class HistoryStore {
       id: `run_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
       date: new Date().toISOString(),
       hostAndPath: cleanHostAndPath(info.targetUrl),
-      status: 'IDLE',
+      status: 'EXTRACTING_DOC',
       fieldsFilled: 0,
       totalFields: info.totalFields || 0,
       profileName: info.profileName || 'Default Profile',
@@ -104,16 +104,24 @@ export class HistoryStore {
     const record = this.active();
     if (!record) return;
 
-    // Never downgrade a completed session to IDLE upon session stop/cleanup
-    if (record.status === 'COMPLETED' && state === 'IDLE') {
+    // Never downgrade terminal or review-ready sessions to IDLE upon session stop/cleanup
+    if (state === 'IDLE') {
+      if (record.status === 'COMPLETED' || record.status === 'REVIEW_READY') {
+        this.activeId = null;
+        return;
+      }
+      if (ACTIVE_STATES.has(record.status)) {
+        record.status = 'INTERRUPTED';
+      }
       this.activeId = null;
+      this.save();
       return;
     }
 
     record.status = state;
     if (FINISHED_STATES.has(state)) {
       if (state === 'ERROR') record.error = this.lastFailure || 'Session failed.';
-      if (state === 'COMPLETED') {
+      if (state === 'COMPLETED' || state === 'REVIEW_READY') {
         const currentTotal = record.totalFields ?? 0;
         if (currentTotal > 0 && record.fieldsFilled > currentTotal) {
           record.totalFields = record.fieldsFilled;
@@ -130,7 +138,7 @@ export class HistoryStore {
 
     // Synchronize authoritative totalFields from mapping or completion metadata
     if (typeof event.metadata?.totalFields === 'number' && event.metadata.totalFields > 0) {
-      record.totalFields = event.metadata.totalFields;
+      record.totalFields = Math.max(event.metadata.totalFields, record.fieldsFilled);
       this.save();
     }
 
@@ -203,19 +211,33 @@ export class HistoryStore {
       if (!fs.existsSync(this.filePath)) return;
       const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
       const sessions: SessionRecord[] = (Array.isArray(raw?.sessions) ? raw.sessions : []).map(
-        (entry: any) => ({
-          id: String(entry.id || ''),
-          date: String(entry.date || entry.startedAt || new Date().toISOString()),
-          hostAndPath: String(entry.hostAndPath || cleanHostAndPath(entry.targetUrl || '')),
-          status: ACTIVE_STATES.has(String(entry.status))
-            ? 'INTERRUPTED'
-            : ((String(entry.status) || 'IDLE') as SessionRecord['status']),
-          fieldsFilled: Number(entry.fieldsFilled) || 0,
-          totalFields: Number(entry.totalFields) || 0,
-          profileName: entry.profileName ? String(entry.profileName) : undefined,
-          dataSource: entry.dataSource ? String(entry.dataSource) : undefined,
-          error: entry.error ? String(entry.error).slice(0, 300) : undefined,
-        })
+        (entry: any) => {
+          const rawStatus = String(entry.status || '');
+          let resolvedStatus: SessionRecord['status'];
+          if (rawStatus === 'COMPLETED' || rawStatus === 'REVIEW_READY' || rawStatus === 'ERROR' || rawStatus === 'INTERRUPTED') {
+            resolvedStatus = rawStatus as SessionRecord['status'];
+          } else {
+            resolvedStatus = 'INTERRUPTED';
+          }
+
+          const fieldsFilled = Number(entry.fieldsFilled) || 0;
+          let totalFields = Number(entry.totalFields) || 0;
+          if (totalFields > 0 && fieldsFilled > totalFields) {
+            totalFields = fieldsFilled;
+          }
+
+          return {
+            id: String(entry.id || ''),
+            date: String(entry.date || entry.startedAt || new Date().toISOString()),
+            hostAndPath: String(entry.hostAndPath || cleanHostAndPath(entry.targetUrl || '')),
+            status: resolvedStatus,
+            fieldsFilled,
+            totalFields,
+            profileName: entry.profileName ? String(entry.profileName) : undefined,
+            dataSource: entry.dataSource ? String(entry.dataSource) : undefined,
+            error: entry.error ? String(entry.error).slice(0, 300) : undefined,
+          };
+        }
       );
       this.data = { sessions };
     } catch (error) {

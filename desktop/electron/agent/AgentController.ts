@@ -1022,6 +1022,7 @@ export class AgentController {
       const verifiedFieldRefs = new Set<string>();
       const allDiscoveredRequiredRefs = new Set<string>();
       let mappings: FieldMapping[] = [];
+      let lastFormSnapshot: FormSnapshot | null = null;
       let verifiedCount = 0;
       let sectionIndex = 1;
       const MAX_SECTIONS = 15;
@@ -1039,6 +1040,7 @@ export class AgentController {
           (snapshot: FormSnapshot) =>
             `Detected ${snapshot.fields.length} form fields (${snapshot.fields.filter((f) => f.visible).length} visible).`
         );
+        lastFormSnapshot = formSnapshot;
 
         // Treat active DOM as authoritative: visible enabled fields belong to current section
         let activeSectionFields = formSnapshot.fields.filter(
@@ -1102,6 +1104,9 @@ export class AgentController {
                 )
             );
 
+            const totalFormFields = Math.max(formSnapshot.fields.length, mappings.length);
+            this.lastTotalFields = totalFormFields;
+
             this.emitEvent(
               this.buildEvent(
                 'STATE_CHANGED',
@@ -1111,6 +1116,7 @@ export class AgentController {
                     mappings,
                     factCount: facts.length,
                     totalClarifications: sectionClarifications.length,
+                    totalFields: totalFormFields,
                   },
                 }
               )
@@ -1540,7 +1546,8 @@ export class AgentController {
       });
 
       if (allRequiredVerified && !hasFailedRequired && this.stateMachine.getState() !== 'CLARIFICATION_REQUIRED') {
-        this.lastTotalFields = mappings.length;
+        const totalFormFields = Math.max(lastFormSnapshot?.fields.length || 0, mappings.length);
+        this.lastTotalFields = totalFormFields;
         this.lastVerifiedCount = verifiedCount;
         this.stateMachine.transition('REVIEW_READY');
         const failureSummary =
@@ -1550,13 +1557,13 @@ export class AgentController {
         this.emitEvent(
           this.buildEvent(
             'STATE_CHANGED',
-            `Form filling complete. ${verifiedCount}/${mappings.length} fields verified.` +
+            `Form filling complete. ${verifiedCount}/${totalFormFields} fields verified.` +
             `${failureSummary} Ready for human review and submission.`,
             {
               metadata: {
                 failedFields,
                 submissionControls: submissionCheck.controls,
-                totalFields: mappings.length,
+                totalFields: totalFormFields,
                 verifiedCount,
               },
             }

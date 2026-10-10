@@ -169,7 +169,7 @@ export const HelpView: React.FC = () => {
           Privacy & Data Processing Policy
         </h3>
         <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-          Your details are stored encrypted on this device. When you fill a form, the values needed to match its fields are sent to Google Gemini for processing.
+          Field labels are sent to AI for matching; your values stay on this device; uploaded documents are processed by Gemini.
         </p>
       </div>
 

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Conditional & Reactive Admission Details</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f1f5f9; color: #0f172a; padding: 28px 16px; display: flex; justify-content: center; }
+    .card { background: #ffffff; border-radius: 12px; border: 1px solid #cbd5e1; box-shadow: 0 4px 12px rgba(0,0,0,0.05); max-width: 600px; width: 100%; padding: 28px; }
+    h1 { font-size: 1.35rem; color: #0f172a; margin-bottom: 6px; }
+    p.desc { font-size: 0.875rem; color: #64748b; margin-bottom: 20px; }
+    .form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+    label { font-size: 0.8125rem; font-weight: 700; color: #334155; }
+    label span.req { color: #dc2626; margin-left: 2px; }
+    input[type="text"], select, textarea { width: 100%; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.875rem; color: #0f172a; }
+    .radio-group { display: flex; gap: 16px; align-items: center; margin-top: 4px; }
+    .radio-group label { font-weight: normal; font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+    .conditional-panel { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-top: 8px; margin-bottom: 16px; display: none; }
+    .conditional-panel.active { display: block; }
+    button[type="submit"] { width: 100%; background: #0f766e; color: #ffffff; padding: 11px; border: none; border-radius: 6px; font-size: 0.9375rem; font-weight: 700; cursor: pointer; margin-top: 12px; }
+    button[type="submit"]:hover { background: #115e59; }
+    #confirmation { display: none; background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 14px; margin-top: 16px; text-align: center; color: #166534; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Student Admission Registration</h1>
+    <p class="desc">Please complete all fields. Conditional sections reveal upon selection.</p>
+
+    <form id="conditionalForm" onsubmit="handleFormSubmit(event)" novalidate>
+      <!-- Base Field 1 -->
+      <div class="form-group">
+        <label for="student_name">Student Full Name<span class="req">*</span></label>
+        <input type="text" id="student_name" name="student_name" required placeholder="Leo Miller">
+      </div>
+
+      <!-- Base Field 2 -->
+      <div class="form-group">
+        <label for="grade">Applying Grade<span class="req">*</span></label>
+        <select id="grade" name="grade" required>
+          <option value="">Select Grade</option>
+          <option value="Grade 1">Grade 1</option>
+          <option value="Grade 5">Grade 5</option>
+          <option value="Grade 10">Grade 10</option>
+        </select>
+      </div>
+
+      <!-- Toggle 1: Transport -->
+      <div class="form-group">
+        <label>Does student require school bus transport?<span class="req">*</span></label>
+        <div class="radio-group">
+          <label><input type="radio" name="transport" value="Yes" onchange="toggleTransport(true)"> Yes</label>
+          <label><input type="radio" name="transport" value="No" checked onchange="toggleTransport(false)"> No</label>
+        </div>
+      </div>
+
+      <!-- Conditional Box 1 -->
+      <div id="transport_box" class="conditional-panel">
+        <div class="form-group">
+          <label for="pickup_stop">Bus Pickup Stop<span class="req">*</span></label>
+          <input type="text" id="pickup_stop" name="pickup_stop" placeholder="North Gate Bus Stop">
+        </div>
+        <div class="form-group">
+          <label for="route_slot">Bus Route Slot<span class="req">*</span></label>
+          <select id="route_slot" name="route_slot">
+            <option value="">Select Slot</option>
+            <option value="Morning">Morning</option>
+            <option value="Afternoon">Afternoon</option>
+            <option value="Both">Both</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Toggle 2: Dietary -->
+      <div class="form-group">
+        <label>Does student have special dietary requirements?<span class="req">*</span></label>
+        <div class="radio-group">
+          <label><input type="radio" name="dietary" value="Yes" onchange="toggleDiet(true)"> Yes</label>
+          <label><input type="radio" name="dietary" value="No" checked onchange="toggleDiet(false)"> No</label>
+        </div>
+      </div>
+
+      <!-- Conditional Box 2 -->
+      <div id="diet_box" class="conditional-panel">
+        <div class="form-group">
+          <label for="diet_details">Dietary Requirements Details<span class="req">*</span></label>
+          <textarea id="diet_details" name="diet_details" rows="2" placeholder="Describe dietary restrictions..."></textarea>
+        </div>
+      </div>
+
+      <button type="submit" id="submitBtn">Submit Application</button>
+    </form>
+
+    <div id="confirmation">
+      ✓ Application successfully saved!
+    </div>
+  </div>
+
+  <script>
+    function toggleTransport(enable) {
+      const box = document.getElementById('transport_box');
+      if (enable) {
+        box.classList.add('active');
+        document.getElementById('pickup_stop').required = true;
+        document.getElementById('route_slot').required = true;
+      } else {
+        box.classList.remove('active');
+        document.getElementById('pickup_stop').required = false;
+        document.getElementById('route_slot').required = false;
+      }
+    }
+
+    function toggleDiet(enable) {
+      const box = document.getElementById('diet_box');
+      if (enable) {
+        box.classList.add('active');
+        document.getElementById('diet_details').required = true;
+      } else {
+        box.classList.remove('active');
+        document.getElementById('diet_details').required = false;
+      }
+    }
+
+    function handleFormSubmit(e) {
+      e.preventDefault();
+      document.getElementById('confirmation').style.display = 'block';
+    }
+  </script>
+</body>
+</html>

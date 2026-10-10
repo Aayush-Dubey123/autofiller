@@ -430,7 +430,7 @@ async def test_gemini_service_requires_configuration():
 
 @pytest.mark.asyncio
 async def test_gemini_service_parses_mapping_response():
-    """Verify a well-formed provider response is normalized into mappings."""
+    """Verify a well-formed provider response is normalized into mappings without values."""
     from core.services.gemini_service import GeminiService
 
     service = GeminiService()
@@ -438,7 +438,7 @@ async def test_gemini_service_parses_mapping_response():
 
     payload = (
         '{"mappings":[{"field_ref":"field_001","field_label":"Student Name",'
-        '"fact_key":"student_name","fact_value":"Priya Patel","confidence":0.95,'
+        '"fact_key":"student_name","confidence":0.95,'
         '"is_ambiguous":false}]}'
     )
     with patch.object(service, "_generate_async", AsyncMock(return_value=payload)):
@@ -458,7 +458,8 @@ async def test_gemini_service_parses_mapping_response():
             form_snapshot=snapshot, facts=[]
         )
 
-    assert mappings[0].fact_value == "Priya Patel"
+    assert mappings[0].fact_key == "student_name"
+    assert mappings[0].fact_value is None
     assert clarifications == []
     assert unmapped == []
 
@@ -736,13 +737,17 @@ async def test_map_form_fields_uses_heuristic_fallback_when_gemini_fails(monkeyp
     assert len(mappings) == 3
     # Student Name mapped
     name_mapping = next(m for m in mappings if m.field_ref == "field_name")
-    assert name_mapping.fact_value == "Aarav Sharma"
+    assert name_mapping.fact_key == "student_name"
+    assert name_mapping.fact_value is None
     # Date of Birth mapped
     dob_mapping = next(m for m in mappings if m.field_ref == "field_dob")
-    assert dob_mapping.fact_value == "15-08-2010"
-    # Ambiguous phone numbers flagged as clarification
+    assert dob_mapping.fact_key == "dob"
+    assert dob_mapping.fact_value is None
+    # Ambiguous phone numbers flagged as clarification with labels only (no raw values)
     assert len(clarifications) == 1
     assert "field_phone" in clarifications[0].field_ref
+    assert clarifications[0].selected_value is None
+    assert all("+91" not in opt for opt in clarifications[0].options)
 
 
 @pytest.mark.asyncio
@@ -1365,6 +1370,107 @@ async def test_gemini_service_supplements_partial_ai_mapping_with_heuristic(monk
     assert "field_002" in mapped_refs
     assert "field_003" in mapped_refs
     assert len(unmapped) == 0
+    assert all(m.fact_value is None for m in mappings)
+
+
+@pytest.mark.asyncio
+async def test_gemini_outbound_payload_contains_zero_profile_values(monkeypatch):
+    """Assert no profile values reach Gemini during mapping across a complete fill."""
+    from core.services.gemini_service import GeminiService
+    from core.models.session_model import FactDescriptor
+
+    service = GeminiService()
+    monkeypatch.setattr(service, "client", object())
+
+    captured_prompt = None
+
+    async def fake_failover(contents, config=None, log_context="", timeout=None):
+        nonlocal captured_prompt
+        captured_prompt = contents
+        return '{"mappings": [{"field_ref": "f1", "field_label": "Name", "fact_key": "student_name", "confidence": 0.95}]}', False, None
+
+    monkeypatch.setattr(service, "_generate_with_failover", fake_failover)
+
+    SECRET_VALUES = [
+        "SENSITIVE_SECRET_STUDENT_NAME_12345",
+        "SENSITIVE_SECRET_DOB_99999",
+        "SENSITIVE_SECRET_PHONE_77777",
+        "SENSITIVE_SECRET_ADDRESS_44444",
+    ]
+
+    facts = [
+        ExtractedFact(key="student_name", label="Student Full Name", value=SECRET_VALUES[0], confidence=0.99),
+        ExtractedFact(key="dob", label="Date of Birth", value=SECRET_VALUES[1], confidence=0.98),
+        FactDescriptor(key="phone", label="Contact Phone Number", confidence=0.95),
+        ExtractedFact(key="address", label="Residential Address", value=SECRET_VALUES[3], confidence=0.97),
+    ]
+
+    snapshot = FormSnapshot(
+        url="https://school.edu/admission",
+        title="School Admission Form",
+        fields=[
+            FormFieldSnapshot(ref="f1", label="Student Full Name", type="text", required=True),
+            FormFieldSnapshot(ref="f2", label="Date of Birth", type="date", required=True),
+            FormFieldSnapshot(ref="f3", label="Contact Phone Number", type="tel", required=True),
+            FormFieldSnapshot(ref="f4", label="Residential Address", type="textarea", required=True),
+        ],
+    )
+
+    mappings, clars, unmapped = await service.map_form_fields(form_snapshot=snapshot, facts=facts)
+
+    assert captured_prompt is not None, "Prompt was not generated for Gemini"
+    for secret in SECRET_VALUES:
+        assert secret not in captured_prompt, f"CRITICAL LEAK: Profile value '{secret}' reached Gemini prompt!"
+
+    # Verify keys and labels are present
+    assert "student_name" in captured_prompt
+    assert "Student Full Name" in captured_prompt
+    assert "Contact Phone Number" in captured_prompt
+    # All mappings returned have fact_value=None
+    assert all(m.fact_value is None for m in mappings)
+
+
+@pytest.mark.asyncio
+async def test_openrouter_outbound_payload_contains_zero_profile_values(monkeypatch):
+    """Assert no profile values reach OpenRouter fallback during mapping."""
+    from core.services.gemini_service import GeminiService
+
+    service = GeminiService()
+    monkeypatch.setattr(service, "client", object())
+
+    # Simulate Gemini failing so OpenRouter is called
+    async def fake_failover_fail(contents, config=None, log_context="", timeout=None):
+        return None, True, "Gemini Quota Exceeded"
+
+    captured_openrouter_messages = None
+
+    async def fake_openrouter(messages, timeout=None):
+        nonlocal captured_openrouter_messages
+        captured_openrouter_messages = messages
+        return '{"mappings": [{"field_ref": "f1", "field_label": "Name", "fact_key": "student_name", "confidence": 0.9}]}'
+
+    monkeypatch.setattr(service, "_generate_with_failover", fake_failover_fail)
+    monkeypatch.setattr(service, "_generate_openrouter_async", fake_openrouter)
+    monkeypatch.setattr("core.services.gemini_service.is_openrouter_configured", lambda: True)
+
+    SECRET_PHONE = "SENSITIVE_SECRET_PHONE_0000000000"
+    facts = [
+        ExtractedFact(key="phone", label="Primary Phone", value=SECRET_PHONE, confidence=0.99),
+    ]
+
+    snapshot = FormSnapshot(
+        url="https://portal.edu/form",
+        title="Portal",
+        fields=[FormFieldSnapshot(ref="f1", label="Primary Phone", type="tel", required=True)],
+    )
+
+    mappings, clars, unmapped = await service.map_form_fields(form_snapshot=snapshot, facts=facts)
+
+    assert captured_openrouter_messages is not None, "OpenRouter was not engaged on fallback"
+    all_openrouter_text = json.dumps(captured_openrouter_messages)
+    assert SECRET_PHONE not in all_openrouter_text, "CRITICAL LEAK: Profile value reached OpenRouter!"
+    assert all(m.fact_value is None for m in mappings)
+
 
 
 

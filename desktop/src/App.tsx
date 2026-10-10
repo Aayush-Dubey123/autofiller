@@ -514,7 +514,7 @@ export const App: React.FC = () => {
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <ShieldCheck size={18} />
               <span>
-                <strong>Want extra protection?</strong> You can lock your details with a privacy key in Settings.
+                <strong>Want extra protection?</strong> You can lock your details with a privacy key in Settings. Field labels are sent to AI for matching; your values stay on this device; uploaded documents are processed by Gemini.
               </span>
               <button
                 onClick={() => handleNavigate('Settings')}

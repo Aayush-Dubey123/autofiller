@@ -14,6 +14,7 @@ import { ToolContext, ToolExecutionError, ToolRegistry } from './ToolRegistry';
 import { BrowserManager, OperationCancelledError } from '../browser/BrowserManager';
 import { PolicyEngine, SubmissionControl } from '../policy/PolicyEngine';
 import { BackendClient, coerceClarificationValue } from '../services/BackendClient';
+import { matchOption } from './OptionMatcher';
 import {
   AgentEventPayload,
   ClarificationPromptPayload,
@@ -754,6 +755,75 @@ export class AgentController {
   }
 
   /**
+   * Attach fact values locally from available document facts or vault records.
+   *
+   * Zero-value mapping: the backend only returns field_ref -> fact_key associations.
+   * Personal values are resolved and attached strictly on this local device.
+   *
+   * @param mappings Mappings returned from the mapping endpoint.
+   * @param facts Extracted facts available locally.
+   */
+  private attachFactValues(mappings: FieldMapping[], facts: ExtractedFact[]): void {
+    const factMap = new Map<string, ExtractedFact>();
+    for (const f of facts) {
+      factMap.set(f.key.toLowerCase().trim(), f);
+    }
+
+    for (const mapping of mappings) {
+      if (mapping.fact_key && (!mapping.fact_value || String(mapping.fact_value).trim().length === 0)) {
+        const fact = factMap.get(mapping.fact_key.toLowerCase().trim());
+        if (fact) {
+          mapping.fact_value = fact.value;
+          if (!mapping.status || mapping.status === 'PENDING') {
+            mapping.status = 'PENDING';
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Resolve option selection for select/radio fields locally using normalization,
+   * synonym mapping, and fuzzy similarity matching.
+   *
+   * @param mappings Active field mappings.
+   * @param fields Form fields to inspect.
+   */
+  private resolveOptionMappings(
+    mappings: FieldMapping[],
+    fields: FormFieldSnapshot[]
+  ): void {
+    const fieldMap = new Map<string, FormFieldSnapshot>();
+    for (const f of fields) {
+      fieldMap.set(f.ref, f);
+    }
+
+    for (const mapping of mappings) {
+      const field = fieldMap.get(mapping.field_ref);
+      if (!field) continue;
+
+      if ((field.type === 'select' || field.type === 'radio') && field.options && field.options.length > 0) {
+        if (mapping.fact_value) {
+          const match = matchOption(mapping.fact_value, field.options);
+          if (!match.needsClarification && match.matchedOption) {
+            mapping.fact_value = match.matchedOption;
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Determine whether two field labels match, normalizing trailing asterisks, colons, and casing.
+   */
+  private labelsMatch(a?: string, b?: string): boolean {
+    if (!a || !b) return false;
+    const cleanA = a.toLowerCase().replace(/[*:\s]+$/, '').trim();
+    const cleanB = b.toLowerCase().replace(/[*:\s]+$/, '').trim();
+    return cleanA === cleanB;
+  }
+
+  /**
    * Run the complete FormPilot automation loop for one session.
    *
    * @param options Session configuration supplied by the renderer.
@@ -902,6 +972,8 @@ export class AgentController {
         const mapResult = await this.backendClient.mapForm(this.sessionId, probeSnapshot, facts);
         preflightMappings = mapResult.mappings || [];
         const preflightClarifications = mapResult.clarifications_required || [];
+        this.attachFactValues(preflightMappings, facts);
+        this.resolveOptionMappings(preflightMappings, probeSnapshot.fields);
 
         // 3. Mapping Completeness Check:
         // Explicitly determine:
@@ -1064,6 +1136,7 @@ export class AgentController {
             const mapResult = await this.backendClient.mapForm(this.sessionId, formSnapshot, facts);
             mappings = mapResult.mappings || [];
             sectionClarifications = mapResult.clarifications_required || [];
+            this.attachFactValues(mappings, facts);
 
             // If mapping hook updated DOM visibility (e.g. unhid wizard sections), refresh active visible fields
             const postMapSnapshot = await this.browserManager.scanActiveForm().catch(() => formSnapshot);
@@ -1073,18 +1146,19 @@ export class AgentController {
               allDiscoveredRequiredRefs.add(rf.ref);
             }
 
+            this.resolveOptionMappings(mappings, activeSectionFields);
+
             // Merge in preflight mappings: retain any resolved preflight mappings and include other sections
             for (const pm of preflightMappings) {
               const existingIdx = mappings.findIndex(
                 (m) =>
                   m.field_ref === pm.field_ref ||
-                  (m.field_label &&
-                    pm.field_label &&
-                    m.field_label.toLowerCase().trim() === pm.field_label.toLowerCase().trim())
+                  (m.field_label && pm.field_label && this.labelsMatch(m.field_label, pm.field_label))
               );
               if (existingIdx >= 0) {
                 if (pm.status === 'RESOLVED' && pm.fact_value) {
-                  mappings[existingIdx] = pm;
+                  mappings[existingIdx].fact_value = pm.fact_value;
+                  mappings[existingIdx].status = 'RESOLVED';
                 }
               } else {
                 mappings.push(pm);
@@ -1124,6 +1198,8 @@ export class AgentController {
           } else if (unmappedFields.length > 0) {
             const mapResult = await this.backendClient.mapForm(this.sessionId, formSnapshot, facts);
             const newMappings = mapResult.mappings || [];
+            this.attachFactValues(newMappings, facts);
+            this.resolveOptionMappings(newMappings, activeSectionFields);
             for (const nm of newMappings) {
               if (!mappings.some((m) => m.field_ref === nm.field_ref)) {
                 mappings.push(nm);
@@ -1155,9 +1231,7 @@ export class AgentController {
           const m = mappings.find(
             (cand) =>
               cand.field_ref === reqField.ref ||
-              (cand.field_label &&
-                reqField.label &&
-                cand.field_label.toLowerCase().trim() === reqField.label.toLowerCase().trim())
+              (cand.field_label && reqField.label && this.labelsMatch(cand.field_label, reqField.label))
           );
           const hasUsableValue =
             m && m.fact_value !== undefined && m.fact_value !== null && String(m.fact_value).trim().length > 0;
@@ -1201,9 +1275,7 @@ export class AgentController {
             let mapping = mappings.find(
               (candidate) =>
                 candidate.field_ref === field.ref ||
-                (candidate.field_label &&
-                  field.label &&
-                  candidate.field_label.toLowerCase().trim() === field.label.toLowerCase().trim())
+                (candidate.field_label && field.label && this.labelsMatch(candidate.field_label, field.label))
             );
             if (
               !mapping ||
@@ -1259,6 +1331,60 @@ export class AgentController {
               } else {
                 // Optional field without value; skip
                 continue;
+              }
+            }
+
+            // For select and radio fields, validate option match against available choices locally.
+            // Below confidence threshold, emit TOOL_FAILED and raise clarification instead of guessing.
+            if (
+              (field.type === 'select' || field.type === 'radio') &&
+              field.options &&
+              field.options.length > 0 &&
+              mapping.fact_value
+            ) {
+              const optionMatch = matchOption(String(mapping.fact_value), field.options);
+              if (optionMatch.matchedOption) {
+                mapping.fact_value = optionMatch.matchedOption;
+              } else if (optionMatch.needsClarification) {
+                this.emitEvent(
+                  this.buildEvent(
+                    'TOOL_FAILED',
+                    `Could not match option for '${field.label}' (confidence ${(optionMatch.confidence * 100).toFixed(0)}% below threshold). Clarification required.`,
+                    { success: false, metadata: { fieldRef: field.ref } }
+                  )
+                );
+                this.stateMachine.transition('CLARIFICATION_REQUIRED');
+                const optionClarifyId = `clarify_opt_${field.ref}_${Date.now()}`;
+                const prompt: ClarificationPromptPayload = {
+                  clarificationId: optionClarifyId,
+                  fieldRef: field.ref,
+                  fieldLabel: field.label,
+                  question: `Please select an option for '${field.label}':`,
+                  options: field.options || [],
+                  total: 1,
+                  currentIndex: 1,
+                };
+                const clarifyRes = await this.runTool<any>(
+                  'request_clarification',
+                  prompt,
+                  `Awaiting option selection for '${field.label}'...`,
+                  () => `Human selected option for '${field.label}'.`
+                );
+                const answer = coerceClarificationValue(clarifyRes);
+                if (answer) {
+                  mapping.fact_value = answer;
+                  mapping.status = 'RESOLVED';
+                  try {
+                    await this.backendClient.answerClarification(this.sessionId, optionClarifyId, answer);
+                  } catch (err: any) {
+                    if (err?.status !== 404) {
+                      console.warn('Could not forward clarification answer to backend:', err?.message || err);
+                    }
+                  }
+                  this.stateMachine.transition('FILLING_FORM');
+                } else {
+                  continue;
+                }
               }
             }
 
@@ -1418,7 +1544,11 @@ export class AgentController {
           try {
             await this.resolveClarifications(resolveRemaining, mappings);
             for (const rf of unverifiedRequired) {
-              const m = mappings.find((cand) => cand.field_ref === rf.ref);
+              const m = mappings.find(
+                (cand) =>
+                  cand.field_ref === rf.ref ||
+                  (cand.field_label && rf.label && this.labelsMatch(cand.field_label, rf.label))
+              );
               if (m && m.fact_value) {
                 this.stateMachine.transition('FILLING_FORM');
                 await this.fillField(m, rf);
@@ -1718,9 +1848,16 @@ export class AgentController {
     const value = String(mapping.fact_value ?? '');
 
     if (field.type === 'select') {
+      let optionVal = value;
+      if (field.options && field.options.length > 0) {
+        const match = matchOption(value, field.options);
+        if (match.matchedOption) {
+          optionVal = match.matchedOption;
+        }
+      }
       await this.runTool(
         'select_option',
-        { fieldRef: field.ref, option: value },
+        { fieldRef: field.ref, option: optionVal },
         `Selecting option for '${label}'...`,
         (result: any) =>
           result.success
@@ -1732,9 +1869,16 @@ export class AgentController {
     }
 
     if (field.type === 'radio') {
+      let optionVal = value;
+      if (field.options && field.options.length > 0) {
+        const match = matchOption(value, field.options);
+        if (match.matchedOption) {
+          optionVal = match.matchedOption;
+        }
+      }
       await this.runTool(
         'select_radio',
-        { fieldRef: field.ref, optionValue: value },
+        { fieldRef: field.ref, optionValue: optionVal },
         `Selecting option for '${label}'...`,
         (result: any) =>
           result.success

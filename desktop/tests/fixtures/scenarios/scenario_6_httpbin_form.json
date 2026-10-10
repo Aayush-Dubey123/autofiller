@@ -1,0 +1,26 @@
+{
+  "scenario_id": "scenario_6",
+  "track": "real",
+  "name": "HTML5 Reference Practice Form",
+  "target_type": "public_form",
+  "target_url": "https://httpbin.org/forms/post",
+  "total_human_visible_fields": 7,
+  "expected_fields": [
+    { "key": "custname", "label": "Customer name", "type": "text", "required": false, "expected_value": "Alex Rivera" },
+    { "key": "custtel", "label": "Telephone", "type": "tel", "required": false, "expected_value": "5551234567" },
+    { "key": "custemail", "label": "E-mail address", "type": "email", "required": false, "expected_value": "alex@example.com" },
+    { "key": "size", "label": "Pizza Size", "type": "radio", "required": false, "expected_value": "medium" },
+    { "key": "topping", "label": "Pizza Toppings", "type": "checkbox", "required": false, "expected_value": "bacon" },
+    { "key": "delivery", "label": "Preferred delivery time", "type": "time", "required": false, "expected_value": "19:30" },
+    { "key": "comments", "label": "Delivery instructions", "type": "textarea", "required": false, "expected_value": "Leave on front porch." }
+  ],
+  "profile_facts": [
+    { "key": "custname", "label": "Customer name", "value": "Alex Rivera" },
+    { "key": "custtel", "label": "Telephone", "value": "5551234567" },
+    { "key": "custemail", "label": "E-mail address", "value": "alex@example.com" },
+    { "key": "size", "label": "Pizza Size", "value": "medium" },
+    { "key": "topping", "label": "Pizza Toppings", "value": "bacon" },
+    { "key": "delivery", "label": "Preferred delivery time", "value": "19:30" },
+    { "key": "comments", "label": "Delivery instructions", "value": "Leave on front porch." }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "scenario_id": "scenario_3",
+  "track": "controlled",
+  "name": "Dynamic Conditional Fields",
+  "target_type": "local_fixture",
+  "fixture_file": "conditional_fields.html",
+  "total_human_visible_fields": 6,
+  "expected_fields": [
+    { "key": "student_name", "label": "Student Full Name", "type": "text", "required": true, "expected_value": "Leo Miller" },
+    { "key": "grade", "label": "Applying Grade", "type": "select", "required": true, "expected_value": "Grade 5" },
+    { "key": "transport", "label": "Does student require school bus transport?", "type": "radio", "required": true, "expected_value": "Yes" },
+    { "key": "pickup_stop", "label": "Bus Pickup Stop", "type": "text", "required": true, "conditional_parent": "transport=Yes", "expected_value": "North Gate Bus Stop" },
+    { "key": "route_slot", "label": "Bus Route Slot", "type": "select", "required": true, "conditional_parent": "transport=Yes", "expected_value": "Morning" },
+    { "key": "dietary", "label": "Does student have special dietary requirements?", "type": "radio", "required": true, "expected_value": "No" }
+  ],
+  "profile_facts": [
+    { "key": "student_name", "label": "Student Full Name", "value": "Leo Miller" },
+    { "key": "grade", "label": "Applying Grade", "value": "Grade 5" },
+    { "key": "transport", "label": "Does student require school bus transport?", "value": "Yes" },
+    { "key": "pickup_stop", "label": "Bus Pickup Stop", "value": "North Gate Bus Stop" },
+    { "key": "route_slot", "label": "Bus Route Slot", "value": "Morning" },
+    { "key": "dietary", "label": "Does student have special dietary requirements?", "value": "No" }
+  ]
+}

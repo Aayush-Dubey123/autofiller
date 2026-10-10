@@ -49,6 +49,14 @@ export interface ExtractedFact {
   source_page?: number | null;
 }
 
+/** Profile fact descriptor containing only metadata for zero-value mapping (never contains values). */
+export interface FactDescriptor {
+  key: string;
+  label: string;
+  type?: string;
+  confidence: number;
+}
+
 /** Semantic mapping between a form field and an extracted fact. */
 export interface FieldMapping {
   field_ref: string;

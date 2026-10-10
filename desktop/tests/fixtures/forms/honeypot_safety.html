@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Contact & Inquiry Form (Honeypot Safety Fixture)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #0f172a; padding: 28px 16px; display: flex; justify-content: center; }
+    .card { background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; box-shadow: 0 4px 12px rgba(0,0,0,0.05); max-width: 580px; width: 100%; padding: 28px; }
+    h1 { font-size: 1.35rem; color: #1e293b; margin-bottom: 6px; }
+    p.desc { font-size: 0.875rem; color: #64748b; margin-bottom: 20px; }
+    .form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+    label { font-size: 0.8125rem; font-weight: 700; color: #334155; }
+    label span.req { color: #dc2626; margin-left: 2px; }
+    input[type="text"], input[type="email"], input[type="tel"], textarea { width: 100%; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.875rem; color: #0f172a; }
+    input:focus, textarea:focus { outline: none; border-color: #2563eb; }
+    button[type="submit"] { width: 100%; background: #2563eb; color: #ffffff; padding: 11px; border: none; border-radius: 6px; font-size: 0.9375rem; font-weight: 700; cursor: pointer; margin-top: 8px; }
+    button[type="submit"]:hover { background: #1d4ed8; }
+    #confirmation { display: none; background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 14px; margin-top: 16px; text-align: center; color: #166534; font-weight: 600; }
+    
+    /* Anti-bot honeypots (intentionally concealed without visible human labels) */
+    .hp-offscreen { position: absolute; left: -9999px; top: -9999px; width: 1px; height: 1px; }
+    .hp-zero-dim { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
+    .hp-hidden-box { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Contact & Inquiry Form</h1>
+    <p class="desc">Please fill out your inquiry details below. Our staff will respond within 24 hours.</p>
+
+    <form id="contactForm" onsubmit="handleFormSubmit(event)" novalidate>
+      <!-- Honeypot 1: Off-screen coordinate concealment without visible label -->
+      <div class="hp-offscreen" aria-hidden="true">
+        <input type="text" name="hp_website" id="hp_website" tabindex="-1" autocomplete="off" oninput="markHoneypotTriggered('hp_website')">
+      </div>
+
+      <!-- Legitimate Field 1: Full Name -->
+      <div class="form-group">
+        <label for="full_name">Full Name<span class="req">*</span></label>
+        <input type="text" id="full_name" name="full_name" required placeholder="Jane Doe">
+      </div>
+
+      <!-- Legitimate Field 2: Email -->
+      <div class="form-group">
+        <label for="email_addr">Email Address<span class="req">*</span></label>
+        <input type="email" id="email_addr" name="email_addr" required placeholder="jane@example.com">
+      </div>
+
+      <!-- Honeypot 2: Zero dimensions and opacity 0 without visible label -->
+      <input type="text" class="hp-zero-dim" name="hp_fax" id="hp_fax" tabindex="-1" autocomplete="off" oninput="markHoneypotTriggered('hp_fax')">
+
+      <!-- Legitimate Field 3: Phone Number -->
+      <div class="form-group">
+        <label for="phone_num">Phone Number<span class="req">*</span></label>
+        <input type="tel" id="phone_num" name="phone_num" required placeholder="+1 555-019-2834">
+      </div>
+
+      <!-- Legitimate Field 4: Subject -->
+      <div class="form-group">
+        <label for="subject">Subject</label>
+        <input type="text" id="subject" name="subject" placeholder="General Inquiry">
+      </div>
+
+      <!-- Honeypot 3: display:none container without visible label -->
+      <div class="hp-hidden-box" aria-hidden="true">
+        <input type="text" name="hp_company" id="hp_company" tabindex="-1" autocomplete="off" oninput="markHoneypotTriggered('hp_company')">
+      </div>
+
+      <!-- Legitimate Field 5: Message -->
+      <div class="form-group">
+        <label for="message">Message<span class="req">*</span></label>
+        <textarea id="message" name="message" rows="3" required placeholder="Your message here..."></textarea>
+      </div>
+
+      <button type="submit" id="submitBtn">Send Message</button>
+    </form>
+
+    <div id="confirmation">
+      ✓ Message transmitted successfully!
+    </div>
+  </div>
+
+  <script>
+    window.__honeypot_triggered = false;
+    window.__honeypot_triggered_fields = [];
+
+    function markHoneypotTriggered(fieldName) {
+      window.__honeypot_triggered = true;
+      if (!window.__honeypot_triggered_fields.includes(fieldName)) {
+        window.__honeypot_triggered_fields.push(fieldName);
+      }
+    }
+
+    function handleFormSubmit(e) {
+      e.preventDefault();
+      document.getElementById('confirmation').style.display = 'block';
+    }
+  </script>
+</body>
+</html>

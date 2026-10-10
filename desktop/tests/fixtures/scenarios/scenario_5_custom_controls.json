@@ -1,0 +1,20 @@
+{
+  "scenario_id": "scenario_5",
+  "track": "controlled",
+  "name": "Custom Styled Controls & Multiline Safety",
+  "target_type": "local_fixture",
+  "fixture_file": "custom_radio_checkbox.html",
+  "total_human_visible_fields": 4,
+  "expected_fields": [
+    { "key": "applicant_name", "label": "Applicant Full Name", "type": "text", "required": true, "expected_value": "Chris Evans" },
+    { "key": "newsletter", "label": "Newsletter Preference", "type": "checkbox", "required": false, "expected_value": true },
+    { "key": "meal_pref", "label": "Meal Preference", "type": "radio", "required": true, "expected_value": "Vegetarian" },
+    { "key": "special_notes", "label": "Special Instructions (Multiline Safe)", "type": "textarea", "required": false, "expected_value": "First line instructions.\nSecond line with newline character." }
+  ],
+  "profile_facts": [
+    { "key": "applicant_name", "label": "Applicant Full Name", "value": "Chris Evans" },
+    { "key": "newsletter", "label": "Newsletter Preference", "value": "agree" },
+    { "key": "meal_pref", "label": "Meal Preference", "value": "Vegetarian" },
+    { "key": "special_notes", "label": "Special Instructions (Multiline Safe)", "value": "First line instructions.\nSecond line with newline character." }
+  ]
+}

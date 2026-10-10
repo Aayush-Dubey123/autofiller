@@ -5,7 +5,7 @@ Defines domain entities, enums, and structured state shapes.
 """
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field, AliasChoices, ConfigDict, field_validator
 
 
@@ -74,12 +74,23 @@ class FormSnapshot(BaseModel):
     )
 
 
+class FactDescriptor(BaseModel):
+    """Metadata descriptor of a profile fact for zero-value mapping (contains NO personal values)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    key: str = Field(description="Normalized key identifier, e.g. student_name, dob, parent_phone")
+    label: str = Field(description="Human readable label")
+    type: Optional[str] = Field(default="text", description="Optional fact data type, e.g. text, date, select")
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Extraction confidence score")
+
+
 class FieldMapping(BaseModel):
-    """Semantic mapping between a form field and an extracted fact."""
+    """Semantic mapping between a form field and an extracted fact descriptor."""
     field_ref: str = Field(description="Reference to FormFieldSnapshot")
     field_label: str = Field(description="Web form label")
-    fact_key: Optional[str] = Field(default=None, description="Matched ExtractedFact key")
-    fact_value: Optional[str] = Field(default=None, description="Value to populate")
+    fact_key: Optional[str] = Field(default=None, description="Matched FactDescriptor key")
+    fact_value: Optional[str] = Field(default=None, description="Zero-value: always None from mapping service")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Mapping confidence score")
     status: str = Field(default="PENDING", description="PENDING | FILLED | VERIFIED | SKIPPED")
     clarification_id: Optional[str] = Field(default=None, description="Attached clarification request if ambiguous")
@@ -136,10 +147,10 @@ class SessionModel(BaseModel):
     status: SessionStatus = Field(default=SessionStatus.IDLE, description="Current workflow state")
     document_name: Optional[str] = Field(default=None, description="Source document filename")
     target_url: Optional[str] = Field(default=None, description="Target form URL")
-    facts: List[ExtractedFact] = Field(
+    facts: List[Union[ExtractedFact, FactDescriptor]] = Field(
         default_factory=list,
         max_length=200,
-        description="Extracted facts",
+        description="Extracted facts or descriptors",
     )
     form_snapshot: Optional[FormSnapshot] = Field(default=None, description="Inspected form snapshot")
     mappings: List[FieldMapping] = Field(default_factory=list, description="Semantic field mappings")

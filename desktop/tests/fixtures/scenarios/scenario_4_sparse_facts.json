@@ -1,0 +1,30 @@
+{
+  "scenario_id": "scenario_4",
+  "track": "controlled",
+  "name": "Section-Aware Sparse Facts Preflight",
+  "target_type": "local_fixture",
+  "fixture_file": "sparse_facts.html",
+  "total_human_visible_fields": 8,
+  "expected_fields": [
+    { "key": "student_name", "label": "Full Name", "type": "text", "required": true, "section": 1, "fact_provided": true, "expected_value": "Maya Patel" },
+    { "key": "dob", "label": "Date of Birth", "type": "date", "required": true, "section": 1, "fact_provided": true, "expected_value": "2008-11-15" },
+    { "key": "nationality", "label": "Nationality", "type": "text", "required": true, "section": 1, "fact_provided": false, "expected_value": "Indian" },
+    { "key": "primary_language", "label": "Primary Language", "type": "text", "required": true, "section": 1, "fact_provided": false, "expected_value": "English" },
+    { "key": "parent_name", "label": "Parent / Guardian Name", "type": "text", "required": true, "section": 2, "fact_provided": true, "expected_value": "Rakesh Patel" },
+    { "key": "emergency_phone", "label": "Emergency Phone Number", "type": "tel", "required": true, "section": 2, "fact_provided": true, "expected_value": "+91 9820011223" },
+    { "key": "address", "label": "Residential Address", "type": "text", "required": true, "section": 2, "fact_provided": false, "expected_value": "42 Hill View Road" },
+    { "key": "city", "label": "City", "type": "text", "required": true, "section": 2, "fact_provided": false, "expected_value": "Pune" }
+  ],
+  "profile_facts": [
+    { "key": "student_name", "label": "Full Name", "value": "Maya Patel" },
+    { "key": "dob", "label": "Date of Birth", "value": "2008-11-15" },
+    { "key": "parent_name", "label": "Parent / Guardian Name", "value": "Rakesh Patel" },
+    { "key": "emergency_phone", "label": "Emergency Phone Number", "value": "+91 9820011223" }
+  ],
+  "clarification_answers": {
+    "nationality": "Indian",
+    "primary_language": "English",
+    "address": "42 Hill View Road",
+    "city": "Pune"
+  }
+}

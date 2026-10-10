@@ -1,0 +1,27 @@
+{
+  "scenario_id": "scenario_2",
+  "track": "controlled",
+  "name": "Honeypot & Anti-Bot Traps",
+  "target_type": "local_fixture",
+  "fixture_file": "honeypot_safety.html",
+  "total_human_visible_fields": 5,
+  "expected_fields": [
+    { "key": "full_name", "label": "Full Name", "type": "text", "required": true, "expected_value": "Jane Doe" },
+    { "key": "email_addr", "label": "Email Address", "type": "email", "required": true, "expected_value": "jane@example.com" },
+    { "key": "phone_num", "label": "Phone Number", "type": "tel", "required": true, "expected_value": "+1 555-019-2834" },
+    { "key": "subject", "label": "Subject", "type": "text", "required": false, "expected_value": "General Inquiry" },
+    { "key": "message", "label": "Message", "type": "textarea", "required": true, "expected_value": "Requesting admission information for 2026." }
+  ],
+  "honeypot_fields": [
+    { "id": "hp_website", "technique": "offscreen_coordinates" },
+    { "id": "hp_fax", "technique": "zero_dimensions_opacity_zero" },
+    { "id": "hp_company", "technique": "display_none_container" }
+  ],
+  "profile_facts": [
+    { "key": "full_name", "label": "Full Name", "value": "Jane Doe" },
+    { "key": "email_addr", "label": "Email Address", "value": "jane@example.com" },
+    { "key": "phone_num", "label": "Phone Number", "value": "+1 555-019-2834" },
+    { "key": "subject", "label": "Subject", "value": "General Inquiry" },
+    { "key": "message", "label": "Message", "value": "Requesting admission information for 2026." }
+  ]
+}

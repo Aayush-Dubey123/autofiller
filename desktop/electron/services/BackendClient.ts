@@ -9,6 +9,7 @@ import {
   BackendHealth,
   DocumentExtractResult,
   ExtractedFact,
+  FactDescriptor,
   FormMapResult,
   FormSnapshot,
 } from '../shared/types';
@@ -226,24 +227,30 @@ export class BackendClient {
   }
 
   /**
-   * Synthesize semantic mappings between form fields and document facts.
+   * Synthesize semantic mappings between form fields and profile facts (zero-value mode).
    *
    * @param sessionId Active session identifier.
    * @param formSnapshot Structured form observation.
-   * @param facts Extracted document facts.
-   * @returns Mappings, clarifications, and unmapped fields.
+   * @param facts Profile facts or descriptors (values are stripped before sending).
+   * @returns Mappings (without values), clarifications, and unmapped fields.
    */
   public async mapForm(
     sessionId: string,
     formSnapshot: FormSnapshot,
-    facts: ExtractedFact[]
+    facts: Array<FactDescriptor | ExtractedFact>
   ): Promise<FormMapResult> {
+    const descriptors: FactDescriptor[] = (facts || []).map((f) => ({
+      key: f.key,
+      label: f.label,
+      type: (f as any).type || 'text',
+      confidence: typeof f.confidence === 'number' ? f.confidence : 1.0,
+    }));
     return this.request<FormMapResult>('/v1/forms/map', {
       method: 'POST',
       body: JSON.stringify({
         session_id: sessionId,
         form_snapshot: formSnapshot,
-        facts,
+        facts: descriptors,
       }),
     });
   }

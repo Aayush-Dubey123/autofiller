@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Two-Step Student Profile (Sparse Facts Fixture)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #0f172a; padding: 24px 16px; display: flex; justify-content: center; }
+    .card { background: #ffffff; border-radius: 12px; border: 1px solid #cbd5e1; box-shadow: 0 4px 12px rgba(0,0,0,0.05); max-width: 600px; width: 100%; padding: 28px; }
+    h1 { font-size: 1.35rem; color: #1e293b; margin-bottom: 4px; }
+    .step-indicator { font-size: 0.875rem; color: #64748b; margin-bottom: 20px; font-weight: 600; }
+    .form-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+    label { font-size: 0.8125rem; font-weight: 700; color: #334155; }
+    label span.req { color: #dc2626; margin-left: 2px; }
+    input[type="text"], input[type="date"], input[type="tel"] { width: 100%; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.875rem; color: #0f172a; }
+    button { width: 100%; padding: 11px; border: none; border-radius: 6px; font-size: 0.9375rem; font-weight: 700; cursor: pointer; margin-top: 12px; }
+    .btn-continue { background: #4338ca; color: #ffffff; }
+    .btn-continue:hover { background: #3730a3; }
+    .btn-submit { background: #059669; color: #ffffff; }
+    .btn-submit:hover { background: #047857; }
+    #confirmation { display: none; background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 14px; margin-top: 16px; text-align: center; color: #166534; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Student Admission Profile</h1>
+    <div class="step-indicator" id="stepInfo">Step 1 of 2: Personal Details</div>
+
+    <form id="sparseForm" onsubmit="handleFormSubmit(event)" novalidate>
+      <!-- Section 1: Personal Details -->
+      <div id="section-1">
+        <div class="form-group">
+          <label for="student_name">Full Name<span class="req">*</span></label>
+          <input type="text" id="student_name" name="student_name" required placeholder="Maya Patel">
+        </div>
+        <div class="form-group">
+          <label for="dob">Date of Birth<span class="req">*</span></label>
+          <input type="date" id="dob" name="dob" required>
+        </div>
+        <div class="form-group">
+          <label for="nationality">Nationality<span class="req">*</span></label>
+          <input type="text" id="nationality" name="nationality" required placeholder="Indian">
+        </div>
+        <div class="form-group">
+          <label for="primary_language">Primary Language<span class="req">*</span></label>
+          <input type="text" id="primary_language" name="primary_language" required placeholder="English">
+        </div>
+        <button type="button" class="btn-continue" onclick="nextSection()">Continue</button>
+      </div>
+
+      <!-- Section 2: Contact & Address -->
+      <div id="section-2" hidden>
+        <div class="form-group">
+          <label for="parent_name">Parent / Guardian Name<span class="req">*</span></label>
+          <input type="text" id="parent_name" name="parent_name" required placeholder="Rakesh Patel">
+        </div>
+        <div class="form-group">
+          <label for="emergency_phone">Emergency Phone Number<span class="req">*</span></label>
+          <input type="tel" id="emergency_phone" name="emergency_phone" required placeholder="+91 9820011223">
+        </div>
+        <div class="form-group">
+          <label for="address">Residential Address<span class="req">*</span></label>
+          <input type="text" id="address" name="address" required placeholder="42 Hill View Road">
+        </div>
+        <div class="form-group">
+          <label for="city">City<span class="req">*</span></label>
+          <input type="text" id="city" name="city" required placeholder="Pune">
+        </div>
+        <button type="submit" id="submitBtn" class="btn-submit">Submit Application</button>
+      </div>
+    </form>
+
+    <div id="confirmation">
+      ✓ Application successfully submitted!
+    </div>
+  </div>
+
+  <script>
+    function nextSection() {
+      const s1 = document.getElementById('section-1');
+      const inputs = s1.querySelectorAll('input');
+      let valid = true;
+      inputs.forEach(i => {
+        if (i.required && !i.value.trim()) valid = false;
+      });
+      if (!valid) return;
+
+      s1.hidden = true;
+      document.getElementById('section-2').hidden = false;
+      document.getElementById('stepInfo').textContent = 'Step 2 of 2: Contact & Guardian Details';
+    }
+
+    function handleFormSubmit(e) {
+      e.preventDefault();
+      document.getElementById('confirmation').style.display = 'block';
+    }
+  </script>
+</body>
+</html>

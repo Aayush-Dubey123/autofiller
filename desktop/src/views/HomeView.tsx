@@ -75,7 +75,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
               Add your details once, reuse them on any form
             </h2>
             <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-              Save your personal information, address, and contact details encrypted on this device. AutoFiller will map and fill them into any form link.
+              Save your personal information, address, and contact details encrypted on this device. Field labels are sent to AI for matching; your values stay on this device; uploaded documents are processed by Gemini.
             </p>
           </div>
         </div>

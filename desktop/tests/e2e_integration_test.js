@@ -57,45 +57,45 @@ function getFullFormMappings(snapshot) {
 
   // Section 1
   const name = find('student full name') || find('student name');
-  if (name) mappings.push({ field_ref: name.ref, field_label: name.label, fact_key: 'student_name', fact_value: 'Aarav Sharma', confidence: 1.0, status: 'PENDING' });
+  if (name) mappings.push({ field_ref: name.ref, field_label: name.label, fact_key: 'student_name', confidence: 1.0, status: 'PENDING' });
   const dob = find('date of birth') || find('dob');
-  if (dob) mappings.push({ field_ref: dob.ref, field_label: dob.label, fact_key: 'dob', fact_value: '2005-03-23', confidence: 1.0, status: 'PENDING' });
+  if (dob) mappings.push({ field_ref: dob.ref, field_label: dob.label, fact_key: 'dob', confidence: 1.0, status: 'PENDING' });
   const gender = find('gender');
-  if (gender) mappings.push({ field_ref: gender.ref, field_label: gender.label, fact_key: 'gender', fact_value: 'Male', confidence: 1.0, status: 'PENDING' });
+  if (gender) mappings.push({ field_ref: gender.ref, field_label: gender.label, fact_key: 'gender', confidence: 1.0, status: 'PENDING' });
 
   // Section 2
   const email = find('email');
-  if (email) mappings.push({ field_ref: email.ref, field_label: email.label, fact_key: 'email', fact_value: 'aarav@example.com', confidence: 1.0, status: 'PENDING' });
+  if (email) mappings.push({ field_ref: email.ref, field_label: email.label, fact_key: 'email', confidence: 1.0, status: 'PENDING' });
   const phone = find('phone');
-  if (phone) mappings.push({ field_ref: phone.ref, field_label: phone.label, fact_key: 'phone', fact_value: '9876543210', confidence: 1.0, status: 'PENDING' });
+  if (phone) mappings.push({ field_ref: phone.ref, field_label: phone.label, fact_key: 'phone', confidence: 1.0, status: 'PENDING' });
 
   // Section 3
   const address = find('residential address') || find('address');
-  if (address) mappings.push({ field_ref: address.ref, field_label: address.label, fact_key: 'address', fact_value: '123 Park Street', confidence: 1.0, status: 'PENDING' });
+  if (address) mappings.push({ field_ref: address.ref, field_label: address.label, fact_key: 'address', confidence: 1.0, status: 'PENDING' });
   const city = find('city');
-  if (city) mappings.push({ field_ref: city.ref, field_label: city.label, fact_key: 'city', fact_value: 'Mumbai', confidence: 1.0, status: 'PENDING' });
+  if (city) mappings.push({ field_ref: city.ref, field_label: city.label, fact_key: 'city', confidence: 1.0, status: 'PENDING' });
   const state = find('state');
-  if (state) mappings.push({ field_ref: state.ref, field_label: state.label, fact_key: 'state', fact_value: 'Maharashtra', confidence: 1.0, status: 'PENDING' });
+  if (state) mappings.push({ field_ref: state.ref, field_label: state.label, fact_key: 'state', confidence: 1.0, status: 'PENDING' });
   const pincode = find('pincode') || find('zip');
-  if (pincode) mappings.push({ field_ref: pincode.ref, field_label: pincode.label, fact_key: 'pincode', fact_value: '400001', confidence: 1.0, status: 'PENDING' });
+  if (pincode) mappings.push({ field_ref: pincode.ref, field_label: pincode.label, fact_key: 'pincode', confidence: 1.0, status: 'PENDING' });
 
   // Section 4
   const father = find('father');
-  if (father) mappings.push({ field_ref: father.ref, field_label: father.label, fact_key: 'father_name', fact_value: 'Vikram Sharma', confidence: 1.0, status: 'PENDING' });
+  if (father) mappings.push({ field_ref: father.ref, field_label: father.label, fact_key: 'father_name', confidence: 1.0, status: 'PENDING' });
   const mother = find('mother');
-  if (mother) mappings.push({ field_ref: mother.ref, field_label: mother.label, fact_key: 'mother_name', fact_value: 'Sunita Sharma', confidence: 1.0, status: 'PENDING' });
+  if (mother) mappings.push({ field_ref: mother.ref, field_label: mother.label, fact_key: 'mother_name', confidence: 1.0, status: 'PENDING' });
 
   // Section 5
   const previousSchool = find('previous school');
-  if (previousSchool) mappings.push({ field_ref: previousSchool.ref, field_label: previousSchool.label, fact_key: 'previous_school', fact_value: 'Greenwood High', confidence: 1.0, status: 'PENDING' });
+  if (previousSchool) mappings.push({ field_ref: previousSchool.ref, field_label: previousSchool.label, fact_key: 'previous_school', confidence: 1.0, status: 'PENDING' });
   const grade = find('grade');
-  if (grade) mappings.push({ field_ref: grade.ref, field_label: grade.label, fact_key: 'grade', fact_value: 'Grade 10', confidence: 1.0, status: 'PENDING' });
+  if (grade) mappings.push({ field_ref: grade.ref, field_label: grade.label, fact_key: 'grade', confidence: 1.0, status: 'PENDING' });
   const allergies = find('allergies');
-  if (allergies) mappings.push({ field_ref: allergies.ref, field_label: allergies.label, fact_key: 'allergies', fact_value: 'No', confidence: 1.0, status: 'PENDING' });
+  if (allergies) mappings.push({ field_ref: allergies.ref, field_label: allergies.label, fact_key: 'allergies', confidence: 1.0, status: 'PENDING' });
   const transport = find('transport');
-  if (transport) mappings.push({ field_ref: transport.ref, field_label: transport.label, fact_key: 'transport', fact_value: 'No', confidence: 1.0, status: 'PENDING' });
+  if (transport) mappings.push({ field_ref: transport.ref, field_label: transport.label, fact_key: 'transport', confidence: 1.0, status: 'PENDING' });
   const terms = find('terms') || snapshot.fields.find((f) => f.type === 'checkbox');
-  if (terms) mappings.push({ field_ref: terms.ref, field_label: terms.label, fact_key: 'terms', fact_value: 'agree', confidence: 1.0, status: 'PENDING' });
+  if (terms) mappings.push({ field_ref: terms.ref, field_label: terms.label, fact_key: 'terms', confidence: 1.0, status: 'PENDING' });
 
   return mappings;
 }
@@ -123,7 +123,7 @@ function makeStubBackend(url) {
           { key: 'student_name', label: 'Student Name', value: 'Aarav Sharma', confidence: 0.95 },
           { key: 'dob', label: 'Date of Birth', value: '2005-03-23', confidence: 0.95 },
           { key: 'gender', label: 'Gender', value: 'Male', confidence: 0.95 },
-          { key: 'email', label: 'Email Address', value: 'aarav.sharma@example.com', confidence: 0.95 },
+          { key: 'email', label: 'Email Address', value: 'aarav@example.com', confidence: 0.95 },
           { key: 'phone', label: 'Phone', value: '9876543210', confidence: 0.95 },
           { key: 'address', label: 'Address', value: '123 Park Street', confidence: 0.95 },
           { key: 'city', label: 'City', value: 'Mumbai', confidence: 0.95 },
@@ -1239,8 +1239,21 @@ async function runE2E() {
     const backend = makeStubBackend(FORM_URL);
     backend.extractDocument = async () => ({
       document_name: 'student.pdf',
-      fact_count: 0,
-      facts: [],
+      fact_count: 12,
+      facts: [
+        { key: 'email', label: 'Email Address', value: 'aarav@example.com', confidence: 0.95 },
+        { key: 'phone', label: 'Phone', value: '9876543210', confidence: 0.95 },
+        { key: 'address', label: 'Address', value: '123 Park Street', confidence: 0.95 },
+        { key: 'city', label: 'City', value: 'Mumbai', confidence: 0.95 },
+        { key: 'state', label: 'State', value: 'Maharashtra', confidence: 0.95 },
+        { key: 'pincode', label: 'Pincode', value: '400001', confidence: 0.95 },
+        { key: 'father_name', label: 'Father Name', value: 'Vikram Sharma', confidence: 0.95 },
+        { key: 'mother_name', label: 'Mother Name', value: 'Sunita Sharma', confidence: 0.95 },
+        { key: 'grade', label: 'Grade', value: 'Grade 10', confidence: 0.95 },
+        { key: 'allergies', label: 'Allergies', value: 'No', confidence: 0.95 },
+        { key: 'transport', label: 'Transport', value: 'No', confidence: 0.95 },
+        { key: 'terms', label: 'Terms', value: 'agree', confidence: 1.0 },
+      ],
     });
     const controller = new AgentController(backend);
 

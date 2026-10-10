@@ -1,0 +1,12 @@
+{
+  "scenario_id": "scenario_8",
+  "track": "real",
+  "name": "User-Owned Google Form Sandbox",
+  "target_type": "public_form",
+  "target_url": "PLACEHOLDER_USER_OWNED_GOOGLE_FORM_URL",
+  "status": "PENDING_USER_URL",
+  "note": "Requires user-owned Google Form URL created specifically for benchmarking with fictional data. Third-party Google Forms are prohibited.",
+  "total_human_visible_fields": 0,
+  "expected_fields": [],
+  "profile_facts": []
+}

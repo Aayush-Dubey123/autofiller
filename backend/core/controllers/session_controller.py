@@ -16,6 +16,7 @@ from commons.logger import logger
 from core.cruds.session_crud import CRUDSession
 from core.models.session_model import (
     ExtractedFact,
+    FactDescriptor,
     FormSnapshot,
     SessionStatus,
 )
@@ -233,7 +234,7 @@ class SessionController:
                 )
 
             form_snapshot = FormSnapshot(**form_snapshot_data)
-            fact_models = [ExtractedFact(**fact) for fact in facts_data]
+            fact_models = [FactDescriptor(**fact) for fact in facts_data]
 
             mappings, clarifications, unmapped = (
                 await self.gemini_service.map_form_fields(

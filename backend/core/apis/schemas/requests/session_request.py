@@ -6,7 +6,7 @@ Defines wire input contracts for document ingestion, form mapping, and user clar
 
 from typing import Any, Dict, List, Optional
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
-from core.models.session_model import AgentEvent, FormSnapshot, ExtractedFact
+from core.models.session_model import AgentEvent, FormSnapshot, ExtractedFact, FactDescriptor
 
 
 class DocumentExtractRequest(BaseModel):
@@ -30,7 +30,9 @@ class FormMapRequest(BaseModel):
     form_snapshot: FormSnapshot = Field(
         description="Structured snapshot of active web form"
     )
-    facts: List[ExtractedFact] = Field(description="Extracted document facts")
+    facts: List[FactDescriptor] = Field(
+        description="Profile fact descriptors (keys and labels only, never values)"
+    )
 
 
 class ClarificationAnswerRequest(BaseModel):

@@ -342,7 +342,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           )}
 
           <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '8px', fontSize: '0.78125rem', color: 'var(--text-muted)' }}>
-            Your details are stored encrypted on this device. When you fill a form, the values needed to match its fields are sent to Google Gemini for processing.
+            Field labels are sent to AI for matching; your values stay on this device; uploaded documents are processed by Gemini.
           </div>
         </div>
 

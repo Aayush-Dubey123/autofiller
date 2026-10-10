@@ -8,10 +8,14 @@
 
 const assert = require('assert');
 const path = require('path');
-
 const DIST = path.resolve(__dirname, '../dist-electron');
+
 const { ToolRegistry, ToolExecutionError } = require(path.join(DIST, 'agent/ToolRegistry'));
 const { PolicyEngine } = require(path.join(DIST, 'policy/PolicyEngine'));
+const {
+  matchOption,
+  OPTION_CONFIDENCE_THRESHOLD,
+} = require(path.join(DIST, 'agent/OptionMatcher'));
 
 let passed = 0;
 
@@ -160,6 +164,56 @@ async function runToolRegistryTests() {
       () => registry.dispatch('click_pagination', { label: 'Submit Application' }, context),
       (error) => error instanceof ToolExecutionError && error.code === 'DENIED_FINAL_SUBMISSION'
     );
+  });
+
+  await test('OptionMatcher normalizes case, punctuation, and synonyms for dropdowns and radios', async () => {
+    // Gender synonym matching
+    const maleMatch = matchOption('m', ['Male', 'Female', 'Other']);
+    assert.strictEqual(maleMatch.matchedOption, 'Male');
+    assert.strictEqual(maleMatch.needsClarification, false);
+
+    const femaleMatch = matchOption('F', ['Male', 'Female', 'Other']);
+    assert.strictEqual(femaleMatch.matchedOption, 'Female');
+    assert.strictEqual(femaleMatch.needsClarification, false);
+
+    // Category / Caste synonyms with punctuation
+    const obcMatch = matchOption('O.B.C. - N.C.L.', ['General', 'OBC', 'SC', 'ST']);
+    assert.strictEqual(obcMatch.matchedOption, 'OBC');
+    assert.strictEqual(obcMatch.needsClarification, false);
+
+    const genMatch = matchOption('Gen', ['General', 'OBC', 'SC', 'ST']);
+    assert.strictEqual(genMatch.matchedOption, 'General');
+    assert.strictEqual(genMatch.needsClarification, false);
+
+    // Booleans / Acknowledgements
+    const yesMatch = matchOption('Y', ['Yes', 'No']);
+    assert.strictEqual(yesMatch.matchedOption, 'Yes');
+    assert.strictEqual(yesMatch.needsClarification, false);
+
+    const noMatch = matchOption('0', ['Yes', 'No']);
+    assert.strictEqual(noMatch.matchedOption, 'No');
+    assert.strictEqual(noMatch.needsClarification, false);
+  });
+
+  await test('OptionMatcher performs fuzzy similarity matching with confidence >= 0.80', async () => {
+    // High fuzzy similarity
+    const fuzzyMatch = matchOption('Grade 10th', ['Grade 1', 'Grade 5', 'Grade 10']);
+    assert.strictEqual(fuzzyMatch.matchedOption, 'Grade 10');
+    assert.strictEqual(fuzzyMatch.needsClarification, false);
+    assert.ok(fuzzyMatch.confidence >= OPTION_CONFIDENCE_THRESHOLD);
+  });
+
+  await test('OptionMatcher flags unrecognized/low-confidence options for clarification without guessing', async () => {
+    // Mismatched option below threshold must NOT be guessed
+    const badMatch = matchOption('Grade 99 (not an option)', ['Grade 1', 'Grade 5', 'Grade 10']);
+    assert.strictEqual(badMatch.matchedOption, null);
+    assert.strictEqual(badMatch.needsClarification, true);
+    assert.ok(badMatch.confidence < OPTION_CONFIDENCE_THRESHOLD);
+
+    // Empty/null values
+    const emptyMatch = matchOption('', ['Male', 'Female']);
+    assert.strictEqual(emptyMatch.matchedOption, null);
+    assert.strictEqual(emptyMatch.needsClarification, true);
   });
 
   console.log(`\nAll ${passed} ToolRegistry assertions passed.`);

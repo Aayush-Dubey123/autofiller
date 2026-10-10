@@ -1,0 +1,12 @@
+{
+  "scenario_id": "scenario_7",
+  "track": "real",
+  "name": "TARGET_FORM_6 (Real Public School/Admission Portal Placeholder)",
+  "target_type": "public_form",
+  "target_url": "PLACEHOLDER_USER_SUPPLIED_URL",
+  "status": "PENDING_USER_URL",
+  "note": "Real URL to be supplied by the user. Not guessed or automated without user instruction.",
+  "total_human_visible_fields": 0,
+  "expected_fields": [],
+  "profile_facts": []
+}

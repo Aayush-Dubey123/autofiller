@@ -16,6 +16,7 @@ from commons.logger import logger
 from core.models.session_model import (
     ClarificationRequest,
     ExtractedFact,
+    FactDescriptor,
     FieldMapping,
     FormSnapshot,
 )
@@ -825,14 +826,17 @@ Respond ONLY with valid JSON."""
         self,
         *,
         form_snapshot: FormSnapshot,
-        facts: List[ExtractedFact],
+        facts: List[Union[FactDescriptor, ExtractedFact]],
     ) -> Tuple[List[FieldMapping], List[ClarificationRequest], List[str]]:
         """
         Synthesize semantic mappings and identify clarification requirements.
 
+        Zero-value contract: Fact descriptors provide keys and labels only;
+        values are never transmitted to AI or returned by mapping.
+
         Args:
             form_snapshot (FormSnapshot): Active web form observation snapshot.
-            facts (List[ExtractedFact]): Document facts available for population.
+            facts (List[Union[FactDescriptor, ExtractedFact]]): Fact descriptors.
 
         Returns:
             Tuple[List[FieldMapping], List[ClarificationRequest], List[str]]:
@@ -843,7 +847,7 @@ Respond ONLY with valid JSON."""
         """
         logging.info(
             f"Executing GeminiService.map_form_fields for "
-            f"{len(form_snapshot.fields)} fields and {len(facts)} facts"
+            f"{len(form_snapshot.fields)} fields and {len(facts)} facts (zero-value mode)"
         )
         self._ensure_client()
         if self.client is None:
@@ -861,14 +865,17 @@ Respond ONLY with valid JSON."""
     async def _map_with_gemini(
         self,
         form_snapshot: FormSnapshot,
-        facts: List[ExtractedFact],
+        facts: List[Union[FactDescriptor, ExtractedFact]],
     ) -> Tuple[List[FieldMapping], List[ClarificationRequest], List[str]]:
         """
         Execute Gemini structured mapping and normalize the response.
 
+        Zero-value contract: Only descriptors (key, label, type, confidence) are sent.
+        No personal values are included in the prompt or echoed in the response.
+
         Args:
             form_snapshot (FormSnapshot): Active form snapshot.
-            facts (List[ExtractedFact]): Document facts.
+            facts (List[Union[FactDescriptor, ExtractedFact]]): Fact descriptors.
 
         Returns:
             Tuple[List[FieldMapping], List[ClarificationRequest], List[str]]:
@@ -877,17 +884,36 @@ Respond ONLY with valid JSON."""
         Raises:
             RuntimeError: If every candidate model fails to return usable JSON.
         """
-        logging.info("Executing GeminiService._map_with_gemini")
-        prompt = f"""You are AutoFiller AI. Map extracted document facts to web form fields.
+        logging.info("Executing GeminiService._map_with_gemini (zero-value)")
+        fact_descriptors = [
+            {
+                "key": f.key,
+                "label": f.label,
+                "type": getattr(f, "type", "text") or "text",
+                "confidence": getattr(f, "confidence", 1.0),
+            }
+            for f in facts
+        ]
 
-Extracted Document Facts:
-{json.dumps([f.model_dump() for f in facts], indent=2)}
+        field_descriptors = [
+            {
+                "ref": f.ref,
+                "label": f.label,
+                "type": f.type,
+                "options": f.options,
+                "required": f.required,
+            }
+            for f in form_snapshot.fields
+        ]
+
+        prompt = f"""You are AutoFiller AI. Map form fields to available profile fact keys based on field labels and fact labels/keys.
+ZERO-VALUE PRIVACY CONTRACT: Do NOT expect, request, or echo any personal values. Map only field_ref to fact_key.
+
+Available Profile Fact Descriptors:
+{json.dumps(fact_descriptors, indent=2)}
 
 Target Form Fields:
-{json.dumps([f.model_dump() for f in form_snapshot.fields], indent=2)}
-
-CRITICAL DATE FORMATTING REQUIREMENT:
-For all date fields (such as Date of Birth, DOB, Date of Admission, etc.), format fact_value strictly in DD/MM/YYYY format (e.g. 15/08/2010). Do NOT convert dates to YYYY-MM-DD or MM/DD/YYYY.
+{json.dumps(field_descriptors, indent=2)}
 
 Return a JSON object with:
 {{
@@ -896,11 +922,9 @@ Return a JSON object with:
       "field_ref": "string",
       "field_label": "string",
       "fact_key": "string or null",
-      "fact_value": "string",
       "confidence": float (0.0 to 1.0),
       "is_ambiguous": boolean,
-      "clarification_question": "string if ambiguous, else null",
-      "options": ["string"]
+      "clarification_question": "string if ambiguous, else null"
     }}
   ]
 }}
@@ -947,11 +971,8 @@ Respond ONLY with valid JSON."""
             field_ref = item.get("field_ref")
             if not field_ref:
                 continue
-            mapping_val = str(item.get("fact_value") or "")
             fact_key = item.get("fact_key")
             field_label = item.get("field_label", "")
-            if _is_date_field_or_key(fact_key, field_label) and mapping_val:
-                mapping_val = format_to_strict_dd_mm_yyyy(mapping_val)
 
             if item.get("is_ambiguous", False):
                 clarification_id = f"clarify_{field_ref}"
@@ -961,9 +982,9 @@ Respond ONLY with valid JSON."""
                         field_ref=field_ref,
                         field_label=field_label,
                         question=item.get("clarification_question")
-                        or f"Please confirm value for {field_label}",
+                        or f"Please confirm selection for {field_label}",
                         options=item.get("options") or [],
-                        selected_value=mapping_val,
+                        selected_value=None,
                     )
                 )
                 mappings.append(
@@ -971,19 +992,19 @@ Respond ONLY with valid JSON."""
                         field_ref=field_ref,
                         field_label=field_label,
                         fact_key=fact_key,
-                        fact_value=mapping_val,
+                        fact_value=None,
                         confidence=item.get("confidence", 0.7),
                         status="CLARIFICATION_REQUIRED",
                         clarification_id=clarification_id,
                     )
                 )
-            elif mapping_val:
+            elif fact_key:
                 mappings.append(
                     FieldMapping(
                         field_ref=field_ref,
                         field_label=field_label,
                         fact_key=fact_key,
-                        fact_value=mapping_val,
+                        fact_value=None,
                         confidence=item.get("confidence", 0.95),
                         status="PENDING",
                     )
@@ -1014,16 +1035,17 @@ Respond ONLY with valid JSON."""
     def _map_heuristic_fallback(
         self,
         form_snapshot: FormSnapshot,
-        facts: List[ExtractedFact],
+        facts: List[Union[FactDescriptor, ExtractedFact]],
     ) -> Tuple[List[FieldMapping], List[ClarificationRequest], List[str]]:
         """
         Deterministic heuristic fallback mapper when Gemini provider models are unavailable or rate-limited.
 
-        Matches form field labels, names, and control types to extracted facts.
+        Zero-value contract: Matches form field labels to fact descriptor keys/labels only.
+        Values are never accessed or returned.
 
         Args:
             form_snapshot (FormSnapshot): Target form fields.
-            facts (List[ExtractedFact]): Document facts.
+            facts (List[Union[FactDescriptor, ExtractedFact]]): Document fact descriptors.
 
         Returns:
             Tuple[List[FieldMapping], List[ClarificationRequest], List[str]]:
@@ -1032,7 +1054,7 @@ Respond ONLY with valid JSON."""
         logging.warning(
             "Executing GeminiService._map_heuristic_fallback due to provider failure or rate limit"
         )
-        fact_dict: Dict[str, ExtractedFact] = {f.key.lower(): f for f in facts}
+        fact_dict: Dict[str, Union[FactDescriptor, ExtractedFact]] = {f.key.lower(): f for f in facts}
 
         mappings: List[FieldMapping] = []
         clarifications: List[ClarificationRequest] = []
@@ -1051,7 +1073,7 @@ Respond ONLY with valid JSON."""
             ref_lower = (field.ref or "").lower()
             name_lower = f"{label_lower} {ref_lower}"
 
-            matched_fact: Optional[ExtractedFact] = None
+            matched_fact: Optional[Union[FactDescriptor, ExtractedFact]] = None
             is_ambiguous = False
             question = None
             options: List[str] = []
@@ -1102,11 +1124,11 @@ Respond ONLY with valid JSON."""
                     matched_fact = phone_facts[0]
                     is_ambiguous = True
                     question = (
-                        f"Multiple phone numbers available "
-                        f"({', '.join(f.value for f in phone_facts)}). "
+                        f"Multiple phone options available "
+                        f"({', '.join(f.label for f in phone_facts)}). "
                         f"Which phone should be used for {field.label}?"
                     )
-                    options = [f.value for f in phone_facts]
+                    options = [f.label for f in phone_facts]
                 elif "alternate" in name_lower or "emergency" in name_lower:
                     matched_fact = fact_dict.get("alternate_phone") or (
                         phone_facts[1] if len(phone_facts) > 1 else None
@@ -1149,9 +1171,6 @@ Respond ONLY with valid JSON."""
 
             if matched_fact:
                 clarification_id = f"clarify_{field.ref}" if is_ambiguous else None
-                fact_val = matched_fact.value
-                if _is_date_field_or_key(matched_fact.key, field.label) and fact_val:
-                    fact_val = format_to_strict_dd_mm_yyyy(fact_val)
 
                 if is_ambiguous:
                     clarifications.append(
@@ -1159,9 +1178,9 @@ Respond ONLY with valid JSON."""
                             clarification_id=clarification_id,
                             field_ref=field.ref,
                             field_label=field.label,
-                            question=question or f"Clarify value for {field.label}",
+                            question=question or f"Clarify selection for {field.label}",
                             options=options,
-                            selected_value=fact_val,
+                            selected_value=None,
                         )
                     )
                 mappings.append(
@@ -1169,7 +1188,7 @@ Respond ONLY with valid JSON."""
                         field_ref=field.ref,
                         field_label=field.label,
                         fact_key=matched_fact.key,
-                        fact_value=fact_val,
+                        fact_value=None,
                         confidence=0.85 if is_ambiguous else 0.95,
                         status="CLARIFICATION_REQUIRED" if is_ambiguous else "PENDING",
                         clarification_id=clarification_id,

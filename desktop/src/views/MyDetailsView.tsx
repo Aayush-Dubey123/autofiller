@@ -1,77 +1,36 @@
-import React, { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, FileUp, Plus, RefreshCw, RotateCw, Trash2, User, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  AlertCircle,
+  CheckCircle2,
+  FileUp,
+  Loader2,
+  Plus,
+  RotateCw,
+  ShieldCheck,
+  User,
+  X,
+} from 'lucide-react';
 import { bridge } from '../lib/bridge';
-import type { DocumentExtractionStage, ExtractedFact, ProfileRecord, VaultField, VaultSection } from '../types/autofiller';
+import type {
+  DocumentExtractionStage,
+  ExtractedFact,
+  ProfileRecord,
+  VaultField,
+  VaultSection,
+} from '../types/autofiller';
+import {
+  PROFILE_FIELDS,
+  PROFILE_SECTIONS,
+  SCHEMA_FIELD_MAP,
+  SchemaFieldDef,
+  SchemaSectionDef,
+  deriveFacts,
+  generateCustomKey,
+  validateFieldValue,
+} from '../../electron/shared/profileSchema';
 import { FieldEditModal } from './my-details/FieldEditModal';
 import { ImportDocumentModal } from './my-details/ImportDocumentModal';
 import { ProfileSectionCard } from './my-details/ProfileSectionCard';
-
-const REFUSED_KEYS = new Set([
-  'password',
-  'passwd',
-  'cvv',
-  'cvc',
-  'otp',
-  'card_number',
-  'credit_card',
-  'bank_account_number',
-]);
-
-const DEFAULT_SECTIONS: VaultSection[] = [
-  {
-    id: 'personal',
-    title: 'Personal Information',
-    fields: [
-      { key: 'student_name', label: 'Full Name', value: '' },
-      { key: 'dob', label: 'Date of Birth (YYYY-MM-DD)', value: '' },
-      { key: 'gender', label: 'Gender', value: '' },
-    ],
-  },
-  {
-    id: 'contact',
-    title: 'Contact Details',
-    fields: [
-      { key: 'email', label: 'Email Address', value: '' },
-      { key: 'phone', label: 'Primary Phone', value: '' },
-      { key: 'alternate_phone', label: 'Alternate Phone', value: '' },
-    ],
-  },
-  {
-    id: 'address',
-    title: 'Address Information',
-    fields: [
-      { key: 'address', label: 'Street Address', value: '' },
-      { key: 'city', label: 'City', value: '' },
-      { key: 'state', label: 'State / Province', value: '' },
-      { key: 'zip_code', label: 'Pincode / Zip Code', value: '' },
-    ],
-  },
-  {
-    id: 'parent',
-    title: 'Parent / Guardian Info',
-    fields: [
-      { key: 'parent_name', label: "Father's / Guardian Name", value: '' },
-      { key: 'mother_name', label: "Mother's Name", value: '' },
-    ],
-  },
-  {
-    id: 'education',
-    title: 'Education History',
-    fields: [
-      { key: 'previous_school', label: 'Previous School', value: '' },
-      { key: 'grade', label: 'Class / Grade Applied', value: '' },
-    ],
-  },
-  {
-    id: 'id_numbers',
-    title: 'ID Numbers & Identification',
-    fields: [
-      { key: 'aadhaar_card_number', label: 'Aadhaar / National ID', value: '', sensitive: true },
-      { key: 'pan_card_number', label: 'PAN Card Number', value: '', sensitive: true },
-      { key: 'passport_number', label: 'Passport Number', value: '', sensitive: true },
-    ],
-  },
-];
 
 interface MyDetailsViewProps {
   onProfileSaved?: () => void;
@@ -80,27 +39,42 @@ interface MyDetailsViewProps {
 export const MyDetailsView: React.FC<MyDetailsViewProps> = ({ onProfileSaved }) => {
   const [profiles, setProfiles] = useState<ProfileRecord[]>([]);
   const [activeProfileId, setActiveProfileId] = useState<string>('');
-  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
-  const [showSensitive, setShowSensitive] = useState<Record<string, boolean>>({});
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [customFields, setCustomFields] = useState<VaultField[]>([]);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [importStage, setImportStage] = useState<DocumentExtractionStage>('idle');
-  const [importStageMessage, setImportStageMessage] = useState<string>('');
 
-  const [editingField, setEditingField] = useState<{
-    sectionId: string;
-    field: VaultField;
-    isNew: boolean;
-  } | null>(null);
+  // Section collapse state: First run has only 'personal' expanded
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({
+    personal: false,
+    contact: true,
+    address: true,
+    family: true,
+    education: true,
+    current_course: true,
+    id_numbers: true,
+    bank: true,
+    professional: true,
+    custom: true,
+  });
 
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [showAddCustomModal, setShowAddCustomModal] = useState<boolean>(false);
   const [showNewProfileModal, setShowNewProfileModal] = useState<boolean>(false);
   const [newProfileName, setNewProfileName] = useState<string>('');
 
   const [importReview, setImportReview] = useState<{ facts: ExtractedFact[]; fileName: string } | null>(null);
   const [selectedImportKeys, setSelectedImportKeys] = useState<Record<string, boolean>>({});
 
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isInitialLoadRef = useRef<boolean>(true);
+
   useEffect(() => {
     loadProfiles();
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
   }, []);
 
   const loadProfiles = async () => {
@@ -110,84 +84,248 @@ export const MyDetailsView: React.FC<MyDetailsViewProps> = ({ onProfileSaved }) 
       if (list.length === 0) {
         const defaultProf: ProfileRecord = {
           id: `prof_${Date.now()}`,
-          name: 'Default Profile',
-          sections: DEFAULT_SECTIONS,
+          name: 'Primary Profile',
+          sections: buildVaultSections({}, []),
         };
         await bridge.vaultSaveProfile(defaultProf);
         setProfiles([defaultProf]);
         setActiveProfileId(defaultProf.id);
+        extractProfileData(defaultProf);
       } else {
         setProfiles(list);
-        if (!activeProfileId || !list.find((p) => p.id === activeProfileId)) {
-          setActiveProfileId(list[0].id);
-        }
+        const active = list.find((p) => p.id === activeProfileId) || list[0];
+        setActiveProfileId(active.id);
+        extractProfileData(active);
       }
     } catch (err: any) {
-      setStatusMessage({ type: 'error', text: err?.message || 'Failed to load profiles' });
+      setStatusMessage({ type: 'error', text: err?.message || 'Failed to load profile data.' });
     } finally {
       setIsLoading(false);
+      isInitialLoadRef.current = false;
     }
   };
 
-  const activeProfile = profiles.find((p) => p.id === activeProfileId) || profiles[0];
+  const extractProfileData = (profile: ProfileRecord) => {
+    const rawMap: Record<string, string> = {};
+    const customs: VaultField[] = [];
 
-  const handleSaveField = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingField || !activeProfile) return;
-
-    const { sectionId, field } = editingField;
-    const key = field.key.trim().toLowerCase().replace(/\s+/g, '_');
-    const label = field.label.trim() || key;
-
-    if (!key) {
-      setStatusMessage({ type: 'error', text: 'Field key is required.' });
-      return;
-    }
-
-    if (REFUSED_KEYS.has(key)) {
-      setStatusMessage({
-        type: 'error',
-        text: 'Security restriction: Passwords, card numbers, CVV, OTP, and bank account numbers cannot be stored.',
+    (profile.sections || []).forEach((sec) => {
+      (sec.fields || []).forEach((f) => {
+        if (!f.key) return;
+        const normKey = f.key.trim().toLowerCase();
+        if (SCHEMA_FIELD_MAP.has(normKey)) {
+          rawMap[normKey] = f.value || '';
+        } else {
+          // Backward compatibility mappings
+          if (normKey === 'student_name' && !rawMap.first_name) {
+            rawMap.student_name = f.value || '';
+            const parts = (f.value || '').trim().split(/\s+/);
+            if (parts.length > 0) rawMap.first_name = parts[0];
+            if (parts.length > 1) rawMap.last_name = parts.slice(1).join(' ');
+          } else if (normKey === 'parent_name' && !rawMap.father_name) {
+            rawMap.father_name = f.value || '';
+          } else if (normKey === 'zip_code' && !rawMap.pincode) {
+            rawMap.pincode = f.value || '';
+          } else {
+            customs.push({
+              key: normKey,
+              label: f.label || normKey,
+              value: f.value || '',
+              sensitive: Boolean(f.sensitive),
+            });
+          }
+        }
       });
-      return;
-    }
-
-    const updatedSections = activeProfile.sections.map((sec) => {
-      if (sec.id !== sectionId) return sec;
-      const existingIndex = sec.fields.findIndex((f) => f.key === key || f.key === field.key);
-      const isSensitive = sec.id === 'id_numbers' || Boolean(field.sensitive);
-      const newFieldObj: VaultField = { key, label, value: field.value, sensitive: isSensitive };
-
-      let newFieldsList = [...sec.fields];
-      if (existingIndex >= 0) {
-        newFieldsList[existingIndex] = newFieldObj;
-      } else {
-        newFieldsList.push(newFieldObj);
-      }
-      return { ...sec, fields: newFieldsList };
     });
 
-    const updatedProf: ProfileRecord = { ...activeProfile, sections: updatedSections };
-    const res = await bridge.vaultSaveProfile(updatedProf);
+    setValues(rawMap);
+    setCustomFields(customs);
+    setErrors({});
+  };
 
-    if (res.success) {
-      await loadProfiles();
-      setEditingField(null);
-      setStatusMessage({ type: 'success', text: `Field "${label}" saved.` });
-      if (onProfileSaved) onProfileSaved();
+  /**
+   * Helper to structure flat values & customs into the required VaultSection[] array.
+   */
+  const buildVaultSections = (
+    fieldValues: Record<string, string>,
+    customList: VaultField[]
+  ): VaultSection[] => {
+    // Derive facts (full name, age, address, permanent copies)
+    const derived = deriveFacts(fieldValues);
+
+    const sections: VaultSection[] = PROFILE_SECTIONS.map((secDef) => {
+      if (secDef.id === 'custom') {
+        return {
+          id: 'custom',
+          title: secDef.title,
+          fields: customList.map((cf) => ({
+            key: cf.key,
+            label: cf.label,
+            value: cf.value,
+            sensitive: Boolean(cf.sensitive),
+          })),
+        };
+      }
+
+      const secFields = PROFILE_FIELDS.filter((f) => f.section === secDef.id).map((f) => {
+        const val = derived[f.key] !== undefined ? derived[f.key] : (fieldValues[f.key] || '');
+        return {
+          key: f.key,
+          label: f.label,
+          value: val,
+          sensitive: Boolean(f.sensitive),
+        };
+      });
+
+      // Supplement canonical student_name into personal section
+      if (secDef.id === 'personal' && derived.student_name) {
+        secFields.push({
+          key: 'student_name',
+          label: 'Student Full Name',
+          value: derived.student_name,
+          sensitive: false,
+        });
+      }
+
+      return {
+        id: secDef.id,
+        title: secDef.title,
+        fields: secFields,
+      };
+    });
+
+    return sections;
+  };
+
+  /**
+   * Debounced autosave (~800ms) with validation guard.
+   */
+  const scheduleAutosave = (
+    newValues: Record<string, string>,
+    newCustoms: VaultField[],
+    newErrors: Record<string, string>
+  ) => {
+    if (isInitialLoadRef.current) return;
+
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    setSaveStatus('saving');
+
+    saveTimeoutRef.current = setTimeout(async () => {
+      // Check if there are active errors on non-empty values
+      const hasErrors = Object.keys(newErrors).some((k) => Boolean(newErrors[k]));
+      if (hasErrors) {
+        setSaveStatus('error');
+        return;
+      }
+
+      const activeProfile = profiles.find((p) => p.id === activeProfileId);
+      if (!activeProfile) return;
+
+      const updatedProfile: ProfileRecord = {
+        ...activeProfile,
+        sections: buildVaultSections(newValues, newCustoms),
+      };
+
+      try {
+        const res = await bridge.vaultSaveProfile(updatedProfile);
+        if (res.success) {
+          setSaveStatus('saved');
+          if (onProfileSaved) onProfileSaved();
+        } else {
+          setSaveStatus('error');
+          setStatusMessage({ type: 'error', text: res.error || 'Failed to save changes.' });
+        }
+      } catch (err: any) {
+        setSaveStatus('error');
+        setStatusMessage({ type: 'error', text: err?.message || 'Failed to save changes.' });
+      }
+    }, 800);
+  };
+
+  const handleFieldChange = (key: string, val: string) => {
+    const updatedValues = { ...values, [key]: val };
+    setValues(updatedValues);
+
+    // Validate on change
+    const valRes = validateFieldValue(key, val);
+    const updatedErrors = { ...errors };
+    if (!valRes.valid && val.trim()) {
+      updatedErrors[key] = valRes.error || 'Invalid value';
     } else {
-      setStatusMessage({ type: 'error', text: res.error || 'Failed to save field.' });
+      delete updatedErrors[key];
+    }
+    setErrors(updatedErrors);
+
+    scheduleAutosave(updatedValues, customFields, updatedErrors);
+  };
+
+  const handleToggleSection = (sectionId: string) => {
+    setCollapsedSections((prev) => ({
+      ...prev,
+      [sectionId]: !prev[sectionId],
+    }));
+  };
+
+  const handleAddCustomDetail = (detail: { name: string; value: string; sensitive: boolean }) => {
+    const existingKeys = new Set(customFields.map((f) => f.key));
+    const slug = generateCustomKey(detail.name, existingKeys);
+
+    const newField: VaultField = {
+      key: slug,
+      label: detail.name,
+      value: detail.value,
+      sensitive: detail.sensitive,
+    };
+
+    const updatedCustoms = [...customFields, newField];
+    setCustomFields(updatedCustoms);
+    setShowAddCustomModal(false);
+
+    scheduleAutosave(values, updatedCustoms, errors);
+  };
+
+  const handleDeleteCustomDetail = (key: string) => {
+    const updatedCustoms = customFields.filter((cf) => cf.key !== key);
+    setCustomFields(updatedCustoms);
+
+    scheduleAutosave(values, updatedCustoms, errors);
+  };
+
+  const handleSwitchProfile = (profileId: string) => {
+    setActiveProfileId(profileId);
+    const prof = profiles.find((p) => p.id === profileId);
+    if (prof) {
+      extractProfileData(prof);
     }
   };
 
-  const handleDeleteField = async (sectionId: string, fieldKey: string) => {
-    if (!activeProfile) return;
-    const res = await bridge.vaultDeleteField({ profileId: activeProfile.id, sectionId, fieldKey });
-    if (res.success) {
-      await loadProfiles();
-      setStatusMessage({ type: 'success', text: 'Field removed.' });
-    } else {
-      setStatusMessage({ type: 'error', text: res.error || 'Failed to delete field.' });
+  const handleCreateProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newProfileName.trim()) return;
+
+    const newProf: ProfileRecord = {
+      id: `prof_${Date.now()}`,
+      name: newProfileName.trim(),
+      sections: buildVaultSections({}, []),
+    };
+
+    try {
+      const res = await bridge.vaultSaveProfile(newProf);
+      if (res.success) {
+        const nextList = [...profiles, newProf];
+        setProfiles(nextList);
+        setActiveProfileId(newProf.id);
+        extractProfileData(newProf);
+        setShowNewProfileModal(false);
+        setNewProfileName('');
+      } else {
+        setStatusMessage({ type: 'error', text: res.error || 'Could not create profile.' });
+      }
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err?.message || 'Could not create profile.' });
     }
   };
 
@@ -197,321 +335,408 @@ export const MyDetailsView: React.FC<MyDetailsViewProps> = ({ onProfileSaved }) 
       if (sel.canceled || !sel.filePath) return;
 
       setIsLoading(true);
-      setImportStage('uploading');
-      setImportStageMessage('Uploading and staging document securely...');
-
-      await new Promise((r) => setTimeout(r, 200));
-      setImportStage('reading_document');
-      setImportStageMessage('Reading document structure...');
-
-      await new Promise((r) => setTimeout(r, 200));
-      setImportStage('extracting_information');
-      setImportStageMessage('Extracting document facts...');
-
       const res = await bridge.extractDocument({ filePath: sel.filePath, documentName: sel.fileName });
       if ('error' in res) {
-        setImportStage('error');
-        setImportStageMessage(res.error || 'Extraction failed');
-        setStatusMessage({ type: 'error', text: res.error });
+        setStatusMessage({ type: 'error', text: res.error || 'Extraction failed' });
         return;
       }
       if (res.facts.length === 0) {
-        setImportStage('error');
-        setImportStageMessage('No facts could be extracted from this document.');
         setStatusMessage({ type: 'error', text: 'No facts could be extracted from this document.' });
         return;
       }
 
-      setImportStage('organizing_facts');
-      setImportStageMessage('Organizing extracted facts for review...');
-      await new Promise((r) => setTimeout(r, 200));
-
+      // Pre-select facts
       const selectMap: Record<string, boolean> = {};
       res.facts.forEach((f) => {
         selectMap[f.key] = true;
       });
       setSelectedImportKeys(selectMap);
       setImportReview({ facts: res.facts, fileName: sel.fileName || 'document' });
-      setImportStage('completed');
-      setImportStageMessage(`Extracted ${res.facts.length} facts from ${sel.fileName || 'document'}.`);
     } catch (err: any) {
-      setImportStage('error');
-      setImportStageMessage(err?.message || 'Extraction failed');
-      setStatusMessage({ type: 'error', text: err?.message || 'Extraction failed' });
+      setStatusMessage({ type: 'error', text: err?.message || 'Document extraction failed.' });
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleApplyImportedFacts = async () => {
-    if (!importReview || !activeProfile) return;
+  const handleApplyImport = () => {
+    if (!importReview) return;
 
-    const factsToApply = importReview.facts.filter((f) => selectedImportKeys[f.key]);
-    if (factsToApply.length === 0) {
-      setImportReview(null);
-      return;
-    }
+    const updatedValues = { ...values };
+    const updatedCustoms = [...customFields];
+    const existingCustomKeys = new Set(updatedCustoms.map((cf) => cf.key));
 
-    const updatedSections = [...activeProfile.sections];
-    factsToApply.forEach((fact) => {
-      let targetSection = updatedSections.find((sec) => sec.fields.some((f) => f.key === fact.key));
-      if (!targetSection) {
-        if (['student_name', 'dob', 'gender'].includes(fact.key)) {
-          targetSection = updatedSections.find((s) => s.id === 'personal');
-        } else if (['email', 'phone', 'alternate_phone'].includes(fact.key)) {
-          targetSection = updatedSections.find((s) => s.id === 'contact');
-        } else if (['address', 'city', 'state', 'zip_code'].includes(fact.key)) {
-          targetSection = updatedSections.find((s) => s.id === 'address');
-        } else {
-          targetSection = updatedSections.find((s) => s.id === 'personal') || updatedSections[0];
+    importReview.facts.forEach((fact) => {
+      if (!selectedImportKeys[fact.key]) return;
+
+      const normKey = fact.key.trim().toLowerCase();
+      if (SCHEMA_FIELD_MAP.has(normKey)) {
+        // Prefill ONLY empty fields
+        if (!updatedValues[normKey]?.trim()) {
+          updatedValues[normKey] = fact.value;
         }
-      }
-
-      if (targetSection) {
-        const existingIdx = targetSection.fields.findIndex((f) => f.key === fact.key);
-        if (existingIdx >= 0) {
-          targetSection.fields[existingIdx] = { ...targetSection.fields[existingIdx], value: fact.value };
-        } else {
-          targetSection.fields.push({ key: fact.key, label: fact.label || fact.key, value: fact.value });
+      } else {
+        // Route unmatched items to Other Details
+        const isAlreadyAdded = updatedCustoms.some((cf) => cf.key === normKey || cf.label === fact.label);
+        if (!isAlreadyAdded) {
+          const keySlug = generateCustomKey(fact.label || fact.key, existingCustomKeys);
+          existingCustomKeys.add(keySlug);
+          updatedCustoms.push({
+            key: keySlug,
+            label: fact.label || fact.key,
+            value: fact.value,
+            sensitive: false,
+          });
         }
       }
     });
 
-    const updatedProf: ProfileRecord = { ...activeProfile, sections: updatedSections };
-    const res = await bridge.vaultSaveProfile(updatedProf);
-    if (res.success) {
-      await loadProfiles();
-      setImportReview(null);
-      setStatusMessage({ type: 'success', text: `Applied ${factsToApply.length} extracted facts to profile.` });
-      if (onProfileSaved) onProfileSaved();
-    } else {
-      setStatusMessage({ type: 'error', text: res.error || 'Failed to update profile.' });
-    }
+    setValues(updatedValues);
+    setCustomFields(updatedCustoms);
+    setImportReview(null);
+
+    scheduleAutosave(updatedValues, updatedCustoms, errors);
+    setStatusMessage({ type: 'success', text: 'Imported details saved to profile.' });
   };
 
-  if (isLoading && profiles.length === 0) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '60px' }}>
-        <RefreshCw size={24} className="animate-spin" color="#16654E" />
-        <span style={{ marginLeft: '12px', color: 'var(--text-secondary)' }}>Loading Encrypted Vault...</span>
-      </div>
-    );
-  }
+  // Progress calculations
+  const totalStandardCount = PROFILE_FIELDS.length;
+  const filledStandardCount = PROFILE_FIELDS.filter((f) => Boolean(values[f.key]?.trim())).length;
+  const totalWithCustoms = totalStandardCount + customFields.length;
+  const filledWithCustoms = filledStandardCount + customFields.filter((cf) => Boolean(cf.value?.trim())).length;
+  const progressPercent = totalWithCustoms > 0 ? Math.round((filledWithCustoms / totalWithCustoms) * 100) : 0;
+
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) || profiles[0];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', maxWidth: '1000px', margin: '0 auto' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <User size={22} color="#16654E" />
-            <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0F2E23' }}>My Details</h1>
+    <div style={{ maxWidth: '960px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      {/* Intro Header & Banner */}
+      <div
+        style={{
+          background: 'var(--bg-card)',
+          borderRadius: 'var(--radius-lg)',
+          border: '1px solid var(--border-subtle)',
+          padding: '24px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h2 style={{ fontSize: '1.375rem', fontWeight: 800, color: '#0F2E23' }}>
+                My Details
+              </h2>
+              {/* Autosave status indicator */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  padding: '3px 10px',
+                  borderRadius: '12px',
+                  background:
+                    saveStatus === 'saved'
+                      ? '#DCFCE7'
+                      : saveStatus === 'saving'
+                      ? '#FEF3C7'
+                      : '#FEE2E2',
+                  color:
+                    saveStatus === 'saved'
+                      ? '#16654E'
+                      : saveStatus === 'saving'
+                      ? '#92400E'
+                      : '#DC2626',
+                }}
+              >
+                {saveStatus === 'saving' && <Loader2 size={12} className="animate-spin" />}
+                {saveStatus === 'saved' && <CheckCircle2 size={12} />}
+                {saveStatus === 'error' && <AlertCircle size={12} />}
+                <span>
+                  {saveStatus === 'saving'
+                    ? 'Saving...'
+                    : saveStatus === 'saved'
+                    ? 'Saved'
+                    : 'Unsaved (check errors)'}
+                </span>
+              </div>
+            </div>
+            <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+              Add once, use on any form. Stored encrypted on this device.
+            </p>
           </div>
-          <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-            Manage your personal profile stored safely on this device.
-          </p>
+
+          {/* Action buttons: Profile Switcher & Import */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <button
+              onClick={handleImportDocument}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '8px 14px',
+                borderRadius: 'var(--radius-md)',
+                background: 'rgba(22, 101, 78, 0.08)',
+                color: '#16654E',
+                border: '1px solid #A7F3D0',
+                fontSize: '0.8125rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              <FileUp size={15} />
+              <span>Import from Document</span>
+            </button>
+
+            {/* Profile select */}
+            {profiles.length > 1 && (
+              <select
+                value={activeProfileId}
+                onChange={(e) => handleSwitchProfile(e.target.value)}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-app)',
+                  fontSize: '0.8125rem',
+                  fontWeight: 600,
+                  color: '#0F2E23',
+                  cursor: 'pointer',
+                }}
+              >
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            <button
+              onClick={() => setShowNewProfileModal(true)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '8px 12px',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--border-subtle)',
+                background: 'transparent',
+                color: 'var(--text-secondary)',
+                fontSize: '0.8125rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+              title="Add another profile (e.g. for a sibling or parent)"
+            >
+              <Plus size={14} />
+              <span>New Profile</span>
+            </button>
+          </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <select
-            value={activeProfileId}
-            onChange={(e) => setActiveProfileId(e.target.value)}
+        {/* Status banner */}
+        {statusMessage && (
+          <div
             style={{
-              background: 'var(--bg-card)',
-              border: '1px solid var(--border-subtle)',
+              marginTop: '16px',
+              padding: '10px 14px',
               borderRadius: 'var(--radius-md)',
-              padding: '8px 14px',
-              fontSize: '0.875rem',
+              background: statusMessage.type === 'success' ? '#F0FDF4' : '#FEF2F2',
+              border: `1px solid ${statusMessage.type === 'success' ? '#86EFAC' : '#FECACA'}`,
+              color: statusMessage.type === 'success' ? '#16654E' : '#DC2626',
+              fontSize: '0.8125rem',
               fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                Profile: {p.name}
-              </option>
-            ))}
-          </select>
-
-          <button
-            onClick={handleImportDocument}
-            style={{
-              background: '#16654E',
-              color: '#FFFFFF',
-              border: 'none',
-              borderRadius: 'var(--radius-md)',
-              padding: '8px 16px',
-              fontSize: '0.875rem',
-              fontWeight: 700,
-              cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '8px',
+              justifyContent: 'space-between',
             }}
           >
-            <FileUp size={16} />
-            <span>Import from Document</span>
-          </button>
+            <span>{statusMessage.text}</span>
+            <button
+              onClick={() => setStatusMessage(null)}
+              style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'inherit' }}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* Progress Bar */}
+        <div style={{ marginTop: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+            <span style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#0F2E23' }}>
+              Profile Completion
+            </span>
+            <span style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#16654E' }}>
+              {filledWithCustoms} of {totalWithCustoms} filled ({progressPercent}%)
+            </span>
+          </div>
+          <div
+            style={{
+              height: '8px',
+              borderRadius: '4px',
+              background: '#E2E8F0',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                height: '100%',
+                width: `${progressPercent}%`,
+                background: '#16654E',
+                borderRadius: '4px',
+                transition: 'width 0.4s ease',
+              }}
+            />
+          </div>
         </div>
       </div>
 
-      {/* Document Extraction Progress States */}
-      {importStage !== 'idle' && (
-        <div
-          style={{
-            padding: '14px 16px',
-            borderRadius: 'var(--radius-md)',
-            background: importStage === 'error' ? '#FEF2F2' : '#F0FDF4',
-            border: `1px solid ${importStage === 'error' ? '#FCA5A5' : '#86EFAC'}`,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '12px',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              {importStage === 'completed' && <CheckCircle2 size={18} color="#16654E" />}
-              {importStage === 'error' && <AlertTriangle size={18} color="#DC2626" />}
-              {importStage !== 'completed' && importStage !== 'error' && (
-                <RotateCw size={18} color="#16654E" className="animate-spin" />
-              )}
-              <span
-                style={{
-                  fontWeight: 700,
-                  fontSize: '0.875rem',
-                  color: importStage === 'error' ? '#991B1B' : '#0F2E23',
-                }}
-              >
-                {importStageMessage}
-              </span>
-            </div>
-            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-              {importStage === 'uploading' && '1/4 Uploading'}
-              {importStage === 'reading_document' && '2/4 Reading'}
-              {importStage === 'extracting_information' && '3/4 Extracting'}
-              {importStage === 'organizing_facts' && '4/4 Organizing'}
-              {importStage === 'completed' && 'Completed'}
-              {importStage === 'error' && 'Error'}
-            </span>
-          </div>
+      {/* 10 Collapsible Sections */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        {PROFILE_SECTIONS.map((secDef) => {
+          const secFields = PROFILE_FIELDS.filter((f) => f.section === secDef.id);
+          const isCollapsed = Boolean(collapsedSections[secDef.id]);
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
-            {[
-              { id: 'uploading', label: '1. Uploading' },
-              { id: 'reading_document', label: '2. Reading' },
-              { id: 'extracting_information', label: '3. Extracting Facts' },
-              { id: 'organizing_facts', label: '4. Organizing' },
-            ].map((step, idx) => {
-              const order = ['uploading', 'reading_document', 'extracting_information', 'organizing_facts'];
-              const currentIdx = order.indexOf(importStage);
-              const isDone = importStage === 'completed' || currentIdx > idx;
-              const isActive = importStage === step.id;
-              const isFailed = importStage === 'error' && (currentIdx === idx || (currentIdx === -1 && idx === 0));
+          return (
+            <ProfileSectionCard
+              key={secDef.id}
+              sectionDef={secDef}
+              fields={secFields}
+              values={values}
+              customFields={secDef.id === 'custom' ? customFields : undefined}
+              errors={errors}
+              isCollapsed={isCollapsed}
+              onToggleCollapse={() => handleToggleSection(secDef.id)}
+              onFieldChange={handleFieldChange}
+              onAddCustomDetail={secDef.id === 'custom' ? () => setShowAddCustomModal(true) : undefined}
+              onDeleteCustomDetail={secDef.id === 'custom' ? handleDeleteCustomDetail : undefined}
+            />
+          );
+        })}
+      </div>
 
-              let pillBg = 'rgba(0, 0, 0, 0.04)';
-              let pillColor = 'var(--text-muted)';
-              let pillBorder = 'transparent';
-
-              if (isDone) {
-                pillBg = '#DCFCE7';
-                pillColor = '#16654E';
-                pillBorder = '#86EFAC';
-              } else if (isActive) {
-                pillBg = '#E0F2FE';
-                pillColor = '#0369A1';
-                pillBorder = '#7DD3FC';
-              } else if (isFailed) {
-                pillBg = '#FEE2E2';
-                pillColor = '#991B1B';
-                pillBorder = '#FCA5A5';
-              }
-
-              return (
-                <div
-                  key={step.id}
-                  style={{
-                    padding: '6px 8px',
-                    borderRadius: 'var(--radius-sm)',
-                    background: pillBg,
-                    color: pillColor,
-                    border: `1px solid ${pillBorder}`,
-                    fontSize: '0.75rem',
-                    fontWeight: 700,
-                    textAlign: 'center',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '4px',
-                  }}
-                >
-                  {isDone && <CheckCircle2 size={12} />}
-                  {isActive && <RotateCw size={12} className="animate-spin" />}
-                  <span>{step.label}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+      {/* Add Custom Detail Modal */}
+      {showAddCustomModal && (
+        <FieldEditModal
+          onClose={() => setShowAddCustomModal(false)}
+          onSave={handleAddCustomDetail}
+        />
       )}
 
-      {statusMessage && (
+      {/* New Profile Modal */}
+      {showNewProfileModal && (
         <div
           style={{
-            padding: '12px 16px',
-            borderRadius: 'var(--radius-md)',
-            background: statusMessage.type === 'success' ? '#F0FDF4' : '#FEF2F2',
-            border: `1px solid ${statusMessage.type === 'success' ? '#86EFAC' : '#FCA5A5'}`,
-            color: statusMessage.type === 'success' ? '#16654E' : '#991B1B',
-            fontSize: '0.875rem',
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.5)',
+            backdropFilter: 'blur(4px)',
+            zIndex: 9999,
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between',
+            justifyContent: 'center',
+            padding: '20px',
           }}
         >
-          <span>{statusMessage.text}</span>
-          <button onClick={() => setStatusMessage(null)} style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}>
-            <X size={16} />
-          </button>
+          <form
+            onSubmit={handleCreateProfile}
+            style={{
+              maxWidth: '400px',
+              width: '100%',
+              background: 'var(--bg-card)',
+              borderRadius: 'var(--radius-lg)',
+              border: '1px solid var(--border-subtle)',
+              padding: '24px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '16px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <h3 style={{ fontSize: '1.125rem', fontWeight: 800, color: '#0F2E23' }}>
+                Create New Profile
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowNewProfileModal(false)}
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div>
+              <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                Profile Name
+              </label>
+              <input
+                type="text"
+                value={newProfileName}
+                onChange={(e) => setNewProfileName(e.target.value)}
+                placeholder="e.g. Sibling, Father, Work"
+                style={{
+                  width: '100%',
+                  marginTop: '6px',
+                  padding: '9px 12px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-app)',
+                  fontSize: '0.875rem',
+                }}
+                autoFocus
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={() => setShowNewProfileModal(false)}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-subtle)',
+                  background: 'transparent',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                style={{
+                  padding: '8px 20px',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'none',
+                  background: '#16654E',
+                  color: '#FFFFFF',
+                  fontSize: '0.875rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Create
+              </button>
+            </div>
+          </form>
         </div>
       )}
 
-      {/* Accordion list */}
-      {activeProfile?.sections.map((section) => (
-        <ProfileSectionCard
-          key={section.id}
-          section={section}
-          isCollapsed={Boolean(collapsedSections[section.id])}
-          showSensitive={showSensitive}
-          onToggleSection={(id) => setCollapsedSections((prev) => ({ ...prev, [id]: !prev[id] }))}
-          onToggleShowSensitive={(key) => setShowSensitive((prev) => ({ ...prev, [key]: !prev[key] }))}
-          onAddField={(secId) =>
-            setEditingField({
-              sectionId: secId,
-              field: { key: '', label: '', value: '', sensitive: secId === 'id_numbers' },
-              isNew: true,
-            })
-          }
-          onEditField={(secId, field) => setEditingField({ sectionId: secId, field: { ...field }, isNew: false })}
-          onDeleteField={handleDeleteField}
-        />
-      ))}
-
-      {editingField && (
-        <FieldEditModal
-          editingField={editingField}
-          onClose={() => setEditingField(null)}
-          onSave={handleSaveField}
-          onChangeField={(field) => setEditingField({ ...editingField, field })}
-        />
-      )}
-
+      {/* Import Document Review Modal */}
       {importReview && (
         <ImportDocumentModal
           importReview={importReview}
           selectedImportKeys={selectedImportKeys}
+          existingValues={values}
           onClose={() => setImportReview(null)}
-          onToggleKey={(key) => setSelectedImportKeys((prev) => ({ ...prev, [key]: !prev[key] }))}
-          onApply={handleApplyImportedFacts}
+          onToggleKey={(k) =>
+            setSelectedImportKeys((prev) => ({ ...prev, [k]: !prev[k] }))
+          }
+          onApply={handleApplyImport}
         />
       )}
     </div>

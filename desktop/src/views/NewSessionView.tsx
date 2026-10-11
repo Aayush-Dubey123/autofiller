@@ -18,6 +18,7 @@ import {
   History,
 } from 'lucide-react';
 import { bridge, hasElectronBridge } from '../lib/bridge';
+import { deriveFacts } from '../../electron/shared/profileSchema';
 import type {
   AgentEventPayload,
   DocumentExtractionStage,
@@ -119,31 +120,49 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
 
   const selectedProfile = profiles.find((p) => p.id === selectedProfileId);
 
-  // Convert vault profile fields to ExtractedFacts
+  // Convert vault profile fields to ExtractedFacts with deriveFacts
   const getProfileFacts = (): ExtractedFact[] => {
     if (!selectedProfile) return [];
-    const result: ExtractedFact[] = [];
+    const factMap: Record<string, string> = {};
+    const labelMap: Record<string, string> = {};
+
     selectedProfile.sections.forEach((sec) => {
       sec.fields.forEach((f) => {
         if (!f.value) return;
-        const isId = sec.id === 'id_numbers' || Boolean(f.sensitive);
-        if (isId && !fillIdFields) return; // Omit ID fields if permission not granted
+        const isSensitive = sec.id === 'id_numbers' || sec.id === 'bank' || Boolean(f.sensitive);
+        if (isSensitive && !fillIdFields) return; // Omit sensitive ID/bank fields if permission not granted
 
-        result.push({
-          key: f.key,
-          label: f.label || f.key,
-          value: f.value,
-          confidence: 1.0,
-          source_page: null,
-        });
+        factMap[f.key] = f.value;
+        labelMap[f.key] = f.label || f.key;
       });
     });
+
+    const derived = deriveFacts(factMap);
+    const result: ExtractedFact[] = [];
+    for (const [key, val] of Object.entries(derived)) {
+      if (!val) continue;
+      const isSensitive =
+        key.includes('aadhaar') ||
+        key.includes('pan_card') ||
+        key.includes('passport') ||
+        key.includes('bank_account') ||
+        key.includes('ifsc');
+      if (isSensitive && !fillIdFields) continue;
+
+      result.push({
+        key,
+        label: labelMap[key] || key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+        value: val,
+        confidence: 1.0,
+        source_page: null,
+      });
+    }
     return result;
   };
 
   // Get active document facts, filtering ID fields if fillIdFields is false
   const getFilteredDocFacts = (): ExtractedFact[] => {
-    const idRegex = /(ssn|passport|aadhaar|tax_id|id_number|national_id)/i;
+    const idRegex = /(ssn|passport|aadhaar|tax_id|id_number|national_id|bank|ifsc|account_number)/i;
     return docFacts.filter((f) => {
       if (idRegex.test(f.key) && !fillIdFields) return false;
       return true;

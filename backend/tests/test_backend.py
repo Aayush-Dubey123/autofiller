@@ -1155,8 +1155,9 @@ async def test_finding_8_key_aliases_common_demographics():
 @pytest.mark.asyncio
 async def test_fast_ai_failover_gemini_to_gemini_fallback(monkeypatch):
     """Verify Gemini primary failure immediately triggers Gemini fallback without long timeout."""
-    from core.services.gemini_service import GeminiService
+    from core.services.gemini_service import GeminiService, reset_model_health
 
+    reset_model_health()
     service = GeminiService()
     monkeypatch.setattr(service, "client", object())
 
@@ -1610,6 +1611,49 @@ async def test_openrouter_authorization_and_transparent_disclosure(monkeypatch):
     assert any("Third-Party Provider Disclosure" in r for r in records), (
         f"Transparent disclosure log message was not emitted when engaging OpenRouter: {records}"
     )
+
+
+def test_document_service_schema_aliases():
+    """Verify Section 17 schema aliases are mapped properly in KEY_ALIASES."""
+    from core.services.document_service import KEY_ALIASES
+
+    # Mobile / phone
+    assert KEY_ALIASES.get("mobile") == "phone"
+    assert KEY_ALIASES.get("contact_no") == "phone"
+    assert KEY_ALIASES.get("cell_phone") == "phone"
+    assert KEY_ALIASES.get("alternate_mobile") == "alternate_phone"
+
+    # Category / caste
+    assert KEY_ALIASES.get("caste") == "category"
+    assert KEY_ALIASES.get("social_category") == "category"
+
+    # Demographics & language
+    assert KEY_ALIASES.get("nationality") == "nationality"
+    assert KEY_ALIASES.get("citizenship") == "nationality"
+    assert KEY_ALIASES.get("religion") == "religion"
+    assert KEY_ALIASES.get("mother_tongue") == "mother_tongue"
+    assert KEY_ALIASES.get("pwd") == "disability"
+
+    # ID Numbers
+    assert KEY_ALIASES.get("aadhar") == "aadhaar_card_number"
+    assert KEY_ALIASES.get("uid") == "aadhaar_card_number"
+    assert KEY_ALIASES.get("pan") == "pan_card_number"
+    assert KEY_ALIASES.get("passport") == "passport_number"
+
+    # Bank Details
+    assert KEY_ALIASES.get("bank_account_number") == "bank_account_number"
+    assert KEY_ALIASES.get("account_number") == "bank_account_number"
+    assert KEY_ALIASES.get("acc_no") == "bank_account_number"
+    assert KEY_ALIASES.get("ifsc") == "ifsc_code"
+    assert KEY_ALIASES.get("ifsc_code") == "ifsc_code"
+
+    # Education
+    assert KEY_ALIASES.get("10th_board") == "education_10_board"
+    assert KEY_ALIASES.get("tenth_board") == "education_10_board"
+    assert KEY_ALIASES.get("10th_percentage") == "education_10_percentage"
+    assert KEY_ALIASES.get("12th_board") == "education_12_board"
+    assert KEY_ALIASES.get("12th_percentage") == "education_12_percentage"
+    assert KEY_ALIASES.get("graduation_degree") == "education_grad_degree"
 
 
 

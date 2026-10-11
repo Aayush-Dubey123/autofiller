@@ -1,25 +1,46 @@
-import React from 'react';
-import { X } from 'lucide-react';
+import React, { useState } from 'react';
+import { EyeOff, X } from 'lucide-react';
 import type { VaultField } from '../../types/autofiller';
 
 interface FieldEditModalProps {
-  editingField: {
-    sectionId: string;
-    field: VaultField;
-    isNew: boolean;
+  initialDetail?: {
+    name: string;
+    value: string;
+    sensitive: boolean;
+    key?: string;
   };
   onClose: () => void;
-  onSave: (e: React.FormEvent) => void;
-  onChangeField: (updated: VaultField) => void;
+  onSave: (detail: { name: string; value: string; sensitive: boolean; key?: string }) => void;
 }
 
 export const FieldEditModal: React.FC<FieldEditModalProps> = ({
-  editingField,
+  initialDetail,
   onClose,
   onSave,
-  onChangeField,
 }) => {
-  const { field, isNew } = editingField;
+  const [name, setName] = useState<string>(initialDetail?.name || '');
+  const [value, setValue] = useState<string>(initialDetail?.value || '');
+  const [sensitive, setSensitive] = useState<boolean>(initialDetail?.sensitive || false);
+  const [error, setError] = useState<string>('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) {
+      setError('Please provide a name for this detail.');
+      return;
+    }
+    if (!value.trim()) {
+      setError('Please provide a value.');
+      return;
+    }
+    setError('');
+    onSave({
+      name: name.trim(),
+      value: value.trim(),
+      sensitive,
+      key: initialDetail?.key,
+    });
+  };
 
   return (
     <div
@@ -36,7 +57,7 @@ export const FieldEditModal: React.FC<FieldEditModalProps> = ({
       }}
     >
       <form
-        onSubmit={onSave}
+        onSubmit={handleSubmit}
         style={{
           maxWidth: '440px',
           width: '100%',
@@ -47,57 +68,59 @@ export const FieldEditModal: React.FC<FieldEditModalProps> = ({
           display: 'flex',
           flexDirection: 'column',
           gap: '16px',
+          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <h3 style={{ fontSize: '1.125rem', fontWeight: 800, color: '#0F2E23' }}>
-            {isNew ? 'Add Field' : 'Edit Field'}
+            {initialDetail ? 'Edit Detail' : 'Add Another Detail'}
           </h3>
-          <button type="button" onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer' }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#64748B' }}
+          >
             <X size={18} />
           </button>
         </div>
 
-        <div>
-          <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
-            Field Key (Canonical name)
-          </label>
-          <input
-            type="text"
-            value={field.key}
-            disabled={!isNew}
-            onChange={(e) => onChangeField({ ...field, key: e.target.value })}
-            placeholder="e.g. student_name, email, phone"
+        {error && (
+          <div
             style={{
-              width: '100%',
-              marginTop: '6px',
               padding: '8px 12px',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-subtle)',
-              background: isNew ? 'var(--bg-app)' : '#F1F5F9',
-              fontSize: '0.875rem',
+              borderRadius: '6px',
+              background: '#FEF2F2',
+              color: '#DC2626',
+              fontSize: '0.8125rem',
+              fontWeight: 600,
             }}
-          />
-        </div>
+          >
+            {error}
+          </div>
+        )}
 
         <div>
           <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
-            Label (User facing)
+            What is it called?
           </label>
           <input
             type="text"
-            value={field.label}
-            onChange={(e) => onChangeField({ ...field, label: e.target.value })}
-            placeholder="e.g. Full Name"
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              if (error) setError('');
+            }}
+            placeholder="e.g. Library Membership ID, Club Number"
             style={{
               width: '100%',
               marginTop: '6px',
-              padding: '8px 12px',
+              padding: '9px 12px',
               borderRadius: 'var(--radius-md)',
               border: '1px solid var(--border-subtle)',
               background: 'var(--bg-app)',
               fontSize: '0.875rem',
             }}
+            autoFocus
           />
         </div>
 
@@ -107,13 +130,16 @@ export const FieldEditModal: React.FC<FieldEditModalProps> = ({
           </label>
           <input
             type="text"
-            value={field.value}
-            onChange={(e) => onChangeField({ ...field, value: e.target.value })}
-            placeholder="Enter value"
+            value={value}
+            onChange={(e) => {
+              setValue(e.target.value);
+              if (error) setError('');
+            }}
+            placeholder="e.g. LIB-991823"
             style={{
               width: '100%',
               marginTop: '6px',
-              padding: '8px 12px',
+              padding: '9px 12px',
               borderRadius: 'var(--radius-md)',
               border: '1px solid var(--border-subtle)',
               background: 'var(--bg-app)',
@@ -122,19 +148,38 @@ export const FieldEditModal: React.FC<FieldEditModalProps> = ({
           />
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div
+          onClick={() => setSensitive(!sensitive)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            padding: '10px 12px',
+            borderRadius: 'var(--radius-md)',
+            background: sensitive ? 'rgba(22, 101, 78, 0.08)' : 'var(--bg-app)',
+            border: `1px solid ${sensitive ? '#86EFAC' : 'var(--border-subtle)'}`,
+            cursor: 'pointer',
+            userSelect: 'none',
+          }}
+        >
           <input
             type="checkbox"
-            id="sensitive_check"
-            checked={Boolean(field.sensitive)}
-            onChange={(e) => onChangeField({ ...field, sensitive: e.target.checked })}
+            checked={sensitive}
+            onChange={(e) => setSensitive(e.target.checked)}
+            style={{ cursor: 'pointer' }}
           />
-          <label htmlFor="sensitive_check" style={{ fontSize: '0.8125rem', fontWeight: 600, cursor: 'pointer' }}>
-            Mark as sensitive / ID field (mask value on screen)
-          </label>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#0F2E23', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <EyeOff size={14} color="#16654E" />
+              Keep hidden
+            </div>
+            <div style={{ fontSize: '0.75rem', color: '#64748B', marginTop: '2px' }}>
+              Masked on screen and requires permission before filling.
+            </div>
+          </div>
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '12px' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px' }}>
           <button
             type="button"
             onClick={onClose}
@@ -143,8 +188,10 @@ export const FieldEditModal: React.FC<FieldEditModalProps> = ({
               borderRadius: 'var(--radius-md)',
               border: '1px solid var(--border-subtle)',
               background: 'transparent',
+              fontSize: '0.875rem',
               fontWeight: 600,
               cursor: 'pointer',
+              color: 'var(--text-secondary)',
             }}
           >
             Cancel
@@ -157,11 +204,12 @@ export const FieldEditModal: React.FC<FieldEditModalProps> = ({
               border: 'none',
               background: '#16654E',
               color: '#FFFFFF',
+              fontSize: '0.875rem',
               fontWeight: 700,
               cursor: 'pointer',
             }}
           >
-            Save Field
+            {initialDetail ? 'Update Detail' : 'Add Detail'}
           </button>
         </div>
       </form>

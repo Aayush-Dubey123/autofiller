@@ -26,6 +26,7 @@ import {
   StartSessionOptions,
   VerificationRecord,
 } from '../shared/types';
+import { deriveFacts } from '../shared/profileSchema';
 
 /** Maximum number of field operations before the loop abandons the session. */
 const MAX_STEPS = 50;
@@ -870,8 +871,27 @@ export class AgentController {
             );
 
       if (options.fillIdFields === false) {
-        const idRegex = /(ssn|passport|aadhaar|tax_id|id_number|national_id)/i;
+        const idRegex = /(ssn|passport|aadhaar|tax_id|id_number|national_id|bank|ifsc|account_number)/i;
         facts = facts.filter((f) => !idRegex.test(f.key));
+      }
+
+      // Supplement facts with derived facts (full name, age, one-line address, permanent copies)
+      const factMap: Record<string, string> = {};
+      facts.forEach((f) => {
+        if (f.key && f.value) factMap[f.key] = f.value;
+      });
+      const derived = deriveFacts(factMap);
+      for (const [dKey, dVal] of Object.entries(derived)) {
+        if (dVal && !factMap[dKey]) {
+          facts.push({
+            key: dKey,
+            label: dKey.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+            value: dVal,
+            confidence: 1.0,
+            source_page: null,
+          });
+          factMap[dKey] = dVal;
+        }
       }
 
       // Step 1b: Information Preflight BEFORE opening the form

@@ -26,10 +26,13 @@ const REFUSED_KEYS = new Set([
   'passwd',
   'cvv',
   'cvc',
+  'pin',
+  'upi_pin',
+  'atm_pin',
+  'card_pin',
   'otp',
   'card_number',
   'credit_card',
-  'bank_account_number',
 ]);
 
 /** KeySlotCipher structure used in V2 slots. */
@@ -715,36 +718,56 @@ export class VaultService {
     const normKey = (field.key || '').trim().toLowerCase();
     const normLabel = (field.label || '').trim().toLowerCase();
 
-    // Check exact allowed list first
-    if (['aadhaar_card_number', 'aadhaar_number', 'pan_card_number', 'pan_number', 'passport_number'].includes(normKey)) {
+    // Explicitly allowed safe postal / ID / bank keys
+    if (
+      [
+        'pincode',
+        'pin_code',
+        'permanent_pincode',
+        'postal_code',
+        'zip_code',
+        'aadhaar_card_number',
+        'aadhaar_number',
+        'pan_card_number',
+        'pan_number',
+        'passport_number',
+        'bank_account_number',
+        'ifsc_code',
+      ].includes(normKey)
+    ) {
       return;
     }
 
     // Explicit refused exact keys
     if (REFUSED_KEYS.has(normKey)) {
       throw new Error(
-        `Field '${field.key}' is prohibited from vault storage (passwords, card numbers, CVVs, OTPs, and bank account numbers cannot be stored).`
+        `Field '${field.key}' is prohibited from vault storage (passwords, card numbers, CVVs, PINs, and OTPs cannot be stored).`
       );
     }
 
     // Whole-word / token inspection
     const keyTokens = normKey.split(/[^a-z0-9]+/);
     for (const token of keyTokens) {
-      if (['password', 'passwd', 'cvv', 'cvc', 'otp'].includes(token)) {
+      if (['password', 'passwd', 'cvv', 'cvc', 'otp', 'upi_pin'].includes(token)) {
         throw new Error(
-          `Field '${field.key}' is prohibited from vault storage (passwords, card numbers, CVVs, OTPs, and bank account numbers cannot be stored).`
+          `Field '${field.key}' is prohibited from vault storage (passwords, card numbers, CVVs, PINs, and OTPs cannot be stored).`
+        );
+      }
+      if (token === 'pin' && !normKey.includes('pincode') && !normKey.includes('pin_code')) {
+        throw new Error(
+          `Field '${field.key}' is prohibited from vault storage (passwords, card numbers, CVVs, PINs, and OTPs cannot be stored).`
         );
       }
     }
 
-    if (normKey === 'card_number' || normKey === 'credit_card' || normKey === 'bank_account_number') {
+    if (normKey === 'card_number' || normKey === 'credit_card' || normKey === 'pin' || normKey === 'upi_pin') {
       throw new Error(
-        `Field '${field.key}' is prohibited from vault storage (passwords, card numbers, CVVs, OTPs, and bank account numbers cannot be stored).`
+        `Field '${field.key}' is prohibited from vault storage (passwords, card numbers, CVVs, PINs, and OTPs cannot be stored).`
       );
     }
 
     // Label check
-    if (/^(password|passwd|cvv|cvc|otp|card number|credit card|bank account number)$/i.test(normLabel)) {
+    if (/^(password|passwd|cvv|cvc|otp|pin|upi pin|card number|credit card)$/i.test(normLabel)) {
       throw new Error(
         `Field '${field.label}' is prohibited from vault storage.`
       );

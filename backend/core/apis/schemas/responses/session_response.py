@@ -33,6 +33,9 @@ class FormMapResponse(BaseModel):
     unmapped_fields: List[str] = Field(
         default_factory=list, description="Field references that could not be mapped"
     )
+    provider: Optional[str] = Field(
+        default=None, description="AI model or provider name used for mapping"
+    )
 
 
 class SessionResponse(BaseModel):

@@ -208,6 +208,10 @@ export function registerIpcHandlers(
     agentController.takeOver();
   });
 
+  ipcMain.handle('autofiller:check-blocker-resume', async () => {
+    return await agentController.checkBlockerResume();
+  });
+
   ipcMain.handle('autofiller:stop-agent', async () => {
     await agentController.stop();
     return { success: true };

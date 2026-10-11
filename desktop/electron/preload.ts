@@ -32,6 +32,7 @@ export interface AutoFillerAPI {
   pauseAgent: () => Promise<void>;
   resumeAgent: () => Promise<void>;
   takeOver: () => Promise<void>;
+  checkBlockerResume: () => Promise<{ resolved: boolean; message: string }>;
   stopAgent: () => Promise<void>;
   confirmSubmission: () => Promise<{ success: boolean }>;
   answerClarification: (clarificationId: string, answer: string) => Promise<{ success: boolean }>;
@@ -96,6 +97,7 @@ const api: AutoFillerAPI = {
   pauseAgent: () => ipcRenderer.invoke('autofiller:pause-agent'),
   resumeAgent: () => ipcRenderer.invoke('autofiller:resume-agent'),
   takeOver: () => ipcRenderer.invoke('autofiller:takeover-agent'),
+  checkBlockerResume: () => ipcRenderer.invoke('autofiller:check-blocker-resume'),
   stopAgent: () => ipcRenderer.invoke('autofiller:stop-agent'),
   confirmSubmission: () => ipcRenderer.invoke('autofiller:confirm-submission'),
   answerClarification: (clarificationId, answer) =>

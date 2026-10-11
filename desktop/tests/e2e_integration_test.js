@@ -32,6 +32,7 @@ const FORM_PATH = [
 ].find(p => fs.existsSync(p)) || path.resolve(__dirname, '../public/mock_school_form.html');
 const FORM_URL = `file://${FORM_PATH.replace(/\\/g, '/')}`;
 
+const filter = process.env.TEST_FILTER || process.argv[2];
 let passed = 0;
 
 /**
@@ -41,6 +42,9 @@ let passed = 0;
  * @param {() => Promise<void>} body Async assertion body.
  */
 async function test(name, body) {
+  if (filter && !name.toLowerCase().includes(filter.toLowerCase())) {
+    return;
+  }
   try {
     await body();
     passed += 1;
@@ -1659,6 +1663,336 @@ async function runE2E() {
         try { fs.rmSync(scratchDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); } catch {}
       }
     }
+  });
+
+  await test('Phase 10: Human Blocker Gate - detects login gate, types nothing while gated, resumes after simulated sign-in, fills form, halts at REVIEW_READY', async () => {
+    const gateFixture = path.resolve(__dirname, 'fixtures/forms/login_gate.html');
+    assert.ok(fs.existsSync(gateFixture), 'login_gate.html fixture must exist');
+    const gateUrl = `file://${gateFixture.replace(/\\/g, '/')}`;
+
+    const facts = [
+      { key: 'student_name', label: 'Student Full Name', value: 'Aarav Sharma', confidence: 1.0 },
+      { key: 'dob', label: 'Date of Birth', value: '2005-03-23', confidence: 1.0 },
+      { key: 'email', label: 'Student Email Address', value: 'aarav@example.com', confidence: 1.0 },
+    ];
+
+    const backend = {
+      async createSession(doc, url) {
+        return { id: 'session_login_gate_e2e' };
+      },
+      async extractDocument() {
+        return { facts };
+      },
+      async mapForm(sessionId, snapshot) {
+        const mappings = snapshot.fields.map((f) => {
+          if (/name/i.test(f.label)) {
+            return { field_ref: f.ref, field_label: f.label, fact_key: 'student_name', confidence: 1.0, status: 'PENDING' };
+          }
+          if (/dob|birth/i.test(f.label)) {
+            return { field_ref: f.ref, field_label: f.label, fact_key: 'dob', confidence: 1.0, status: 'PENDING' };
+          }
+          if (/email/i.test(f.label)) {
+            return { field_ref: f.ref, field_label: f.label, fact_key: 'email', confidence: 1.0, status: 'PENDING' };
+          }
+          return { field_ref: f.ref, field_label: f.label, confidence: 0, status: 'UNMAPPED' };
+        });
+        return { mappings, clarifications_required: [] };
+      },
+      async appendEventSafe() {},
+      async appendEvents() {},
+      async purgeSession() {},
+    };
+
+    const controller = new AgentController(backend);
+    let reachedTakeover = false;
+    controller.onEvent((evt) => {
+      if (evt.type === 'STATE_CHANGED' && controller.getStateMachine().getState() === 'USER_TAKEOVER') {
+        reachedTakeover = true;
+      }
+    });
+
+    const sessionPromise = controller.startSession({
+      targetUrl: gateUrl,
+      facts,
+    });
+
+    // Wait until agent detects login gate and halts in USER_TAKEOVER
+    const waitStart = Date.now();
+    while (!reachedTakeover && Date.now() - waitStart < 10000) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    assert.strictEqual(reachedTakeover, true, 'Agent must detect login gate and enter USER_TAKEOVER');
+    assert.strictEqual(controller.getStateMachine().getState(), 'USER_TAKEOVER');
+
+    // Verify agent typed nothing into username or password fields while gated
+    const browserMgr = controller.getBrowserManager();
+    const page = browserMgr.page;
+    assert.ok(page, 'Browser page must be active');
+    const userVal = await page.inputValue('#username');
+    const pwdVal = await page.inputValue('#password');
+    assert.strictEqual(userVal, '', 'Username field must remain empty while gated');
+    assert.strictEqual(pwdVal, '', 'Password field must remain empty while gated');
+
+    // Simulate operator clicking Sign In to pass the gate
+    await page.click('#signin-btn');
+
+    // Wait for the session to resume automatically, fill the form, and reach REVIEW_READY
+    await sessionPromise;
+
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      'Agent must resume after simulated sign-in, populate form, and halt at REVIEW_READY'
+    );
+
+    // Verify form fields were filled correctly
+    const filledName = await page.inputValue('#student_name');
+    const filledEmail = await page.inputValue('#email');
+    assert.strictEqual(filledName, 'Aarav Sharma');
+    assert.strictEqual(filledEmail, 'aarav@example.com');
+
+    await controller.stop();
+  });
+
+  await test('Phase 11: Readiness Gate mode=redirect - sign-in triggers location redirect, resumes after ~1.5s, fills form, halts at REVIEW_READY without ERROR', async () => {
+    const gateFixture = path.resolve(__dirname, 'fixtures/forms/login_gate.html');
+    assert.ok(fs.existsSync(gateFixture), 'login_gate.html fixture must exist');
+    const redirectUrl = `file://${gateFixture.replace(/\\/g, '/')}?mode=redirect`;
+
+    const facts = [
+      { key: 'student_name', label: 'Student Full Name', value: 'Aarav Sharma', confidence: 1.0 },
+      { key: 'dob', label: 'Date of Birth', value: '2005-03-23', confidence: 1.0 },
+      { key: 'email', label: 'Student Email Address', value: 'aarav@example.com', confidence: 1.0 },
+    ];
+
+    const backend = {
+      async createSession(doc, url) {
+        return { id: 'session_redirect_gate_e2e' };
+      },
+      async extractDocument() {
+        return { facts };
+      },
+      async mapForm(sessionId, snapshot) {
+        const mappings = snapshot.fields.map((f) => {
+          if (/name/i.test(f.label)) {
+            return { field_ref: f.ref, field_label: f.label, fact_key: 'student_name', confidence: 1.0, status: 'PENDING' };
+          }
+          if (/dob|birth/i.test(f.label)) {
+            return { field_ref: f.ref, field_label: f.label, fact_key: 'dob', confidence: 1.0, status: 'PENDING' };
+          }
+          if (/email/i.test(f.label)) {
+            return { field_ref: f.ref, field_label: f.label, fact_key: 'email', confidence: 1.0, status: 'PENDING' };
+          }
+          return { field_ref: f.ref, field_label: f.label, confidence: 0, status: 'UNMAPPED' };
+        });
+        return { mappings, clarifications_required: [] };
+      },
+      async appendEventSafe() {},
+      async appendEvents() {},
+      async purgeSession() {},
+    };
+
+    const controller = new AgentController(backend);
+    let reachedTakeover = false;
+    controller.onEvent((evt) => {
+      if (evt.type === 'STATE_CHANGED' && controller.getStateMachine().getState() === 'USER_TAKEOVER') {
+        reachedTakeover = true;
+      }
+    });
+
+    const sessionPromise = controller.startSession({
+      targetUrl: redirectUrl,
+      facts,
+    });
+
+    const waitStart = Date.now();
+    while (!reachedTakeover && Date.now() - waitStart < 10000) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    assert.strictEqual(reachedTakeover, true, 'Agent must detect login gate and enter USER_TAKEOVER in redirect mode');
+    assert.strictEqual(controller.getStateMachine().getState(), 'USER_TAKEOVER');
+
+    const browserMgr = controller.getBrowserManager();
+    const page = browserMgr.page;
+    assert.ok(page, 'Browser page must be active');
+
+    // Trigger sign in which initiates window.location redirect
+    await page.click('#signin-btn');
+
+    // Await session completion to REVIEW_READY
+    await sessionPromise;
+
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      'Agent must survive redirect navigation, resume when form appears, and halt at REVIEW_READY'
+    );
+
+    const filledName = await page.inputValue('#student_name');
+    const filledEmail = await page.inputValue('#email');
+    assert.strictEqual(filledName, 'Aarav Sharma');
+    assert.strictEqual(filledEmail, 'aarav@example.com');
+
+    await controller.stop();
+  });
+
+  await test('Phase 12: Readiness Gate mode=late - skeleton loader delays real form by ~1.5s, resumes and halts at REVIEW_READY', async () => {
+    const gateFixture = path.resolve(__dirname, 'fixtures/forms/login_gate.html');
+    assert.ok(fs.existsSync(gateFixture), 'login_gate.html fixture must exist');
+    const lateUrl = `file://${gateFixture.replace(/\\/g, '/')}?mode=late`;
+
+    const facts = [
+      { key: 'student_name', label: 'Student Full Name', value: 'Aarav Sharma', confidence: 1.0 },
+      { key: 'dob', label: 'Date of Birth', value: '2005-03-23', confidence: 1.0 },
+      { key: 'email', label: 'Student Email Address', value: 'aarav@example.com', confidence: 1.0 },
+    ];
+
+    const backend = {
+      async createSession(doc, url) {
+        return { id: 'session_late_gate_e2e' };
+      },
+      async extractDocument() {
+        return { facts };
+      },
+      async mapForm(sessionId, snapshot) {
+        const mappings = snapshot.fields.map((f) => {
+          if (/name/i.test(f.label)) {
+            return { field_ref: f.ref, field_label: f.label, fact_key: 'student_name', confidence: 1.0, status: 'PENDING' };
+          }
+          if (/dob|birth/i.test(f.label)) {
+            return { field_ref: f.ref, field_label: f.label, fact_key: 'dob', confidence: 1.0, status: 'PENDING' };
+          }
+          if (/email/i.test(f.label)) {
+            return { field_ref: f.ref, field_label: f.label, fact_key: 'email', confidence: 1.0, status: 'PENDING' };
+          }
+          return { field_ref: f.ref, field_label: f.label, confidence: 0, status: 'UNMAPPED' };
+        });
+        return { mappings, clarifications_required: [] };
+      },
+      async appendEventSafe() {},
+      async appendEvents() {},
+      async purgeSession() {},
+    };
+
+    const controller = new AgentController(backend);
+    let reachedTakeover = false;
+    controller.onEvent((evt) => {
+      if (evt.type === 'STATE_CHANGED' && controller.getStateMachine().getState() === 'USER_TAKEOVER') {
+        reachedTakeover = true;
+      }
+    });
+
+    const sessionPromise = controller.startSession({
+      targetUrl: lateUrl,
+      facts,
+    });
+
+    const waitStart = Date.now();
+    while (!reachedTakeover && Date.now() - waitStart < 10000) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    assert.strictEqual(reachedTakeover, true, 'Agent must enter USER_TAKEOVER on late mode login gate');
+    assert.strictEqual(controller.getStateMachine().getState(), 'USER_TAKEOVER');
+
+    const browserMgr = controller.getBrowserManager();
+    const page = browserMgr.page;
+    assert.ok(page, 'Browser page must be active');
+
+    // Click signin which reveals skeleton loader, real form loads ~1.5s later
+    await page.click('#signin-btn');
+
+    await sessionPromise;
+
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      'Agent must wait through skeleton loader, populate late form, and halt at REVIEW_READY'
+    );
+
+    const filledName = await page.inputValue('#student_name');
+    const filledEmail = await page.inputValue('#email');
+    assert.strictEqual(filledName, 'Aarav Sharma');
+    assert.strictEqual(filledEmail, 'aarav@example.com');
+
+    await controller.stop();
+  });
+
+  await test('zero-value trace contains none of the test profile values from a full fill', async () => {
+    const os = require('os');
+    const tempUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'trace-zero-val-'));
+    const backend = makeStubBackend(FORM_URL);
+    const controller = new AgentController(backend);
+    controller.setUserDataDir(tempUserData);
+
+    await controller.startSession({
+      documentText: 'Student Name: Aarav Sharma\nDate of Birth: 2005-03-23\nEmail: aarav@example.com\nPhone: 9876543210\nAddress: 123 Park Street, Mumbai, Maharashtra, 400001\nFather Name: Vikram Sharma\nMother Name: Sunita Sharma',
+      documentName: 'student.pdf',
+      targetUrl: FORM_URL,
+    });
+
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      'Session must complete to REVIEW_READY'
+    );
+
+    const tracePath = path.join(tempUserData, 'autofiller-trace.json');
+    assert.ok(fs.existsSync(tracePath), 'Trace file must exist in userData directory');
+
+    const traceRaw = fs.readFileSync(tracePath, 'utf8');
+    const traceJson = JSON.parse(traceRaw);
+
+    // Profile values extracted from the document / stub backend facts
+    const secretProfileValues = [
+      'Aarav Sharma',
+      '2005-03-23',
+      'aarav@example.com',
+      '9876543210',
+      '123 Park Street',
+      'Mumbai',
+      'Maharashtra',
+      '400001',
+      'Vikram Sharma',
+      'Sunita Sharma',
+    ];
+
+    for (const val of secretProfileValues) {
+      assert.strictEqual(
+        traceRaw.toLowerCase().includes(val.toLowerCase()),
+        false,
+        `Trace must NEVER contain profile value '${val}'`
+      );
+    }
+
+    assert.ok(traceJson.scans.length > 0, 'Trace must record at least one scan');
+    const firstScan = traceJson.scans[0];
+    assert.ok(firstScan.fields.length > 0, 'Trace scan must contain fields');
+    assert.ok(firstScan.hostAndPath, 'Scan must record host and path');
+    assert.ok(typeof firstScan.frameCount === 'number', 'Scan must record frameCount');
+    assert.ok(typeof firstScan.timeSinceNavMs === 'number', 'Scan must record timeSinceNavMs');
+
+    for (const field of firstScan.fields) {
+      assert.ok(field.ref, 'Field trace must include ref');
+      assert.ok(field.scannedLabel, 'Field trace must include scannedLabel');
+      assert.ok(field.labelSource, 'Field trace must include labelSource');
+      assert.ok(field.controlType, 'Field trace must include controlType');
+      assert.ok(typeof field.required === 'boolean', 'Field trace must include required boolean');
+      assert.ok(typeof field.visible === 'boolean', 'Field trace must include visible boolean');
+      assert.ok(field.enabledState, 'Field trace must include enabledState');
+      assert.ok(field.location, 'Field trace must include location');
+      assert.ok(field.mapping, 'Field trace must include mapping metadata');
+      assert.ok(typeof field.valueAvailable === 'boolean', 'Field trace must include valueAvailable boolean');
+      assert.ok(Array.isArray(field.fillStrategies), 'Field trace must include fillStrategies array');
+      assert.ok(field.domReadBack, 'Field trace must include domReadBack');
+    }
+
+    await controller.cleanup();
+    try {
+      fs.rmSync(tempUserData, { recursive: true, force: true });
+    } catch {}
   });
 
   console.log(`\nAll ${passed} end-to-end assertions passed.`);

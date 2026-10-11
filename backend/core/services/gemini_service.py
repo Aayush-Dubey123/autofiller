@@ -590,6 +590,7 @@ class GeminiService:
                     timeout=timeout,
                 )
                 if response_text:
+                    self.last_provider_used = candidate_model
                     return response_text, False, None
             except asyncio.TimeoutError:
                 mark_model_unavailable("gemini", candidate_model, "timeout")
@@ -1101,6 +1102,7 @@ Respond ONLY with valid JSON."""
             Tuple[List[FieldMapping], List[ClarificationRequest], List[str]]:
                 Synthesized field mappings, clarification requests, and unmapped field refs.
         """
+        self.last_provider_used = "heuristic fallback"
         logging.warning(
             "Executing GeminiService._map_heuristic_fallback due to provider failure or rate limit"
         )

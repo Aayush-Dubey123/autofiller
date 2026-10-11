@@ -9,9 +9,13 @@
  * - Audit persistence so the execution timeline survives an application reload.
  */
 
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import { StateMachine } from './StateMachine';
 import { ToolContext, ToolExecutionError, ToolRegistry } from './ToolRegistry';
 import { BrowserManager, OperationCancelledError } from '../browser/BrowserManager';
+import { BlockerDetectionResult, FormReadinessState } from '../browser/FormScanner';
 import { PolicyEngine, SubmissionControl } from '../policy/PolicyEngine';
 import { BackendClient, coerceClarificationValue } from '../services/BackendClient';
 import { matchOption } from './OptionMatcher';
@@ -25,6 +29,9 @@ import {
   FormSnapshot,
   StartSessionOptions,
   VerificationRecord,
+  FieldTraceRecord,
+  ScanTraceRecord,
+  RunTrace,
 } from '../shared/types';
 import { deriveFacts } from '../shared/profileSchema';
 
@@ -91,6 +98,14 @@ export class AgentController {
   private lastTotalFields: number = 0;
   private lastVerifiedCount: number = 0;
   private submissionWatcherActive: boolean = false;
+  private customUserDataDir: string | null = null;
+  private currentRunTrace: RunTrace = {
+    timestamp: '',
+    targetUrl: '',
+    aiProvider: 'heuristic fallback',
+    blockedNavigationReason: null,
+    scans: [],
+  };
 
   /**
    * Create the agent controller.
@@ -103,6 +118,188 @@ export class AgentController {
     this.toolRegistry = new ToolRegistry();
     this.browserManager = new BrowserManager();
     this.policyEngine = new PolicyEngine();
+  }
+
+  public setUserDataDir(dir: string): void {
+    this.customUserDataDir = dir;
+  }
+
+  public getLastRunTrace(): RunTrace {
+    return this.currentRunTrace;
+  }
+
+  private resolveUserDataDir(): string {
+    if (this.customUserDataDir) return this.customUserDataDir;
+    if (process.env.USER_DATA_DIR) return process.env.USER_DATA_DIR;
+    try {
+      const electron = require('electron');
+      const app = electron.app || electron.remote?.app;
+      if (app && typeof app.getPath === 'function') {
+        return app.getPath('userData');
+      }
+    } catch {}
+    const home = process.env.HOME || process.env.USERPROFILE || os.homedir();
+    if (process.platform === 'win32') {
+      return path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'autofiller-desktop');
+    }
+    if (process.platform === 'darwin') {
+      return path.join(home, 'Library', 'Application Support', 'autofiller-desktop');
+    }
+    return path.join(home, '.config', 'autofiller-desktop');
+  }
+
+  private sanitizeHostAndPath(urlStr: string): string {
+    if (!urlStr) return 'unknown';
+    try {
+      const parsed = new URL(urlStr.trim());
+      return `${parsed.host}${parsed.pathname}`;
+    } catch {
+      return urlStr.split('?')[0].split('#')[0].replace(/^https?:\/\//i, '');
+    }
+  }
+
+  private recordScanTrace(snapshot: FormSnapshot, scanIndex: number): ScanTraceRecord {
+    const hostAndPath = this.sanitizeHostAndPath(snapshot.url);
+    const frameCount = this.browserManager.getFrameCount();
+    const timeSinceNavMs = this.browserManager.getTimeSinceNav();
+    const fieldRecords: FieldTraceRecord[] = snapshot.fields.map((f) => ({
+      ref: f.ref,
+      scannedLabel: f.label,
+      labelSource: (f as any).labelSource || 'nearby text',
+      controlType: f.type,
+      required: f.required,
+      visible: f.visible,
+      enabledState: (f as any).enabledState || (f.disabled ? 'disabled' : 'enabled'),
+      location: (f as any).location || 'main',
+      mapping: {
+        factKey: 'none',
+        confidence: 0,
+        source: 'none',
+      },
+      valueAvailable: false,
+      fillStrategies: [],
+      domReadBack: 'none',
+      skippedReason: !f.visible
+        ? 'hidden'
+        : f.disabled
+          ? 'disabled'
+          : (f as any).enabledState === 'readonly'
+            ? 'readonly'
+            : null,
+    }));
+
+    const scanRecord: ScanTraceRecord = {
+      scanIndex,
+      hostAndPath,
+      frameCount,
+      fieldCount: snapshot.fields.length,
+      timeSinceNavMs,
+      fields: fieldRecords,
+    };
+
+    this.currentRunTrace.scans.push(scanRecord);
+    return scanRecord;
+  }
+
+  private updateScanMappings(scanTrace: ScanTraceRecord, mappings: FieldMapping[]): void {
+    scanTrace.fields.forEach((fieldTrace) => {
+      const m = mappings.find(
+        (cand) =>
+          cand.field_ref === fieldTrace.ref ||
+          (cand.field_label && this.labelsMatch(cand.field_label, fieldTrace.scannedLabel))
+      );
+      if (m && m.fact_key) {
+        fieldTrace.mapping = {
+          factKey: m.fact_key,
+          confidence: typeof m.confidence === 'number' ? m.confidence : 0.95,
+          source: m.clarification_id ? 'clarification' : this.currentRunTrace.aiProvider,
+        };
+        fieldTrace.valueAvailable = Boolean(m.fact_value && String(m.fact_value).trim().length > 0);
+      } else {
+        fieldTrace.mapping = {
+          factKey: 'none',
+          confidence: 0,
+          source: 'none',
+        };
+        fieldTrace.valueAvailable = false;
+      }
+    });
+  }
+
+  private saveAndPrintRunTrace(): void {
+    try {
+      const dir = this.resolveUserDataDir();
+      fs.mkdirSync(dir, { recursive: true });
+      const traceFile = path.join(dir, 'autofiller-trace.json');
+      fs.writeFileSync(traceFile, JSON.stringify(this.currentRunTrace, null, 2), 'utf-8');
+
+      console.log(`\n================== AUTOFILLER RUN TRACE ==================`);
+      console.log(`Trace File: ${traceFile}`);
+      console.log(`Target: ${this.currentRunTrace.targetUrl}`);
+      console.log(`AI Provider: ${this.currentRunTrace.aiProvider}`);
+      console.log(`Blocked Navigation: ${this.currentRunTrace.blockedNavigationReason || 'None'}`);
+
+      this.currentRunTrace.scans.forEach((scan) => {
+        console.log(`\nScan #${scan.scanIndex}: ${scan.hostAndPath} | Frames: ${scan.frameCount} | Fields: ${scan.fieldCount} | Time Since Nav: ${scan.timeSinceNavMs}ms`);
+        this.printCompactTable(scan.fields);
+      });
+      console.log(`==========================================================\n`);
+    } catch (err: any) {
+      console.warn('Could not write run trace:', err?.message || err);
+    }
+  }
+
+  private printCompactTable(fields: FieldTraceRecord[]): void {
+    const headers = [
+      'Ref',
+      'Label (Source)',
+      'Type',
+      'Req',
+      'Vis',
+      'State',
+      'Loc',
+      'Mapping (Key, Conf, Src)',
+      'Val?',
+      'Fill Strategy',
+      'DOM Read-Back',
+      'Skipped',
+    ];
+
+    const rows = fields.map((f) => {
+      const labelWithSource = `${f.scannedLabel} (${f.labelSource})`;
+      const mapStr =
+        f.mapping.factKey !== 'none'
+          ? `${f.mapping.factKey} (${f.mapping.confidence.toFixed(2)}, ${f.mapping.source})`
+          : 'none';
+      const stratStr = f.fillStrategies.map((s) => `${s.strategy}:${s.outcome}`).join(', ') || '-';
+      return [
+        f.ref,
+        labelWithSource,
+        f.controlType,
+        f.required ? 'Y' : 'N',
+        f.visible ? 'Y' : 'N',
+        f.enabledState,
+        f.location,
+        mapStr,
+        f.valueAvailable ? 'Y' : 'N',
+        stratStr,
+        f.domReadBack,
+        f.skippedReason || '-',
+      ];
+    });
+
+    const colWidths = headers.map((h, i) =>
+      Math.max(h.length, ...rows.map((r) => (r[i] || '').length))
+    );
+
+    const formatRow = (r: string[]) =>
+      r.map((cell, i) => (cell || '').padEnd(colWidths[i])).join(' | ');
+
+    const separator = colWidths.map((w) => '-'.repeat(w)).join('-+-');
+
+    console.log(formatRow(headers));
+    console.log(separator);
+    rows.forEach((r) => console.log(formatRow(r)));
   }
 
   /**
@@ -423,6 +620,142 @@ export class AgentController {
   }
 
   /**
+   * Action triggered by "I'm done, continue" from UI.
+   * Forces an immediate recheck of detectBlocker.
+   * If resolved: clears takeover and resumes.
+   * If blocker persists: stays in USER_TAKEOVER and notifies "Still on a sign-in page".
+   */
+  public async checkBlockerResume(): Promise<{ resolved: boolean; message: string }> {
+    if (this.stateMachine.getState() !== 'USER_TAKEOVER') {
+      return { resolved: true, message: 'Agent is not waiting for user.' };
+    }
+    // Explicit UI recheck: triggers an immediate notification to the readiness gate
+    this.browserManager.notifyChange('ui_recheck');
+
+    // Give page up to 2.5 seconds to settle, redirect, or complete form appearance
+    const startTime = Date.now();
+    const MAX_WAIT_MS = 2500;
+    let latestReadiness: FormReadinessState | null = null;
+
+    while (Date.now() - startTime < MAX_WAIT_MS) {
+      try {
+        latestReadiness = await this.browserManager.evaluateReadinessState();
+        const isReady =
+          latestReadiness.blocker.type === 'none' ||
+          (latestReadiness.fillableVisibleCount >= 1 &&
+            latestReadiness.blocker.type !== 'captcha' &&
+            latestReadiness.blocker.type !== 'otp');
+
+        if (isReady) {
+          this.isTakeoverState = false;
+          this.browserManager.unblockReadiness();
+          if (this.stateMachine.getState() === 'USER_TAKEOVER') {
+            this.stateMachine.transition('SCANNING_FORM');
+            this.emitEvent(
+              this.buildEvent('STATE_CHANGED', 'Form detected. Resuming form automation.')
+            );
+          }
+          return { resolved: true, message: 'Form detected. Resuming form automation.' };
+        }
+      } catch {
+        // Navigation in progress; continue waiting
+      }
+
+      await this.browserManager.waitForChange(350).catch(() => {});
+    }
+
+    const check = latestReadiness?.blocker || { type: 'login', reason: 'Sign-in page still active' };
+    const msg =
+      check.type === 'login'
+        ? 'Still on a sign-in page.'
+        : check.type === 'otp'
+        ? 'Still waiting for verification code.'
+        : check.type === 'captcha'
+        ? 'Still waiting for security check.'
+        : 'Still waiting for the form to appear.';
+
+    this.emitEvent(
+      this.buildEvent('STATE_CHANGED', msg, {
+        metadata: { blockerType: check.type, blockerReason: check.reason },
+      })
+    );
+    return { resolved: false, message: msg };
+  }
+
+  /**
+   * Check for human blockers (login, OTP, CAPTCHA, or no-form) before proceeding.
+   * If a blocker is found:
+   * - Brings browser to front
+   * - Emits ONE plain event
+   * - Moves to USER_TAKEOVER state with reason as metadata
+   * - Awaits event-driven readiness gate (cancellable) with 15-minute cap
+   * - Resumes automatically when the blocker is gone and visible fillable fields exist.
+   */
+  public async handleBlockerIfPresent(waitMs: number = 0): Promise<boolean> {
+    if (!this.browserManager) return false;
+    const initialBlocker = await this.browserManager.detectBlocker(waitMs);
+    if (initialBlocker.type === 'none') {
+      return false;
+    }
+
+    // Blocker detected! Bring browser window to front
+    await this.browserManager.bringToFront();
+
+    // Plain wording based on blocker type (no technical words)
+    let plainDescription = '';
+    switch (initialBlocker.type) {
+      case 'login':
+        plainDescription = 'Sign-in required in the AutoFiller browser window. I will continue when the form appears.';
+        break;
+      case 'otp':
+        plainDescription = 'Verification code required in the AutoFiller browser window. I will continue when the form appears.';
+        break;
+      case 'captcha':
+        plainDescription = 'Security check required in the AutoFiller browser window. I will continue when the form appears.';
+        break;
+      case 'no-form':
+        plainDescription = 'Waiting for the form to appear in the AutoFiller browser window.';
+        break;
+      default:
+        plainDescription = 'Action required in the AutoFiller browser window. I will continue when the form appears.';
+    }
+
+    // Move to existing USER_TAKEOVER state with blocker reason metadata
+    this.isTakeoverState = true;
+    this.currentRunTrace.blockedNavigationReason = `Blocker: ${initialBlocker.reason || initialBlocker.type}`;
+    this.stateMachine.transition('USER_TAKEOVER');
+    this.emitEvent(
+      this.buildEvent('STATE_CHANGED', plainDescription, {
+        metadata: {
+          blockerType: initialBlocker.type,
+          blockerReason: initialBlocker.reason,
+          plainDescription,
+        },
+      })
+    );
+
+    // Event-driven readiness gate replacing 1-second polling loop
+    try {
+      await this.browserManager.waitUntilReady(this.abortController?.signal);
+      this.isTakeoverState = false;
+      this.currentRunTrace.blockedNavigationReason = null;
+      if (this.stateMachine.getState() === 'USER_TAKEOVER') {
+        this.stateMachine.transition('SCANNING_FORM');
+        this.emitEvent(
+          this.buildEvent('STATE_CHANGED', 'Form detected. Resuming form automation.')
+        );
+      }
+      return true;
+    } catch (err: any) {
+      if (this.isStoppedState || err?.name === 'OperationCancelledError') {
+        throw new OperationCancelledError();
+      }
+      await this.stop();
+      throw err;
+    }
+  }
+
+  /**
    * Stop the workflow, cancelling in-flight operations, closing the browser, and cleaning up.
    */
   public async stop(): Promise<void> {
@@ -640,32 +973,6 @@ export class AgentController {
   }
 
   /**
-   * Wait for the active form section to advance after clicking a pagination control.
-   *
-   * @param previousVisibleRefs Serialized fingerprint of visible fields before navigation.
-   * @param timeoutMs Maximum milliseconds to wait.
-   * @returns Whether the visible fields changed.
-   */
-  private async waitForSectionTransition(previousVisibleRefs: string, timeoutMs: number = 800): Promise<boolean> {
-    const startTime = Date.now();
-    while (Date.now() - startTime < timeoutMs) {
-      await new Promise((r) => setTimeout(r, 50));
-      if (!this.browserManager) break;
-      const snapshot = await this.browserManager.scanActiveForm().catch(() => null);
-      if (!snapshot) break;
-      const currentVisible = snapshot.fields
-        .filter((f) => f.visible)
-        .map((f) => f.ref)
-        .sort()
-        .join(',');
-      if (currentVisible !== previousVisibleRefs) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
    * Sequentially present human clarification prompts and collect verified answers.
    */
   private async resolveClarifications(
@@ -842,6 +1149,14 @@ export class AgentController {
     this.abortController = new AbortController();
     this.persistenceQueue = Promise.resolve();
 
+    this.currentRunTrace = {
+      timestamp: new Date().toISOString(),
+      targetUrl: options.targetUrl,
+      aiProvider: 'heuristic fallback',
+      blockedNavigationReason: null,
+      scans: [],
+    };
+
     const verifications: VerificationRecord[] = [];
     const failedFields: Array<{ field_ref: string; field_label: string; reason: string }> = [];
     let stepCount = 0;
@@ -973,7 +1288,10 @@ export class AgentController {
           await probeBrowser.launch(true);
           try {
             await probeBrowser.navigateTo(options.targetUrl, this.abortController?.signal);
-            probeSnapshot = await probeBrowser.scanActiveForm();
+            const probeBlocker = await probeBrowser.detectBlocker(1000);
+            if (probeBlocker.type === 'none') {
+              probeSnapshot = await probeBrowser.scanActiveForm();
+            }
           } finally {
             await probeBrowser.close();
           }
@@ -1112,6 +1430,16 @@ export class AgentController {
       await this.browserManager.navigateTo(options.targetUrl, this.abortController.signal);
       await this.checkPauseOrStop();
 
+      // Check for blocker at session start before scanning or mapping
+      const blockerHandled = await this.handleBlockerIfPresent();
+      await this.checkPauseOrStop();
+
+      // (a) At session start: Event-driven readiness gate (if not already completed in handleBlockerIfPresent)
+      if (!blockerHandled) {
+        await this.browserManager.waitUntilReady(this.abortController.signal);
+        await this.checkPauseOrStop();
+      }
+
       // Step 3: Multi-step / section form navigation loop
       const verifiedFieldRefs = new Set<string>();
       const allDiscoveredRequiredRefs = new Set<string>();
@@ -1123,6 +1451,10 @@ export class AgentController {
 
       while (sectionIndex <= MAX_SECTIONS) {
         await this.checkPauseOrStop();
+        if (sectionIndex > 1) {
+          await this.handleBlockerIfPresent(5000);
+          await this.checkPauseOrStop();
+        }
 
         // 3a: Scan active form section
         const formSnapshot = await this.runTool<FormSnapshot>(
@@ -1135,6 +1467,7 @@ export class AgentController {
             `Detected ${snapshot.fields.length} form fields (${snapshot.fields.filter((f) => f.visible).length} visible).`
         );
         lastFormSnapshot = formSnapshot;
+        const scanTrace = this.recordScanTrace(formSnapshot, sectionIndex);
 
         // Treat active DOM as authoritative: visible enabled fields belong to current section
         let activeSectionFields = formSnapshot.fields.filter(
@@ -1156,6 +1489,9 @@ export class AgentController {
           if (sectionIndex === 1) {
             this.stateMachine.transition('MAPPING_FIELDS');
             const mapResult = await this.backendClient.mapForm(this.sessionId, formSnapshot, facts);
+            if (mapResult.provider) {
+              this.currentRunTrace.aiProvider = mapResult.provider;
+            }
             mappings = mapResult.mappings || [];
             sectionClarifications = mapResult.clarifications_required || [];
             this.attachFactValues(mappings, facts);
@@ -1221,6 +1557,9 @@ export class AgentController {
             );
           } else if (unmappedFields.length > 0) {
             const mapResult = await this.backendClient.mapForm(this.sessionId, formSnapshot, facts);
+            if (mapResult.provider) {
+              this.currentRunTrace.aiProvider = mapResult.provider;
+            }
             const newMappings = mapResult.mappings || [];
             this.attachFactValues(newMappings, facts);
             this.resolveOptionMappings(newMappings, activeSectionFields);
@@ -1234,6 +1573,7 @@ export class AgentController {
             }
           }
         }
+        this.updateScanMappings(scanTrace, mappings);
 
         // 3c: Identify all required/unresolved fields for current section
         // Collect ALL missing information needed rather than arbitrarily stopping after two
@@ -1301,6 +1641,7 @@ export class AgentController {
                 candidate.field_ref === field.ref ||
                 (candidate.field_label && field.label && this.labelsMatch(candidate.field_label, field.label))
             );
+            const fieldTrace = scanTrace.fields.find((ft) => ft.ref === field.ref);
             if (
               !mapping ||
               mapping.fact_value === undefined ||
@@ -1341,6 +1682,15 @@ export class AgentController {
                     };
                     mappings.push(mapping);
                   }
+                  if (fieldTrace) {
+                    fieldTrace.mapping = {
+                      factKey: mapping.fact_key || field.ref,
+                      confidence: 1.0,
+                      source: 'clarification',
+                    };
+                    fieldTrace.valueAvailable = true;
+                    fieldTrace.skippedReason = null;
+                  }
                   try {
                     await this.backendClient.answerClarification(this.sessionId, missingClarifyId, answer);
                   } catch (err: any) {
@@ -1350,10 +1700,12 @@ export class AgentController {
                   }
                   this.stateMachine.transition('FILLING_FORM');
                 } else {
+                  if (fieldTrace) fieldTrace.skippedReason = 'user skipped';
                   continue;
                 }
               } else {
                 // Optional field without value; skip
+                if (fieldTrace) fieldTrace.skippedReason = 'no fact';
                 continue;
               }
             }
@@ -1398,6 +1750,10 @@ export class AgentController {
                 if (answer) {
                   mapping.fact_value = answer;
                   mapping.status = 'RESOLVED';
+                  if (fieldTrace) {
+                    fieldTrace.mapping.source = 'clarification';
+                    fieldTrace.valueAvailable = true;
+                  }
                   try {
                     await this.backendClient.answerClarification(this.sessionId, optionClarifyId, answer);
                   } catch (err: any) {
@@ -1407,6 +1763,7 @@ export class AgentController {
                   }
                   this.stateMachine.transition('FILLING_FORM');
                 } else {
+                  if (fieldTrace) fieldTrace.skippedReason = 'user skipped';
                   continue;
                 }
               }
@@ -1416,14 +1773,31 @@ export class AgentController {
             let isVerified = false;
             let attempts = 0;
             const MAX_FILL_ATTEMPTS = 2;
+            const fieldStrategy =
+              field.type === 'select'
+                ? 'select_option'
+                : field.type === 'radio'
+                  ? 'select_radio'
+                  : field.type === 'checkbox'
+                    ? 'set_checkbox'
+                    : 'fill_text';
 
             while (!isVerified && attempts < MAX_FILL_ATTEMPTS) {
               attempts += 1;
               try {
-                await this.fillField(mapping, field);
+                const strat = await this.fillField(mapping, field);
+                if (fieldTrace) {
+                  fieldTrace.fillStrategies.push({ strategy: strat, outcome: 'ok' });
+                }
               } catch (fieldError: any) {
                 if (fieldError?.name === 'OperationCancelledError') {
                   throw fieldError;
+                }
+                if (fieldTrace) {
+                  fieldTrace.fillStrategies.push({
+                    strategy: fieldStrategy,
+                    outcome: fieldError?.name || 'error',
+                  });
                 }
                 this.emitEvent(
                   this.buildEvent(
@@ -1436,7 +1810,12 @@ export class AgentController {
 
               // Read back actual DOM value and independently verify
               this.stateMachine.transition('VERIFYING');
-              const verifyOutcome = await this.runTool<{ verified: boolean; actualValue: string; expectedValue: string }>(
+              const verifyOutcome = await this.runTool<{
+                verified: boolean;
+                actualValue: string;
+                expectedValue: string;
+                classification?: 'match' | 'normalized-match' | 'mismatch' | 'empty' | 'unreadable';
+              }>(
                 'verify_field',
                 { fieldRef: mapping.field_ref, expectedValue: mapping.fact_value },
                 `Verifying '${mapping.field_label}' in browser DOM...`,
@@ -1446,6 +1825,11 @@ export class AgentController {
                     : `Mismatch on '${mapping.field_label}'.`,
                 true
               );
+
+              if (fieldTrace) {
+                fieldTrace.domReadBack =
+                  verifyOutcome.classification || (verifyOutcome.verified ? 'match' : 'mismatch');
+              }
 
               if (verifyOutcome.verified) {
                 isVerified = true;
@@ -1484,6 +1868,10 @@ export class AgentController {
               if (correctedAnswer) {
                 mapping.fact_value = correctedAnswer;
                 mapping.status = 'RESOLVED';
+                if (fieldTrace) {
+                  fieldTrace.mapping.source = 'clarification';
+                  fieldTrace.valueAvailable = true;
+                }
                 try {
                   await this.backendClient.answerClarification(
                     this.sessionId,
@@ -1498,13 +1886,27 @@ export class AgentController {
 
                 this.stateMachine.transition('FILLING_FORM');
                 try {
-                  await this.fillField(mapping, field);
+                  const strat = await this.fillField(mapping, field);
+                  if (fieldTrace) {
+                    fieldTrace.fillStrategies.push({ strategy: strat, outcome: 'ok' });
+                  }
                 } catch (err: any) {
                   if (err?.name === 'OperationCancelledError') throw err;
+                  if (fieldTrace) {
+                    fieldTrace.fillStrategies.push({
+                      strategy: fieldStrategy,
+                      outcome: err?.name || 'error',
+                    });
+                  }
                 }
 
                 this.stateMachine.transition('VERIFYING');
-                const retryVerify = await this.runTool<{ verified: boolean; actualValue: string; expectedValue: string }>(
+                const retryVerify = await this.runTool<{
+                  verified: boolean;
+                  actualValue: string;
+                  expectedValue: string;
+                  classification?: 'match' | 'normalized-match' | 'mismatch' | 'empty' | 'unreadable';
+                }>(
                   'verify_field',
                   { fieldRef: mapping.field_ref, expectedValue: mapping.fact_value },
                   `Verifying corrected '${mapping.field_label}' in browser DOM...`,
@@ -1514,6 +1916,10 @@ export class AgentController {
                       : `Mismatch on '${mapping.field_label}'.`,
                   true
                 );
+                if (fieldTrace) {
+                  fieldTrace.domReadBack =
+                    retryVerify.classification || (retryVerify.verified ? 'match' : 'mismatch');
+                }
                 if (retryVerify.verified) {
                   isVerified = true;
                 }
@@ -1600,10 +2006,12 @@ export class AgentController {
         }
 
         if (unverifiedRequired.length > 0) {
+          const blockedLabels = unverifiedRequired.map((f) => f.label).join(', ');
+          this.currentRunTrace.blockedNavigationReason = `Unverified required field(s): ${blockedLabels}`;
           this.emitEvent(
             this.buildEvent(
               'TOOL_FAILED',
-              `Navigation blocked: ${unverifiedRequired.length} required field(s) (${unverifiedRequired.map((f) => f.label).join(', ')}) remain unverified in the browser DOM.`,
+              `Navigation blocked: ${unverifiedRequired.length} required field(s) (${blockedLabels}) remain unverified in the browser DOM.`,
               {
                 success: false,
                 metadata: {
@@ -1646,9 +2054,21 @@ export class AgentController {
             () => `Advanced section via '${continueControl.label}'.`
           );
 
-          const advanced = await this.waitForSectionTransition(visibleBefore, 1500);
+          // (c) After every click_pagination: Event-driven readiness gate
+          await this.browserManager.waitUntilReady(this.abortController?.signal);
+
+          const postNavSnapshot = await this.browserManager.scanActiveForm().catch(() => null);
+          const currentVisible = postNavSnapshot
+            ? postNavSnapshot.fields
+                .filter((f) => f.visible)
+                .map((f) => f.ref)
+                .sort()
+                .join(',')
+            : '';
+          const advanced = currentVisible !== visibleBefore;
 
           if (!advanced) {
+            this.currentRunTrace.blockedNavigationReason = `Pagination did not advance via '${continueControl.label}'`;
             this.emitEvent(
               this.buildEvent(
                 'TOOL_FAILED',
@@ -1658,6 +2078,10 @@ export class AgentController {
             );
             break;
           }
+
+          // Blocker check after pagination
+          await this.handleBlockerIfPresent();
+          await this.checkPauseOrStop();
 
           sectionIndex += 1;
         } else {
@@ -1757,6 +2181,7 @@ export class AgentController {
         throw error;
       }
     } finally {
+      this.saveAndPrintRunTrace();
       await this.purgeSessionSafely();
       this.isRunning = false;
       this.abortController = null;
@@ -1866,8 +2291,9 @@ export class AgentController {
    *
    * @param mapping Field mapping to apply.
    * @param field Target field snapshot.
+   * @returns The strategy executed.
    */
-  private async fillField(mapping: FieldMapping, field: FormFieldSnapshot): Promise<void> {
+  private async fillField(mapping: FieldMapping, field: FormFieldSnapshot): Promise<string> {
     const label = field.label;
     const value = String(mapping.fact_value ?? '');
 
@@ -1889,7 +2315,7 @@ export class AgentController {
             : `Could not select option for '${label}'.`,
         false
       );
-      return;
+      return 'select_option';
     }
 
     if (field.type === 'radio') {
@@ -1910,7 +2336,7 @@ export class AgentController {
             : `Could not select option for '${label}'.`,
         false
       );
-      return;
+      return 'select_radio';
     }
 
     if (field.type === 'checkbox') {
@@ -1925,7 +2351,7 @@ export class AgentController {
             : `Could not set '${label}' to the desired state.`,
         false
       );
-      return;
+      return 'set_checkbox';
     }
 
     await this.runTool(
@@ -1938,6 +2364,7 @@ export class AgentController {
           : `Field mismatch on '${label}'.`,
       false
     );
+    return 'fill_text';
   }
 
   /**

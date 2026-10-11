@@ -82,3 +82,32 @@ ALWAYS follow this 5-step methodology:
 - Report raw test output.
 - Confirm a finding reproduces before fixing it.
 - During a task run only the tests related to the change; the full suite runs once before commit. Report pass/fail counts, and report how many times the full suite was run.
+
+## 🧠 Mandatory Agent Skills Protocol
+
+**Skills are an essential part of the development workflow, not optional suggestions.** For every implementation, debugging, refactoring, security, testing, or UI task, determine which available skills are relevant before modifying code.
+
+### Required Workflow
+
+1. **Discover:** Inspect the repository's configured agent/skills directories and the IDE's available skill instructions. Identify the skills relevant to the requested task.
+2. **Read:** Open the relevant `SKILL.md` files and follow their instructions, including any required references or supporting documents.
+3. **Select:** Apply the smallest relevant set of skills. Examples include:
+   - Backend/API/database work → backend engineering and architecture skills.
+   - Authentication, authorization, secrets, privacy, or vulnerability fixes → security engineering skills.
+   - Electron, React, TypeScript, and frontend architecture → relevant desktop/frontend engineering skills.
+   - UI design, accessibility, responsiveness, or visual redesign → relevant design and frontend skills.
+   - Testing, CI, debugging, or code review → relevant testing, debugging, or review skills.
+4. **Combine:** Follow compatible skill guidance alongside this repository's architecture, project conventions, and standing safety rules. If instructions conflict, stop and explain the conflict before making a consequential change.
+5. **Verify:** Before reporting completion, check that the applicable skill requirements were followed and that relevant tests passed. Report the skills actually used and any unavailable or conflicting instructions.
+
+### Skill Usage Rules
+
+- Prefer existing, relevant skills over reinventing their procedures.
+- Do not assume a skill exists or claim it was used without inspecting its instructions.
+- Do not read or activate every available skill indiscriminately; select skills according to the task.
+- Do not install new skills, dependencies, or tools without authorization when installation is required.
+- Skills supplement this file; they never override AutoFiller AI's safety, privacy, architecture, or Git standing rules.
+- If no relevant skill is available, proceed using the repository's established conventions and explicitly report that limitation when material.
+- For tasks requiring multiple specialties, use the relevant skills together rather than following only the first matching skill.
+
+**Every task must include a skill-selection step.** The agent must not skip this step merely because the requested change appears small.

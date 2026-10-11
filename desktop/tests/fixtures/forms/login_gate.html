@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Portal Sign In - AutoFiller Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 40px;
+      max-width: 500px;
+      margin: 0 auto;
+      background: #f8fafc;
+      color: #0f172a;
+    }
+    .card {
+      background: #ffffff;
+      padding: 32px;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+      border: 1px solid #e2e8f0;
+    }
+    h2 {
+      margin-top: 0;
+      color: #0f172a;
+    }
+    .field {
+      margin-bottom: 20px;
+    }
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: 600;
+      font-size: 0.875rem;
+    }
+    input {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      box-sizing: border-box;
+      font-size: 0.9375rem;
+    }
+    button {
+      padding: 12px 24px;
+      border-radius: 6px;
+      border: none;
+      background: #16654e;
+      color: #ffffff;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: 0.9375rem;
+    }
+    button:hover {
+      background: #0f4c3a;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div id="login-section">
+      <h2>Sign in to Student Portal</h2>
+      <p style="color: #64748b; font-size: 0.875rem; margin-bottom: 24px;">
+        Please sign in with your credentials to access the admission form.
+      </p>
+      <div class="field">
+        <label for="username">Username or Email</label>
+        <input type="text" id="username" name="username" placeholder="user@example.com" required>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" placeholder="••••••••" required>
+      </div>
+      <button type="button" id="signin-btn">Sign in</button>
+    </div>
+
+    <div id="skeleton-loader" style="display: none;">
+      <div style="background: #e2e8f0; height: 28px; width: 60%; margin-bottom: 16px; border-radius: 4px;"></div>
+      <div style="background: #f1f5f9; height: 16px; width: 80%; margin-bottom: 24px; border-radius: 4px;"></div>
+      <div style="background: #e2e8f0; height: 40px; margin-bottom: 20px; border-radius: 6px;"></div>
+      <div style="background: #e2e8f0; height: 40px; margin-bottom: 20px; border-radius: 6px;"></div>
+      <div style="background: #e2e8f0; height: 40px; margin-bottom: 20px; border-radius: 6px;"></div>
+    </div>
+
+    <form id="real-form" style="display: none;" onsubmit="return false;">
+      <h2>Student Admission Form</h2>
+      <p style="color: #64748b; font-size: 0.875rem; margin-bottom: 24px;">
+        Welcome back. Please verify and complete the required fields.
+      </p>
+      <div class="field">
+        <label for="student_name">Student Full Name</label>
+        <input type="text" id="student_name" name="student_name" required>
+      </div>
+      <div class="field">
+        <label for="dob">Date of Birth</label>
+        <input type="date" id="dob" name="dob" required>
+      </div>
+      <div class="field">
+        <label for="email">Student Email Address</label>
+        <input type="email" id="email" name="email" required>
+      </div>
+      <button type="submit" id="submit-btn">Submit Application</button>
+    </form>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const mode = params.get('mode');
+    const step = params.get('step');
+    const skipLogin = params.get('skip_login') === '1' || params.get('no_login') === '1';
+
+    const loginSection = document.getElementById('login-section');
+    const skeletonLoader = document.getElementById('skeleton-loader');
+    const realForm = document.getElementById('real-form');
+
+    if (skipLogin || step === 'form') {
+      loginSection.style.display = 'none';
+      skeletonLoader.style.display = 'block';
+      setTimeout(function() {
+        skeletonLoader.style.display = 'none';
+        realForm.style.display = 'block';
+      }, 1500);
+    } else {
+      document.getElementById('signin-btn').addEventListener('click', function() {
+        if (mode === 'redirect') {
+          // The sign-in click triggers a location redirect and the real form appears ~1.5 s later
+          const redirectTarget = window.location.pathname + '?mode=redirect&step=form';
+          window.location.href = redirectTarget;
+        } else if (mode === 'late') {
+          // Skeleton loader / late rendered fields
+          loginSection.style.display = 'none';
+          skeletonLoader.style.display = 'block';
+          setTimeout(function() {
+            skeletonLoader.style.display = 'none';
+            realForm.style.display = 'block';
+          }, 1500);
+        } else {
+          // Default test behavior
+          setTimeout(function() {
+            loginSection.style.display = 'none';
+            realForm.style.display = 'block';
+          }, 1500);
+        }
+      });
+    }
+  </script>
+</body>
+</html>

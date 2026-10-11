@@ -160,7 +160,125 @@ async function runScannerTest() {
 
   await customControlsManager.close();
 
-  console.log('✓ FormScanner honeypot protection & submission controls test passed successfully!');
+  // 4. Test detectBlocker unit checks with CAPTCHA, OTP, Login, and No-form snippets
+  console.log('\nRunning detectBlocker unit checks for CAPTCHA, OTP, Login, and No-form...');
+  const blockerManager = new BrowserManager();
+  await blockerManager.launch(true);
+  const blockerPage = blockerManager.page;
+
+  // 4a. CAPTCHA snippets
+  console.log('  Testing CAPTCHA detection...');
+  // reCAPTCHA iframe
+  await blockerPage.setContent('<html><body><iframe src="https://www.google.com/recaptcha/api2/anchor"></iframe></body></html>');
+  let result = await blockerManager.detectBlocker(0);
+  assert.strictEqual(result.type, 'captcha', 'reCAPTCHA iframe must be detected as captcha');
+
+  // hCaptcha element
+  await blockerPage.setContent('<html><body><div class="h-captcha" data-sitekey="xyz"></div><iframe src="https://assets.hcaptcha.com/check"></iframe></body></html>');
+  result = await blockerManager.detectBlocker(0);
+  assert.strictEqual(result.type, 'captcha', 'hCaptcha must be detected as captcha');
+
+  // Cloudflare Turnstile
+  await blockerPage.setContent('<html><body><iframe src="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile"></iframe></body></html>');
+  result = await blockerManager.detectBlocker(0);
+  assert.strictEqual(result.type, 'captcha', 'Cloudflare Turnstile must be detected as captcha');
+
+  // 4b. OTP snippets
+  console.log('  Testing OTP detection...');
+  // input with autocomplete="one-time-code"
+  await blockerPage.setContent('<html><body><input type="text" autocomplete="one-time-code"></body></html>');
+  result = await blockerManager.detectBlocker(0);
+  assert.strictEqual(result.type, 'otp', 'autocomplete="one-time-code" must be detected as otp');
+
+  // input with verification code label
+  await blockerPage.setContent('<html><body><label for="code">Enter Verification Code</label><input type="text" id="code"></body></html>');
+  result = await blockerManager.detectBlocker(0);
+  assert.strictEqual(result.type, 'otp', 'Verification Code label must be detected as otp');
+
+  // input with name="otp"
+  await blockerPage.setContent('<html><body><input type="text" name="otp" placeholder="Code"></body></html>');
+  result = await blockerManager.detectBlocker(0);
+  assert.strictEqual(result.type, 'otp', 'name="otp" input must be detected as otp');
+
+  // 4c. Login detection
+  console.log('  Testing Login detection...');
+  await blockerPage.setContent('<html><body><form><input type="text" name="user"><input type="password" name="pass"></form></body></html>');
+  result = await blockerManager.detectBlocker(0);
+  assert.strictEqual(result.type, 'login', 'Visible password field must be detected as login');
+
+  // 4d. No-form detection
+  console.log('  Testing No-form detection...');
+  await blockerPage.setContent('<html><body><h1>Welcome to Portal</h1><p>No inputs here</p></body></html>');
+  result = await blockerManager.detectBlocker(0);
+  assert.strictEqual(result.type, 'no-form', 'Page with no fillable fields must be detected as no-form');
+
+  // 4e. Normal form detection (type === 'none')
+  console.log('  Testing Normal form detection...');
+  await blockerPage.setContent('<html><body><form><input type="text" name="student_name" placeholder="Full Name"><button type="submit">Submit</button></form></body></html>');
+  result = await blockerManager.detectBlocker(0);
+  assert.strictEqual(result.type, 'none', 'Page with fillable fields and no blockers must be detected as none');
+
+  // 5. Test Safety Guard in fill path: never fill password, OTP, or CAPTCHA fields
+  console.log('\nRunning fill path safety guard tests...');
+  await blockerPage.setContent(`
+    <html>
+      <body>
+        <form>
+          <input type="password" id="secret_pass" name="secret_pass">
+          <input type="text" id="sec_code" name="verification_code" autocomplete="one-time-code">
+          <input type="text" id="plain_name" name="plain_name">
+        </form>
+      </body>
+    </html>
+  `);
+
+  // Scan form: FormScanner must exclude password and one-time-code from FormSnapshot
+  const safetySnapshot = await blockerManager.scanActiveForm();
+  assert.strictEqual(safetySnapshot.fields.length, 1, 'FormScanner must strictly exclude password and OTP fields');
+  assert.strictEqual(safetySnapshot.fields[0].ref, 'field_001');
+
+  // If BrowserManager.fillText is attempted on a protected field directly, it must throw a SafetyGuard error
+  let threwPasswordGuard = false;
+  try {
+    // Manually register field pointing to password
+    blockerManager.scanner.selectorMap?.set('field_pwd', '#secret_pass');
+    blockerManager.scanner.locatorMap?.set('field_pwd', blockerPage.locator('#secret_pass'));
+    await blockerManager.fillText('field_pwd', 'Secret123!');
+  } catch (err) {
+    if (err.message && err.message.includes('[SafetyGuard]')) {
+      threwPasswordGuard = true;
+    }
+  }
+  assert.strictEqual(threwPasswordGuard, true, 'fillText must refuse to fill password field with [SafetyGuard]');
+
+  let threwOtpGuard = false;
+  try {
+    blockerManager.scanner.selectorMap?.set('field_otp', '#sec_code');
+    blockerManager.scanner.locatorMap?.set('field_otp', blockerPage.locator('#sec_code'));
+    await blockerManager.fillText('field_otp', '123456');
+  } catch (err) {
+    if (err.message && err.message.includes('[SafetyGuard]')) {
+      threwOtpGuard = true;
+    }
+  }
+  assert.strictEqual(threwOtpGuard, true, 'fillText must refuse to fill OTP field with [SafetyGuard]');
+
+  // 6. Test unblockReadiness immediate release
+  console.log('\nRunning unblockReadiness test...');
+  const waitPromise = blockerManager.waitUntilReady();
+  blockerManager.unblockReadiness();
+  const waitResult = await waitPromise;
+  assert.ok(waitResult, 'unblockReadiness must release waitUntilReady immediately');
+
+  // 7. Test ARIA role custom controls detection in getFormReadinessState
+  console.log('\nRunning custom ARIA controls readiness check...');
+  await blockerPage.setContent('<html><body><div role="textbox" aria-label="Comment">Hello</div><div role="radio" aria-label="Option 1"></div></body></html>');
+  const customResult = await blockerManager.detectBlocker(0);
+  assert.strictEqual(customResult.type, 'none', 'Page with custom ARIA controls must be recognized as fillable form');
+
+  await blockerManager.close();
+
+  console.log('✓ FormScanner honeypot protection, detectBlocker, and safety guard tests passed successfully!');
 }
 
 runScannerTest().catch((err) => {

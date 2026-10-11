@@ -11,7 +11,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { chromium, Browser, BrowserContext, Page, Locator } from 'playwright';
-import { FormScanner, FormSnapshot } from './FormScanner';
+import { FormScanner, FormSnapshot, BlockerDetectionResult, FormReadinessState } from './FormScanner';
 import { PolicyEngine, SubmissionControl } from '../policy/PolicyEngine';
 
 /** Error raised when the operator cancels an in-flight browser operation. */
@@ -29,6 +29,9 @@ export class BrowserManager {
   private scanner: FormScanner;
   private policyEngine: PolicyEngine;
   private pendingHighlight: Locator | null = null;
+  private changeWaiters: Array<() => void> = [];
+  private unblocked: boolean = false;
+  private navStartTime: number = 0;
 
   constructor() {
     this.scanner = new FormScanner();
@@ -110,7 +113,74 @@ export class BrowserManager {
         viewport: null,
         locale: 'en-IN',
       });
+
+      // Expose binding so in-page MutationObserver and history listeners can notify main process
+      await this.context.exposeBinding('__autofiller_dom_signal', () => {
+        this.notifyChange('dom_mutation');
+      });
+
+      // Install MutationObserver and history/state listeners on every document in every frame
+      await this.context.addInitScript(`
+        (() => {
+          if (window.__autofiller_signal_installed) return;
+          window.__autofiller_signal_installed = true;
+
+          let debounceTimer = null;
+          const notify = () => {
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+              try {
+                if (typeof window.__autofiller_dom_signal === 'function') {
+                  window.__autofiller_dom_signal();
+                }
+              } catch (e) {}
+            }, 300);
+          };
+
+          // 1. MutationObserver
+          try {
+            const observer = new MutationObserver(() => {
+              notify();
+            });
+            const target = document.documentElement || document;
+            observer.observe(target, {
+              childList: true,
+              subtree: true,
+              attributes: true,
+              characterData: true,
+            });
+          } catch (e) {}
+
+          // 2. History listeners: pushState & replaceState
+          try {
+            const origPushState = history.pushState;
+            history.pushState = function() {
+              const res = origPushState.apply(this, arguments);
+              notify();
+              return res;
+            };
+            const origReplaceState = history.replaceState;
+            history.replaceState = function() {
+              const res = origReplaceState.apply(this, arguments);
+              notify();
+              return res;
+            };
+          } catch (e) {}
+
+          // 3. popstate & hashchange
+          try {
+            window.addEventListener('popstate', notify, { passive: true });
+            window.addEventListener('hashchange', notify, { passive: true });
+          } catch (e) {}
+        })();
+      `);
+
+      this.context.on('page', (newPage) => {
+        this.attachPageListeners(newPage);
+      });
+
       this.page = await this.context.newPage();
+      this.attachPageListeners(this.page);
     }
   }
 
@@ -131,6 +201,7 @@ export class BrowserManager {
     if (!this.page) {
       await this.launch();
     }
+    this.navStartTime = Date.now();
 
     // Resilient navigation: If user or preset targeted an unreachable local mock URL,
     // fallback automatically to backend-hosted mock form or bundled fixture.
@@ -245,6 +316,241 @@ export class BrowserManager {
       throw new Error('Browser is not initialized or page is not open.');
     }
     return await this.scanner.scanForm(this.page);
+  }
+
+  /**
+   * Evaluate pure DOM detectBlocker on the active browser page.
+   *
+   * @param waitMs Milliseconds to wait if currently seeing 'no-form' before concluding.
+   * @returns BlockerDetectionResult.
+   */
+  public async detectBlocker(waitMs: number = 0): Promise<BlockerDetectionResult> {
+    if (!this.page) {
+      return { type: 'none', reason: 'Browser page is not open.' };
+    }
+    return await this.scanner.detectBlockerOnPage(this.page, waitMs);
+  }
+
+  /**
+   * Subscribe to Playwright page navigation and lifecycle events to merge into change signal.
+   *
+   * @param page Target Page instance.
+   */
+  private attachPageListeners(page: Page): void {
+    page.on('framenavigated', () => this.notifyChange('framenavigated'));
+    page.on('load', () => this.notifyChange('load'));
+    page.on('domcontentloaded', () => this.notifyChange('domcontentloaded'));
+  }
+
+  /**
+   * Notify any waiting listeners that a page or DOM change event occurred.
+   *
+   * @param reason Diagnostic reason for the change signal.
+   */
+  public notifyChange(reason?: string): void {
+    const waiters = [...this.changeWaiters];
+    this.changeWaiters = [];
+    for (const resolve of waiters) {
+      resolve();
+    }
+  }
+
+  /**
+   * Await the next merged page/DOM change signal or timeout.
+   *
+   * @param timeoutMs Maximum milliseconds to wait before resolving false.
+   * @param signal Optional abort signal to cancel waiting.
+   * @returns True if a change signal arrived, false if timeout elapsed.
+   */
+  public async waitForChange(timeoutMs?: number, signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) {
+      throw new OperationCancelledError();
+    }
+
+    return new Promise<boolean>((resolve, reject) => {
+      let timer: NodeJS.Timeout | null = null;
+      let onAbort: (() => void) | null = null;
+
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        if (signal && onAbort) {
+          signal.removeEventListener('abort', onAbort);
+        }
+        const idx = this.changeWaiters.indexOf(onNotify);
+        if (idx !== -1) {
+          this.changeWaiters.splice(idx, 1);
+        }
+      };
+
+      const onNotify = () => {
+        cleanup();
+        resolve(true);
+      };
+
+      if (signal) {
+        onAbort = () => {
+          cleanup();
+          reject(new OperationCancelledError());
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      if (timeoutMs !== undefined && timeoutMs > 0) {
+        timer = setTimeout(() => {
+          cleanup();
+          resolve(false);
+        }, timeoutMs);
+      }
+
+      this.changeWaiters.push(onNotify);
+    });
+  }
+
+  /**
+   * Run one navigation-safe evaluation returning the page readiness state.
+   *
+   * @returns FormReadinessState with { blocker, fillableVisibleCount, fieldSignature }.
+   * @throws Error if the browser or page is closed.
+   */
+  public async evaluateReadinessState(): Promise<FormReadinessState> {
+    if (!this.page || this.page.isClosed()) {
+      throw new Error('PAGE_NOT_AVAILABLE');
+    }
+    return await this.scanner.getReadinessStateOnPage(this.page);
+  }
+
+  /**
+   * Event-driven readiness gate.
+   *
+   * Loops: awaits next signal (or explicit UI recheck, plus ~5s slow safety check if no signal arrived),
+   * then runs navigation-safe evaluation returning { blocker, fillableVisibleCount, fieldSignature }.
+   *
+   * READY requirement:
+   * - blocker.type === 'none'
+   * - fillableVisibleCount >= 1
+   * - Same fieldSignature on two consecutive checks at least ~250 ms apart (not DOM silence).
+   *
+   * Overall cap 15 minutes with a clean stop; Stop works at any time.
+   *
+   * @param signal AbortSignal to cancel waiting.
+   * @returns FormReadinessState when page is ready.
+   */
+  /**
+   * Signal from the user or agent that manual gate is completed,
+   * unblocking waitUntilReady immediately.
+   */
+  public unblockReadiness(): void {
+    this.unblocked = true;
+    this.notifyChange('unblocked');
+  }
+
+  public async waitUntilReady(signal?: AbortSignal): Promise<FormReadinessState> {
+    const TIMEOUT_MS = 15 * 60 * 1000;
+    const startTime = Date.now();
+
+    let candidateSignature: string | null = null;
+    let candidateTimestamp = 0;
+    let isFirstIteration = true;
+
+    while (Date.now() - startTime < TIMEOUT_MS) {
+      if (signal?.aborted) {
+        throw new OperationCancelledError();
+      }
+
+      if (this.unblocked) {
+        this.unblocked = false;
+        try {
+          return await this.evaluateReadinessState();
+        } catch {
+          return {
+            blocker: { type: 'none', reason: 'Operator confirmed readiness' },
+            fillableVisibleCount: 1,
+            fieldSignature: 'unblocked',
+          };
+        }
+      }
+
+      if (!isFirstIteration) {
+        // If we have a pending candidate signature, wait ~250ms (or next signal) to verify stability.
+        // Otherwise, wait for the next signal or up to 5s safety check if no signal arrived.
+        const waitMs =
+          candidateSignature !== null
+            ? Math.max(50, 260 - (Date.now() - candidateTimestamp))
+            : 5000;
+
+        await this.waitForChange(waitMs, signal);
+      }
+      isFirstIteration = false;
+
+      if (signal?.aborted) {
+        throw new OperationCancelledError();
+      }
+
+      if (this.unblocked) {
+        this.unblocked = false;
+        try {
+          return await this.evaluateReadinessState();
+        } catch {
+          return {
+            blocker: { type: 'none', reason: 'Operator confirmed readiness' },
+            fillableVisibleCount: 1,
+            fieldSignature: 'unblocked',
+          };
+        }
+      }
+
+      let state: FormReadinessState;
+      try {
+        state = await this.evaluateReadinessState();
+      } catch (err: any) {
+        // Navigation-safe: If evaluation throws because the context was destroyed
+        // or the page navigated, do not throw: reset candidate and wait for next signal.
+        const msg = err?.message || '';
+        if (
+          msg.includes('Execution context was destroyed') ||
+          msg.includes('navigation') ||
+          msg.includes('navigating') ||
+          msg.includes('Target closed')
+        ) {
+          candidateSignature = null;
+          candidateTimestamp = 0;
+          continue;
+        }
+        throw err;
+      }
+
+      const now = Date.now();
+
+      if (state.blocker.type === 'none' && state.fillableVisibleCount >= 1) {
+        if (candidateSignature === state.fieldSignature) {
+          if (now - candidateTimestamp >= 240) {
+            // READY: no blocker, fillableVisibleCount >= 1, and the same fieldSignature
+            // on two consecutive checks at least ~250 ms apart.
+            return state;
+          }
+          // Same signature, but not yet ~250 ms apart; candidateTimestamp remains from first observation
+        } else {
+          // Different signature or first observation; record candidate
+          candidateSignature = state.fieldSignature;
+          candidateTimestamp = now;
+        }
+      } else {
+        // Blocker present or no fillable fields yet; reset candidate
+        candidateSignature = null;
+        candidateTimestamp = 0;
+      }
+    }
+
+    throw new Error('Timed out waiting for form to become ready (15 minute limit exceeded).');
+  }
+
+  /**
+   * Bring the browser window to the front for user attention.
+   */
+  public async bringToFront(): Promise<void> {
+    if (this.page) {
+      await this.page.bringToFront().catch(() => {});
+    }
   }
 
   /**
@@ -456,6 +762,31 @@ export class BrowserManager {
     }
 
     const inputType = ((await locator.getAttribute('type')) || '').toLowerCase();
+    const autocomplete = ((await locator.getAttribute('autocomplete')) || '').toLowerCase();
+    const inputName = ((await locator.getAttribute('name')) || '').toLowerCase();
+    const inputId = ((await locator.getAttribute('id')) || '').toLowerCase();
+    const resolvedName = (this.scanner.getName(fieldRef) || '').toLowerCase();
+
+    // Safety guard: NEVER fill input[type=password], one-time-code, or CAPTCHA fields
+    const isPassword = inputType === 'password';
+    const isOtp =
+      autocomplete === 'one-time-code' ||
+      /\b(otp|one[\s_-]*time|verification[\s_-]*code|security[\s_-]*code|auth[\s_-]*code)\b/i.test(inputName) ||
+      /\b(otp|one[\s_-]*time|verification[\s_-]*code|security[\s_-]*code|auth[\s_-]*code)\b/i.test(inputId) ||
+      /\b(otp|one[\s_-]*time|verification[\s_-]*code|security[\s_-]*code|auth[\s_-]*code)\b/i.test(resolvedName);
+    const isCaptcha =
+      inputName.includes('recaptcha') ||
+      inputId.includes('recaptcha') ||
+      inputName.includes('turnstile') ||
+      inputId.includes('turnstile') ||
+      inputName.includes('hcaptcha') ||
+      inputId.includes('hcaptcha');
+
+    if (isPassword || isOtp || isCaptcha) {
+      const reason = isPassword ? 'password' : isOtp ? 'OTP' : 'CAPTCHA';
+      throw new Error(`[SafetyGuard] Refusing to fill protected ${reason} field '${fieldRef}'.`);
+    }
+
     let expectedValue = value;
     if (inputType === 'date') {
       // HTML5 date input standard property requires YYYY-MM-DD format internally.
@@ -782,17 +1113,30 @@ export class BrowserManager {
     }
   }
 
+  public getTimeSinceNav(): number {
+    return this.navStartTime ? Date.now() - this.navStartTime : 0;
+  }
+
+  public getFrameCount(): number {
+    return this.page ? this.page.frames().length : 1;
+  }
+
   /**
-   * Read back the current value of a field for verification.
+   * Read back an actual field value from the active DOM and independently verify it.
    *
-   * @param fieldRef Stable field reference.
+   * @param fieldRef Target field identifier.
    * @param expectedValue Value the field is expected to contain.
-   * @returns Whether the read-back value matches the expected value.
+   * @returns Whether the read-back value matches the expected value and classification.
    */
   public async verifyField(
     fieldRef: string,
     expectedValue: string
-  ): Promise<{ verified: boolean; actualValue: string; expectedValue: string }> {
+  ): Promise<{
+    verified: boolean;
+    actualValue: string;
+    expectedValue: string;
+    classification: 'match' | 'normalized-match' | 'mismatch' | 'empty' | 'unreadable';
+  }> {
     const locator = this.scanner.getLocator(fieldRef);
     if (!locator) {
       throw new Error(`Field reference '${fieldRef}' not found.`);
@@ -814,10 +1158,19 @@ export class BrowserManager {
           : Boolean(expectedValue.trim());
 
       const verified = isChecked === expectedBool;
+      let classification: 'match' | 'normalized-match' | 'mismatch' | 'empty' | 'unreadable' = 'mismatch';
+      if (verified) {
+        classification = 'match';
+      } else if (!isChecked && expectedBool) {
+        classification = 'empty';
+      } else {
+        classification = 'mismatch';
+      }
       return {
         verified,
         actualValue: isChecked ? 'checked' : 'unchecked',
         expectedValue,
+        classification,
       };
     }
 
@@ -840,8 +1193,19 @@ export class BrowserManager {
         }
       }
       const normalize = (raw: string) => raw.trim().toLowerCase().replace(/\s+/g, ' ');
+      const isStrict = checkedValue === expectedValue;
       const verified = normalize(checkedValue) === normalize(expectedValue);
-      return { verified, actualValue: checkedValue, expectedValue };
+      let classification: 'match' | 'normalized-match' | 'mismatch' | 'empty' | 'unreadable' = 'mismatch';
+      if (isStrict) {
+        classification = 'match';
+      } else if (verified) {
+        classification = 'normalized-match';
+      } else if (!checkedValue) {
+        classification = 'empty';
+      } else {
+        classification = 'mismatch';
+      }
+      return { verified, actualValue: checkedValue, expectedValue, classification };
     }
 
     // Select element read-back verification: verify against selected option value or visible text
@@ -856,15 +1220,27 @@ export class BrowserManager {
         .catch(() => '');
       const normalize = (raw: string) => raw.trim().toLowerCase().replace(/\s+/g, ' ');
       const normExpected = normalize(expectedValue);
+      const isStrict = selectedVal === expectedValue || selectedLabel === expectedValue;
       const verified =
         normalize(selectedVal) === normExpected ||
         normalize(selectedLabel) === normExpected;
-      return { verified, actualValue: selectedLabel || selectedVal, expectedValue };
+      let classification: 'match' | 'normalized-match' | 'mismatch' | 'empty' | 'unreadable' = 'mismatch';
+      if (isStrict) {
+        classification = 'match';
+      } else if (verified) {
+        classification = 'normalized-match';
+      } else if (!selectedVal && !selectedLabel) {
+        classification = 'empty';
+      } else {
+        classification = 'mismatch';
+      }
+      return { verified, actualValue: selectedLabel || selectedVal, expectedValue, classification };
     }
 
     const actualValue = (await locator.inputValue().catch(() => '')) || '';
     const normalize = (raw: string) => raw.trim().toLowerCase().replace(/\s+/g, ' ');
 
+    const isStrict = actualValue === expectedValue;
     let verified = normalize(actualValue) === normalize(expectedValue);
     if (!verified && (inputType === 'date' || this.isDateField(fieldRef))) {
       const normExpectedIso = this.normalizeDateValue(expectedValue);
@@ -879,7 +1255,18 @@ export class BrowserManager {
         normalize(normActualDd) === normalize(normExpectedDd);
     }
 
-    return { verified, actualValue, expectedValue };
+    let classification: 'match' | 'normalized-match' | 'mismatch' | 'empty' | 'unreadable' = 'mismatch';
+    if (isStrict) {
+      classification = 'match';
+    } else if (verified) {
+      classification = 'normalized-match';
+    } else if (!actualValue || actualValue.trim() === '') {
+      classification = 'empty';
+    } else {
+      classification = 'mismatch';
+    }
+
+    return { verified, actualValue, expectedValue, classification };
   }
 
   /**
@@ -955,7 +1342,6 @@ export class BrowserManager {
 
     // Allow page to settle
     await this.page.waitForLoadState('domcontentloaded', { timeout: 500 }).catch(() => {});
-    await this.page.waitForTimeout(200).catch(() => {});
 
     return { success: true, label };
   }
@@ -1113,6 +1499,7 @@ export class BrowserManager {
    * Close the Playwright browser and clear cached state.
    */
   public async close(): Promise<void> {
+    this.notifyChange('browser_close');
     if (this.browser) {
       await this.browser.close().catch(() => { });
       this.browser = null;

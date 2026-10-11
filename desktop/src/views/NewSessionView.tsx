@@ -14,6 +14,8 @@ import {
   Shield,
   UploadCloud,
   User,
+  UserCheck,
+  Square,
   Layers,
   History,
 } from 'lucide-react';
@@ -93,6 +95,31 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
   const [conflictChoices, setConflictChoices] = useState<Record<string, 'profile' | 'document'>>({});
 
   const [localError, setLocalError] = useState<string | null>(null);
+  const [recheckStatus, setRecheckStatus] = useState<string | null>(null);
+  const [isRechecking, setIsRechecking] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (state !== 'USER_TAKEOVER') {
+      setRecheckStatus(null);
+    }
+  }, [state]);
+
+  const handleContinueRecheck = async () => {
+    setIsRechecking(true);
+    setRecheckStatus(null);
+    try {
+      const res = await bridge.checkBlockerResume();
+      if (!res.resolved) {
+        setRecheckStatus(res.message || 'Still on a sign-in page');
+      } else {
+        setRecheckStatus(null);
+      }
+    } catch {
+      setRecheckStatus('Still on a sign-in page');
+    } finally {
+      setIsRechecking(false);
+    }
+  };
 
   useEffect(() => {
     loadVaultProfiles();
@@ -504,6 +531,113 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
           )}
         </div>
       )}
+
+      {/* Human Takeover / Blocker Inline Banner */}
+      {state === 'USER_TAKEOVER' && (() => {
+        const latestBlockerEvent = [...events].reverse().find((e) => e.metadata?.blockerType);
+        const blockerType = latestBlockerEvent?.metadata?.blockerType as string | undefined;
+
+        let takeoverMessage = "Your turn: sign in in the AutoFiller browser window. I'll continue when the form appears.";
+        if (blockerType === 'otp') {
+          takeoverMessage = "Your turn: enter the verification code in the AutoFiller browser window. I'll continue when the form appears.";
+        } else if (blockerType === 'captcha') {
+          takeoverMessage = "Your turn: complete the security check in the AutoFiller browser window. I'll continue when the form appears.";
+        } else if (blockerType === 'no-form') {
+          takeoverMessage = "Waiting for the form to appear in the AutoFiller browser window. I'll continue when the form appears.";
+        }
+
+        return (
+          <div
+            data-testid="user-takeover-banner"
+            style={{
+              padding: '20px 24px',
+              borderRadius: 'var(--radius-lg)',
+              background: '#FFFBEB',
+              border: '2px solid #FCD34D',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+              boxShadow: '0 4px 16px rgba(245, 158, 11, 0.08)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+              <div
+                style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '50%',
+                  background: '#FEF3C7',
+                  color: '#D97706',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <UserCheck size={22} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <h3 style={{ fontSize: '1rem', fontWeight: 800, color: '#92400E', margin: 0 }}>
+                  {takeoverMessage}
+                </h3>
+                {recheckStatus && (
+                  <p style={{ fontSize: '0.8125rem', color: '#B45309', fontWeight: 600, marginTop: '4px', marginBottom: 0 }}>
+                    {recheckStatus}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', paddingTop: '2px' }}>
+              <button
+                onClick={handleContinueRecheck}
+                disabled={isRechecking}
+                data-testid="blocker-continue-button"
+                style={{
+                  padding: '9px 18px',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'none',
+                  background: '#D97706',
+                  color: '#FFFFFF',
+                  fontWeight: 700,
+                  fontSize: '0.8125rem',
+                  cursor: isRechecking ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  boxShadow: '0 2px 6px rgba(217, 119, 6, 0.25)',
+                }}
+              >
+                <RotateCw size={14} className={isRechecking ? 'animate-spin' : ''} />
+                <span>I'm done, continue</span>
+              </button>
+
+              {onStopSession && (
+                <button
+                  onClick={onStopSession}
+                  data-testid="blocker-stop-button"
+                  style={{
+                    padding: '9px 16px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid #F87171',
+                    background: '#FEF2F2',
+                    color: '#DC2626',
+                    fontWeight: 700,
+                    fontSize: '0.8125rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <Square size={13} fill="currentColor" />
+                  <span>Stop</span>
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Launcher Configuration Card */}
       <div

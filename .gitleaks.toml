@@ -1,0 +1,7 @@
+[allowlist]
+description = "Repository allowlist for schema keys, test strings, and documentation fixtures"
+paths = [
+  '''^\.agents/''',
+  '''^desktop/tests/''',
+  '''^desktop/electron/shared/profileSchema\.ts''',
+]

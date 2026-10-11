@@ -269,6 +269,9 @@ class SessionController:
                     clarification.model_dump() for clarification in clarifications
                 ],
                 "unmapped_fields": unmapped,
+                "provider": getattr(
+                    self.gemini_service, "last_provider_used", "gemini-3.5-flash-lite"
+                ),
             }
         except HTTPException:
             raise

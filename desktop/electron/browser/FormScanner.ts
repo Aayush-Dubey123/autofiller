@@ -22,12 +22,323 @@ export interface FormFieldSnapshot {
   disabled: boolean;
   visible: boolean;
   isHoneypot?: boolean;
+  labelSource?: string;
+  enabledState?: 'enabled' | 'readonly' | 'disabled';
+  location?: string;
 }
 
 export interface FormSnapshot {
   url: string;
   title: string;
   fields: FormFieldSnapshot[];
+}
+
+export type BlockerType = 'login' | 'otp' | 'captcha' | 'no-form' | 'none';
+
+export interface BlockerDetectionResult {
+  type: BlockerType;
+  reason: string;
+}
+
+/**
+ * Pure DOM function to detect human blockers on the active page.
+ * Contains no Playwright calls, making it completely portable for evaluation inside the browser DOM.
+ *
+ * @param doc Document object (defaults to window.document in browser context).
+ * @param win Window object (defaults to global window in browser context).
+ * @returns BlockerDetectionResult with blocker type and reason.
+ */
+/** Result returned by the navigation-safe readiness gate evaluation. */
+export interface FormReadinessState {
+  blocker: BlockerDetectionResult;
+  fillableVisibleCount: number;
+  fieldSignature: string;
+}
+
+/**
+ * Pure DOM function evaluating page readiness:
+ * - blocker: login, otp, captcha, no-form, or none
+ * - fillableVisibleCount: number of visible fillable fields
+ * - fieldSignature: deterministic hash of visible fillable field metadata (refs/labels only, strictly NO values)
+ *
+ * Self-contained for direct evaluation in Playwright browser context without external references.
+ */
+export function getFormReadinessState(
+  doc?: Document,
+  win?: any
+): FormReadinessState {
+  const d = doc || (typeof document !== 'undefined' ? document : (undefined as any));
+  const w = win || (typeof window !== 'undefined' ? window : undefined);
+  if (!d) {
+    return {
+      blocker: { type: 'none', reason: 'No document available' },
+      fillableVisibleCount: 0,
+      fieldSignature: '',
+    };
+  }
+
+  const isVisible = (el: Element): boolean => {
+    if (!el) return false;
+    const htmlEl = el as HTMLElement;
+    if (htmlEl.hidden || htmlEl.getAttribute('aria-hidden') === 'true') return false;
+    if (w && typeof w.getComputedStyle === 'function') {
+      try {
+        const style = w.getComputedStyle(htmlEl);
+        if (
+          style.display === 'none' ||
+          style.visibility === 'hidden' ||
+          style.visibility === 'collapse'
+        ) {
+          return false;
+        }
+        if (parseFloat(style.opacity || '1') === 0) return false;
+        if (style.position !== 'fixed' && htmlEl.offsetParent === null) {
+          return false;
+        }
+        if (typeof htmlEl.getBoundingClientRect === 'function') {
+          const rect = htmlEl.getBoundingClientRect();
+          if (rect.width === 0 && rect.height === 0) {
+            return false;
+          }
+        }
+      } catch {}
+    }
+    let parent = htmlEl.parentElement;
+    while (parent && parent !== d.body && parent !== d.documentElement) {
+      if (parent.hidden || parent.getAttribute('aria-hidden') === 'true') return false;
+      if (w && typeof w.getComputedStyle === 'function') {
+        try {
+          const ps = w.getComputedStyle(parent);
+          if (
+            ps.display === 'none' ||
+            ps.visibility === 'hidden' ||
+            ps.visibility === 'collapse'
+          ) {
+            return false;
+          }
+          if (parseFloat(ps.opacity || '1') === 0) return false;
+        } catch {}
+      }
+      parent = parent.parentElement;
+    }
+    return true;
+  };
+
+  // 1. CAPTCHA detection: visible iframe or element for reCAPTCHA, hCaptcha, or Cloudflare Turnstile
+  const captchaSelectors = [
+    'iframe[src*="recaptcha"]',
+    'iframe[src*="google.com/recaptcha"]',
+    '.g-recaptcha',
+    '[data-sitekey]',
+    'iframe[title*="recaptcha" i]',
+    'iframe[src*="hcaptcha"]',
+    '.h-captcha',
+    '[data-hcaptcha-sitekey]',
+    'iframe[title*="hcaptcha" i]',
+    'iframe[src*="turnstile"]',
+    'iframe[src*="challenges.cloudflare.com"]',
+    '.cf-turnstile',
+    '[data-turnstile-sitekey]',
+    '#turnstile-wrapper',
+  ];
+  for (let cIdx = 0; cIdx < captchaSelectors.length; cIdx++) {
+    try {
+      const elems = d.querySelectorAll(captchaSelectors[cIdx]);
+      for (let i = 0; i < elems.length; i++) {
+        if (isVisible(elems[i])) {
+          return {
+            blocker: { type: 'captcha', reason: 'Security check or CAPTCHA detected on page' },
+            fillableVisibleCount: 0,
+            fieldSignature: '',
+          };
+        }
+      }
+    } catch {}
+  }
+
+  // 2. OTP detection: visible input with autocomplete="one-time-code" or label/name matching OTP
+  const otpPattern = /\b(otp|one[\s_-]*time|verification[\s_-]*code|security[\s_-]*code|auth[\s_-]*code|2fa|mfa|passcode)\b/i;
+  const inputs = d.querySelectorAll('input:not([type="hidden"])');
+  for (let i = 0; i < inputs.length; i++) {
+    const inp = inputs[i] as HTMLInputElement;
+    if (!isVisible(inp)) continue;
+    if (inp.getAttribute('autocomplete') === 'one-time-code') {
+      return {
+        blocker: { type: 'otp', reason: 'One-time verification code input detected' },
+        fillableVisibleCount: 0,
+        fieldSignature: '',
+      };
+    }
+    const name = inp.getAttribute('name') || '';
+    const id = inp.id || '';
+    const placeholder = inp.getAttribute('placeholder') || '';
+    const ariaLabel = inp.getAttribute('aria-label') || '';
+    let labelText = '';
+    if (id) {
+      try {
+        const escapeFn = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape : (s: string) => s;
+        const lbl = d.querySelector(`label[for="${escapeFn(id)}"]`);
+        if (lbl) labelText = lbl.textContent || '';
+      } catch {}
+    }
+    if (!labelText && inp.closest) {
+      const lbl = inp.closest('label');
+      if (lbl) labelText = lbl.textContent || '';
+    }
+    if (
+      otpPattern.test(name) ||
+      otpPattern.test(id) ||
+      otpPattern.test(placeholder) ||
+      otpPattern.test(ariaLabel) ||
+      otpPattern.test(labelText)
+    ) {
+      return {
+        blocker: { type: 'otp', reason: 'One-time verification code input detected' },
+        fillableVisibleCount: 0,
+        fieldSignature: '',
+      };
+    }
+  }
+
+  // 3. Password visibility check
+  const pwInputs = d.querySelectorAll('input[type="password"]');
+  let hasVisiblePassword = false;
+  for (let i = 0; i < pwInputs.length; i++) {
+    if (isVisible(pwInputs[i])) {
+      hasVisiblePassword = true;
+      break;
+    }
+  }
+
+  // 4. Gather visible fillable fields (including modern custom controls: radio, checkbox, textbox)
+  const fillableCandidates = d.querySelectorAll(
+    'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]):not([type="password"]), select, textarea, [role="textbox"], [role="radio"], [role="checkbox"], [contenteditable="true"]'
+  );
+
+  const tokens: string[] = [];
+  for (let i = 0; i < fillableCandidates.length; i++) {
+    const el = fillableCandidates[i] as HTMLElement;
+    if (!isVisible(el)) continue;
+    if (el.getAttribute('autocomplete') === 'one-time-code') continue;
+
+    const tag = el.tagName.toLowerCase();
+    const roleAttr = el.getAttribute('role')?.toLowerCase();
+    const inputType = tag === 'input' ? ((el as HTMLInputElement).type || 'text').toLowerCase() : (roleAttr || tag);
+    const name = el.getAttribute('name') || '';
+    const id = el.id || '';
+
+    let labelText = '';
+    if (id) {
+      try {
+        const escapeFn = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape : (s: string) => s;
+        const lbl = d.querySelector(`label[for="${escapeFn(id)}"]`);
+        if (lbl) labelText = lbl.textContent || '';
+      } catch {}
+    }
+    if (!labelText && el.closest) {
+      const lbl = el.closest('label');
+      if (lbl) labelText = lbl.textContent || '';
+    }
+    if (!labelText) {
+      const ariaLabelledBy = el.getAttribute('aria-labelledby');
+      if (ariaLabelledBy) {
+        const idList = ariaLabelledBy.trim().split(/\s+/);
+        labelText = idList
+          .map((targetId) => d.getElementById(targetId)?.textContent?.trim() || '')
+          .filter(Boolean)
+          .join(' ');
+      }
+    }
+    if (!labelText) {
+      labelText = el.getAttribute('aria-label') || el.getAttribute('placeholder') || '';
+    }
+
+    const cleanLabel = labelText.trim().replace(/\s+/g, ' ');
+    // Strictly metadata only: tag, inputType, name, id, label (strictly NO values)
+    tokens.push(`${tag}:${inputType}:${name}:${id}:${cleanLabel}`);
+  }
+
+  // 5. Evaluate Login blocker:
+  // If a password field is visible on screen:
+  // - If <= 1 other fillable field exists (standard username + password gate): classify as login blocker.
+  // - If 2 or more fillable fields exist (e.g. registration form): do not block, user is on a fillable form.
+  if (hasVisiblePassword && tokens.length <= 1) {
+    return {
+      blocker: { type: 'login', reason: 'Visible password field detected' },
+      fillableVisibleCount: 0,
+      fieldSignature: '',
+    };
+  }
+
+  // If no fillable fields exist yet, evaluate sign-in host and pathname segments
+  if (tokens.length === 0) {
+    const host = (w?.location?.hostname || (d as any)?.location?.hostname || '').toLowerCase();
+    const knownLoginHosts = [
+      'accounts.google.com',
+      'login.microsoftonline.com',
+      'login.live.com',
+      'appleid.apple.com',
+      'auth0.com',
+      'okta.com',
+    ];
+    if (
+      knownLoginHosts.some((h) => host === h || host.endsWith('.' + h)) ||
+      /^(login|auth|signin|sso|id)\./i.test(host)
+    ) {
+      return {
+        blocker: { type: 'login', reason: `Known sign-in service host (${host})` },
+        fillableVisibleCount: 0,
+        fieldSignature: '',
+      };
+    }
+
+    const path = (w?.location?.pathname || (d as any)?.location?.pathname || '').toLowerCase();
+    if (/(?:^|\/)(login|signin|sign-in|sso|authenticate)(?:\/|$|\.|\?)/i.test(path)) {
+      return {
+        blocker: { type: 'login', reason: `Sign-in URL path segment (${path})` },
+        fillableVisibleCount: 0,
+        fieldSignature: '',
+      };
+    }
+
+    return {
+      blocker: { type: 'no-form', reason: 'No visible fillable form fields found' },
+      fillableVisibleCount: 0,
+      fieldSignature: '',
+    };
+  }
+
+  tokens.sort();
+
+  // Deterministic 32-bit djb2 hash
+  const rawSignature = tokens.join(';');
+  let hash = 5381;
+  for (let i = 0; i < rawSignature.length; i++) {
+    hash = ((hash << 5) + hash) + rawSignature.charCodeAt(i);
+    hash = hash & hash;
+  }
+  const fieldSignature = (hash >>> 0).toString(16);
+
+  return {
+    blocker: { type: 'none', reason: 'Fillable form detected' },
+    fillableVisibleCount: tokens.length,
+    fieldSignature,
+  };
+}
+
+/**
+ * Pure DOM function to detect human blockers on the active page.
+ * Contains no Playwright calls, making it completely portable for evaluation inside the browser DOM.
+ *
+ * @param doc Document object (defaults to window.document in browser context).
+ * @param win Window object (defaults to global window in browser context).
+ * @returns BlockerDetectionResult with blocker type and reason.
+ */
+export function detectBlocker(
+  doc?: Document,
+  win?: any
+): BlockerDetectionResult {
+  return getFormReadinessState(doc, win).blocker;
 }
 
 /** Raw per-control observation gathered inside the page. */
@@ -46,6 +357,9 @@ interface RawControl {
   visible: boolean;
   isHoneypot?: boolean;
   checked: boolean;
+  labelSource: string;
+  enabledState: 'enabled' | 'readonly' | 'disabled';
+  location: string;
 }
 
 export class FormScanner {
@@ -82,6 +396,9 @@ export class FormScanner {
         visible: boolean;
         isHoneypot: boolean;
         checked: boolean;
+        labelSource: string;
+        enabledState: 'enabled' | 'readonly' | 'disabled';
+        location: string;
       }> = [];
 
       const formControls = Array.from(
@@ -93,6 +410,7 @@ export class FormScanner {
         const style = window.getComputedStyle(htmlEl);
 
         // Skip submit/button/reset/image controls (PolicyEngine guard and cleaner scan).
+        // Also skip password and one-time-code / OTP inputs (never fill sensitive auth fields).
         const tagName = htmlEl.tagName.toLowerCase();
         const typeAttr = (htmlEl.getAttribute('type') || '').toLowerCase().trim();
         if (
@@ -100,12 +418,15 @@ export class FormScanner {
           typeAttr === 'submit' ||
           typeAttr === 'button' ||
           typeAttr === 'reset' ||
-          typeAttr === 'image'
+          typeAttr === 'image' ||
+          typeAttr === 'password' ||
+          htmlEl.getAttribute('autocomplete') === 'one-time-code'
         ) {
           return;
         }
 
         let labelText = '';
+        let labelSource = '';
         let isLabelVisible = false;
         const id = htmlEl.id;
         let labelEl: HTMLElement | null = null;
@@ -113,11 +434,13 @@ export class FormScanner {
           labelEl = document.querySelector(`label[for="${CSS.escape(id)}"]`);
           if (labelEl) {
             labelText = labelEl.textContent?.trim() || '';
+            if (labelText) labelSource = 'label-for';
           }
         }
         const enclosingLabel = htmlEl.closest('label');
         if (!labelText && enclosingLabel) {
           labelText = enclosingLabel.textContent?.trim() || '';
+          if (labelText) labelSource = 'label-for';
         }
         const associatedLabel = labelEl || enclosingLabel;
         if (associatedLabel) {
@@ -137,11 +460,44 @@ export class FormScanner {
         }
 
         if (!labelText) {
-          labelText =
-            htmlEl.getAttribute('aria-label') ||
-            htmlEl.getAttribute('placeholder') ||
-            htmlEl.getAttribute('name') ||
-            `Field ${index + 1}`;
+          const ariaLabelledBy = htmlEl.getAttribute('aria-labelledby');
+          if (ariaLabelledBy) {
+            const idList = ariaLabelledBy.trim().split(/\s+/);
+            labelText = idList
+              .map((targetId) => document.getElementById(targetId)?.textContent?.trim() || '')
+              .filter(Boolean)
+              .join(' ');
+            if (labelText) labelSource = 'aria-labelledby';
+          }
+        }
+
+        if (!labelText) {
+          const itemParent = htmlEl.closest('[role="listitem"]');
+          if (itemParent) {
+            const heading = itemParent.querySelector('[role="heading"]');
+            if (heading) {
+              labelText = heading.textContent?.trim() || '';
+              if (labelText) labelSource = 'container heading';
+            }
+          }
+        }
+
+        if (!labelText) {
+          const ariaLabel = htmlEl.getAttribute('aria-label');
+          const placeholder = htmlEl.getAttribute('placeholder');
+          if (ariaLabel) {
+            labelText = ariaLabel;
+            labelSource = 'aria-label';
+          } else if (placeholder) {
+            labelText = placeholder;
+            labelSource = 'placeholder';
+          } else if (htmlEl.getAttribute('name')) {
+            labelText = htmlEl.getAttribute('name') || '';
+            labelSource = 'nearby text';
+          } else {
+            labelText = `Field ${index + 1}`;
+            labelSource = 'nearby text';
+          }
         }
 
         // Direct geometry and visibility of the control element itself
@@ -255,6 +611,23 @@ export class FormScanner {
           groupLegend = legend?.textContent?.trim() || '';
         }
 
+        let loc = 'main';
+        try {
+          if (window.self !== window.top) {
+            loc = 'iframe';
+          } else if (htmlEl.getRootNode && htmlEl.getRootNode() instanceof ShadowRoot) {
+            loc = 'shadow';
+          }
+        } catch {
+          loc = 'main';
+        }
+
+        const enabledState: 'enabled' | 'readonly' | 'disabled' = htmlEl.disabled
+          ? 'disabled'
+          : Boolean((htmlEl as any).readOnly || htmlEl.hasAttribute('readonly'))
+            ? 'readonly'
+            : 'enabled';
+
         collected.push({
           selector: uniqueSelector,
           tag: htmlEl.tagName.toLowerCase(),
@@ -273,6 +646,9 @@ export class FormScanner {
           visible: isVisible,
           isHoneypot,
           checked: Boolean((htmlEl as HTMLInputElement).checked),
+          labelSource: labelSource || 'nearby text',
+          enabledState,
+          location: loc,
         });
       });
 
@@ -306,6 +682,14 @@ export class FormScanner {
         // "Does the student require transport?" instead of a bare "Yes".
         const groupLabel = this.resolveRadioGroupLabel(item, groupControls);
 
+        let groupLabelSource = item.labelSource || 'label-for';
+        if (item.groupLegend) {
+          const optionTexts = new Set(groupControls.map((c) => c.label.trim().toLowerCase()));
+          if (optionTexts.has(item.label.trim().toLowerCase())) {
+            groupLabelSource = 'container heading';
+          }
+        }
+
         fields.push({
           ref: fieldRef,
           label: groupLabel,
@@ -318,6 +702,9 @@ export class FormScanner {
           disabled: groupControls.every((candidate) => candidate.disabled),
           visible: groupControls.some((candidate) => candidate.visible),
           isHoneypot: groupControls.some((candidate) => candidate.isHoneypot),
+          labelSource: groupLabelSource,
+          enabledState: groupControls.every((candidate) => candidate.disabled) ? 'disabled' : 'enabled',
+          location: item.location || 'main',
         });
         return;
       }
@@ -346,6 +733,9 @@ export class FormScanner {
         disabled: item.disabled,
         visible: item.visible,
         isHoneypot: item.isHoneypot,
+        labelSource: item.labelSource || 'nearby text',
+        enabledState: item.enabledState || 'enabled',
+        location: item.location || 'main',
       });
     });
 
@@ -426,5 +816,43 @@ export class FormScanner {
    */
   public getName(fieldRef: string): string | undefined {
     return this.nameMap.get(fieldRef);
+  }
+
+  /**
+   * Evaluate pure DOM detectBlocker on the given Playwright page safely.
+   *
+   * @param page Playwright Page instance.
+   * @param _waitMs Optional parameter kept for interface compatibility (no polling).
+   * @returns BlockerDetectionResult.
+   */
+  public async detectBlockerOnPage(
+    page: Page,
+    _waitMs: number = 0
+  ): Promise<BlockerDetectionResult> {
+    try {
+      const state: FormReadinessState = await page.evaluate(getFormReadinessState as any);
+      return state.blocker;
+    } catch (err: any) {
+      const msg = err?.message || '';
+      if (
+        msg.includes('Execution context was destroyed') ||
+        msg.includes('navigation') ||
+        msg.includes('navigating') ||
+        msg.includes('Target closed')
+      ) {
+        return { type: 'no-form', reason: 'Page currently navigating' };
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Run one navigation-safe evaluation returning the page readiness state.
+   *
+   * @param page Playwright Page instance.
+   * @returns FormReadinessState with { blocker, fillableVisibleCount, fieldSignature }.
+   */
+  public async getReadinessStateOnPage(page: Page): Promise<FormReadinessState> {
+    return await page.evaluate(getFormReadinessState as any);
   }
 }

@@ -32,6 +32,9 @@ export interface FormFieldSnapshot {
   disabled: boolean;
   visible: boolean;
   isHoneypot?: boolean;
+  labelSource?: string;
+  enabledState?: 'enabled' | 'readonly' | 'disabled';
+  location?: string;
 }
 
 /** Structured browser observation of the active target form. */
@@ -236,4 +239,48 @@ export interface FormMapResult {
   mappings: FieldMapping[];
   clarifications_required: ClarificationRequest[];
   unmapped_fields: string[];
+  provider?: string;
+}
+
+/** Zero-value trace record for a single form field in a scan. */
+export interface FieldTraceRecord {
+  ref: string;
+  scannedLabel: string;
+  labelSource: string;
+  controlType: string;
+  required: boolean;
+  visible: boolean;
+  enabledState: 'enabled' | 'readonly' | 'disabled';
+  location: string;
+  mapping: {
+    factKey: string | 'none';
+    confidence: number;
+    source: 'heuristic' | string | 'clarification' | 'none';
+  };
+  valueAvailable: boolean;
+  fillStrategies: Array<{
+    strategy: string;
+    outcome: 'ok' | string;
+  }>;
+  domReadBack: 'match' | 'normalized-match' | 'mismatch' | 'empty' | 'unreadable' | 'none';
+  skippedReason: 'hidden' | 'disabled' | 'readonly' | 'blocker' | 'no fact' | 'user skipped' | null;
+}
+
+/** Zero-value trace record for a single form observation/scan. */
+export interface ScanTraceRecord {
+  scanIndex: number;
+  hostAndPath: string;
+  frameCount: number;
+  fieldCount: number;
+  timeSinceNavMs: number;
+  fields: FieldTraceRecord[];
+}
+
+/** Complete zero-value trace for an execution run. */
+export interface RunTrace {
+  timestamp: string;
+  targetUrl: string;
+  aiProvider: string;
+  blockedNavigationReason: string | null;
+  scans: ScanTraceRecord[];
 }

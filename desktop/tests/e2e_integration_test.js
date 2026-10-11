@@ -14,6 +14,7 @@
  * 5. The workflow terminates at REVIEW_READY without ever clicking submit.
  */
 
+process.env.NODE_ENV = 'test';
 const assert = require('assert');
 const path = require('path');
 
@@ -1623,7 +1624,9 @@ async function runE2E() {
 
       await controller.cleanup();
     } finally {
-      if (fs.existsSync(scratchDir)) fs.rmSync(scratchDir, { recursive: true, force: true });
+      if (fs.existsSync(scratchDir)) {
+        try { fs.rmSync(scratchDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); } catch {}
+      }
     }
   });
 
@@ -1652,7 +1655,9 @@ async function runE2E() {
         'Interrupted in-flight session must be saved as INTERRUPTED, not IDLE'
       );
     } finally {
-      if (fs.existsSync(scratchDir)) fs.rmSync(scratchDir, { recursive: true, force: true });
+      if (fs.existsSync(scratchDir)) {
+        try { fs.rmSync(scratchDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }); } catch {}
+      }
     }
   });
 

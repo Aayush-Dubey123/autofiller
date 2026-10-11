@@ -34,6 +34,7 @@ DEFAULT_GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash-lite", "gemini-flash-latest"
 
 # OpenRouter fallback configuration read from backend/.env.
 OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
+OPENROUTER_AUTHORIZED_ENV = "OPENROUTER_AUTHORIZED"
 OPENROUTER_MODEL_ENV = "OPENROUTER_MODEL"
 OPENROUTER_FALLBACK_MODELS_ENV = "OPENROUTER_FALLBACK_MODELS"
 DEFAULT_OPENROUTER_MODEL = "openrouter/free"
@@ -172,9 +173,23 @@ def is_openrouter_configured() -> bool:
     return bool(get_openrouter_api_key())
 
 
+def is_openrouter_authorized() -> bool:
+    """
+    Report whether OpenRouter fallback is explicitly authorized.
+
+    Safety requirement: OpenRouter fallback is DISABLED by default.
+    Explicit authorization is required (OPENROUTER_AUTHORIZED=true/1/yes)
+    before transmitting profile facts or descriptors to that provider.
+    """
+    if not is_openrouter_configured():
+        return False
+    val = os.getenv(OPENROUTER_AUTHORIZED_ENV, "").strip().lower()
+    return val in ("true", "1", "yes")
+
+
 def is_ai_provider_configured() -> bool:
-    """Report whether any AI provider (Gemini or OpenRouter) is configured."""
-    return is_gemini_configured() or is_openrouter_configured()
+    """Report whether any AI provider (Gemini or authorized OpenRouter) is configured."""
+    return is_gemini_configured() or (is_openrouter_configured() and is_openrouter_authorized())
 
 
 def get_gemini_models() -> List[str]:
@@ -679,26 +694,35 @@ Respond ONLY with valid JSON."""
                 log_context="image fact extraction",
             )
 
-        if not response_text and is_openrouter_configured():
-            logging.info(
-                f"Gemini Vision unavailable or failed ({last_error}). Engaging OpenRouter fallback provider for image {document_name}."
-            )
-            import base64
-            b64_img = base64.b64encode(image_bytes).decode("utf-8")
-            try:
-                or_messages = [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64_img}"}},
-                        ],
-                    }
-                ]
-                response_text = await self._generate_openrouter_async(messages=or_messages)
-            except Exception as or_err:
-                logging.warning(f"OpenRouter vision fallback failed: {or_err}")
-                last_error = f"Gemini ({last_error}), OpenRouter ({or_err})"
+        if not response_text:
+            if is_openrouter_configured() and is_openrouter_authorized():
+                logging.info(
+                    f"Gemini Vision unavailable or failed ({last_error}). "
+                    f"Third-Party Provider Disclosure: Engaging OpenRouter fallback provider for image {document_name} "
+                    "under explicit user authorization."
+                )
+                import base64
+                b64_img = base64.b64encode(image_bytes).decode("utf-8")
+                try:
+                    or_messages = [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64_img}"}},
+                            ],
+                        }
+                    ]
+                    response_text = await self._generate_openrouter_async(messages=or_messages)
+                except Exception as or_err:
+                    logging.warning(f"OpenRouter vision fallback failed: {or_err}")
+                    last_error = f"Gemini ({last_error}), OpenRouter ({or_err})"
+            elif is_openrouter_configured():
+                logging.info(
+                    f"Gemini Vision unavailable or failed ({last_error}). "
+                    "OpenRouter fallback is configured but disabled by default (unauthorized). "
+                    "Refusing to transmit image data to third-party provider."
+                )
 
         if not response_text:
             raise RuntimeError(
@@ -799,17 +823,26 @@ Respond ONLY with valid JSON."""
                 last_error = str(gemini_err)
                 logging.warning(f"Primary Gemini text extraction failed: {gemini_err}")
 
-        if not response_text and is_openrouter_configured():
-            logging.info(
-                f"Gemini text extraction failed or unavailable ({last_error}). Engaging OpenRouter fallback provider for {document_name}."
-            )
-            try:
-                response_text = await self._generate_openrouter_async(
-                    messages=[{"role": "user", "content": prompt}]
+        if not response_text:
+            if is_openrouter_configured() and is_openrouter_authorized():
+                logging.info(
+                    f"Gemini text extraction failed or unavailable ({last_error}). "
+                    f"Third-Party Provider Disclosure: Engaging OpenRouter fallback provider for {document_name} "
+                    "under explicit user authorization."
                 )
-            except Exception as or_err:
-                logging.warning(f"OpenRouter text fallback failed: {or_err}")
-                last_error = f"Gemini ({last_error}), OpenRouter ({or_err})"
+                try:
+                    response_text = await self._generate_openrouter_async(
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                except Exception as or_err:
+                    logging.warning(f"OpenRouter text fallback failed: {or_err}")
+                    last_error = f"Gemini ({last_error}), OpenRouter ({or_err})"
+            elif is_openrouter_configured():
+                logging.info(
+                    f"Gemini text extraction failed or unavailable ({last_error}). "
+                    "OpenRouter fallback is configured but disabled by default (unauthorized). "
+                    "Refusing to transmit document text to third-party provider."
+                )
 
         if not response_text:
             raise RuntimeError(
@@ -850,7 +883,7 @@ Respond ONLY with valid JSON."""
             f"{len(form_snapshot.fields)} fields and {len(facts)} facts (zero-value mode)"
         )
         self._ensure_client()
-        if self.client is None:
+        if self.client is None and not (is_openrouter_configured() and is_openrouter_authorized()):
             raise RuntimeError(
                 "Gemini API client is not configured. A valid Gemini API key is required; "
                 "set GEMINI_API_KEY in backend/.env and restart the backend."
@@ -931,22 +964,39 @@ Return a JSON object with:
 Respond ONLY with valid JSON."""
 
         mapping_timeout = get_ai_mapping_timeout_seconds()
-        response_text, quota_exhausted, last_error = await self._generate_with_failover(
-            contents=prompt,
-            log_context="Gemini field mapping",
-            timeout=mapping_timeout,
-        )
-        if not response_text and is_openrouter_configured():
-            logging.info(
-                f"Gemini field mapping failed or unavailable ({last_error}). Engaging OpenRouter fallback provider."
+        response_text = ""
+        quota_exhausted = False
+        last_error = None
+
+        if self.client is not None:
+            response_text, quota_exhausted, last_error = await self._generate_with_failover(
+                contents=prompt,
+                log_context="Gemini field mapping",
+                timeout=mapping_timeout,
             )
-            try:
-                response_text = await self._generate_openrouter_async(
-                    messages=[{"role": "user", "content": prompt}],
-                    timeout=mapping_timeout,
+        else:
+            last_error = "Gemini client unconfigured"
+        if not response_text:
+            if is_openrouter_configured() and is_openrouter_authorized():
+                logging.info(
+                    f"Gemini field mapping failed or unavailable ({last_error}). "
+                    "Third-Party Provider Disclosure: Engaging OpenRouter fallback provider for field mapping "
+                    "under explicit user authorization. Zero-value contract preserved: only field and fact descriptors transmitted."
                 )
-            except Exception as or_err:
-                logging.warning(f"OpenRouter field mapping fallback failed: {or_err}")
+                try:
+                    response_text = await self._generate_openrouter_async(
+                        messages=[{"role": "user", "content": prompt}],
+                        timeout=mapping_timeout,
+                    )
+                except Exception as or_err:
+                    logging.warning(f"OpenRouter field mapping fallback failed: {or_err}")
+            elif is_openrouter_configured():
+                logging.info(
+                    f"Gemini field mapping failed or unavailable ({last_error}). "
+                    "OpenRouter fallback is configured but disabled by default (unauthorized). "
+                    "Engaging local heuristic field mapping instead."
+                )
+                return self._map_heuristic_fallback(form_snapshot, facts)
 
         if not response_text:
             logging.warning(

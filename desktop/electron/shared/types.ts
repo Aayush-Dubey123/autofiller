@@ -31,6 +31,7 @@ export interface FormFieldSnapshot {
   options?: string[];
   disabled: boolean;
   visible: boolean;
+  isHoneypot?: boolean;
 }
 
 /** Structured browser observation of the active target form. */

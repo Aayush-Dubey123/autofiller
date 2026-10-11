@@ -253,6 +253,13 @@ function runPolicyTests() {
     const arbitraryAttempt = policy.validateToolInvocation('click_pagination', { label: 'Random Action' });
     assert.strictEqual(arbitraryAttempt.allowed, false);
     assert.strictEqual(arbitraryAttempt.code, 'PAGINATION_NOT_PERMITTED');
+
+    // Tool permission tier classification is MUTATING
+    assert.strictEqual(
+      policy.getToolPermission('click_pagination'),
+      'MUTATING',
+      'click_pagination must be classified as MUTATING'
+    );
   });
 
   console.log(`\nAll ${passed} PolicyEngine assertions passed.`);

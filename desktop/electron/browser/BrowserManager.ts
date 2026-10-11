@@ -473,9 +473,10 @@ export class BrowserManager {
       await this.withCancellation(signal, locator.fill(expectedValue));
     } else {
       await this.withCancellation(signal, locator.fill(''));
+      const typingDelay = process.env.NODE_ENV === 'test' ? 0 : 25;
       await this.withCancellation(
         signal,
-        locator.pressSequentially(expectedValue, { delay: 25 })
+        locator.pressSequentially(expectedValue, { delay: typingDelay })
       );
     }
     await this.cancellableDelay(150, signal);
@@ -663,8 +664,33 @@ export class BrowserManager {
 
     await this.highlightField(target);
     await this.withCancellation(signal, target.scrollIntoViewIfNeeded({ timeout: 2500 }).catch(() => {}));
-    await this.withCancellation(signal, target.check({ timeout: 2500 }));
-    const isChecked = await target.isChecked();
+    let checked = false;
+    try {
+      await this.withCancellation(signal, target.check({ timeout: 2500 }));
+      checked = await target.isChecked();
+    } catch {
+      checked = false;
+    }
+
+    if (!checked) {
+      try {
+        await this.withCancellation(signal, target.check({ timeout: 1500, force: true }));
+        checked = await target.isChecked();
+      } catch {
+        // Fallback: check via associated label if direct input interaction timed out
+        // (common in styled accessible radio buttons where <input> is visually hidden by CSS)
+        const id = await target.getAttribute('id').catch(() => null);
+        if (id && this.page) {
+          const forLabel = this.page.locator(`label[for="${CSS.escape(id)}"]`).first();
+          if ((await forLabel.count()) > 0) {
+            await this.withCancellation(signal, forLabel.click({ timeout: 1500 }).catch(() => {}));
+          }
+        }
+        checked = await target.isChecked();
+      }
+    }
+
+    const isChecked = checked;
     const selectedValue = (await target.getAttribute('value')) || '';
     await this.clearHighlight();
 

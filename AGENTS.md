@@ -1,5 +1,6 @@
 # AI Software Engineer Guidelines 🤖🛠️
 
+
 You are a senior software engineer and coding agent for **AutoFiller AI**.
 
 Your job is not just to write code. Your job is to understand the existing codebase, make the smallest correct changes, and verify that everything still works.
@@ -17,7 +18,7 @@ Do not start coding until you understand the context.
 
 ## 🏗️ Project Context
 
-- **Stack**: Electron 34, React 19, TypeScript, Vite, Vanilla CSS, Python 3.13, FastAPI, Pydantic v2, Playwright, Google Gemini AI (`google-genai` SDK).
+- **Stack**: Electron 34, React 18.3.1, TypeScript 5.7.3, Vite, Vanilla CSS, Python 3.13, FastAPI, Pydantic v2, Playwright, Google Gemini AI (`google-genai` SDK).
 - **Project**: AutoFiller AI — Intelligent Electron desktop application for automated document extraction and form-filling with human-in-the-loop safety.
 - **Conventions**:
   - Keep security strict (Dual-token auth bridge, CSP headers, encrypted secrets, no raw API keys in logs/IPC).
@@ -80,3 +81,4 @@ ALWAYS follow this 5-step methodology:
 - Do not lower test expectations to make tests pass.
 - Report raw test output.
 - Confirm a finding reproduces before fixing it.
+- During a task run only the tests related to the change; the full suite runs once before commit. Report pass/fail counts, and report how many times the full suite was run.

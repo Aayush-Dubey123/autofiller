@@ -151,7 +151,7 @@ To enforce the strict human-in-the-loop guarantee, all autonomous form submissio
 
 ```
 +---------------------------------------------------------------------------------------------------+
-|                                      DESKTOP RENDERER (React 19)                                  |
+|                                      DESKTOP RENDERER (React 18.3.1)                              |
 |   NewSessionView  |  DocumentViewer  |  FieldMappingTable  |  AgentTimeline  |  ClarificationModal|
 +---------------------------------------------------------------------------------------------------+
                                            |  contextBridge (preload.ts)

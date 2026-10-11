@@ -97,8 +97,22 @@ def app_with_fake_db():
 
 
 @pytest.mark.asyncio
-async def test_document_service_extracts_facts_from_text():
+async def test_document_service_extracts_facts_from_text(monkeypatch):
     """Verify the document service extracts structured facts from raw text."""
+    fake_facts = [
+        ExtractedFact(key="student_name", label="Student Name", value="Aarav Sharma", confidence=0.95),
+        ExtractedFact(key="gender", label="Gender", value="Male", confidence=0.95),
+        ExtractedFact(key="email", label="Email Address", value="aarav.sharma@example.com", confidence=0.95),
+    ]
+
+    async def fake_extract_facts_from_text(*args, **kwargs):
+        return fake_facts
+
+    monkeypatch.setattr(
+        "core.services.gemini_service.GeminiService.extract_facts_from_text",
+        fake_extract_facts_from_text,
+    )
+
     service = DocumentService()
     sample = """
     STUDENT ADMISSION FORM
@@ -119,8 +133,16 @@ async def test_document_service_extracts_facts_from_text():
 
 
 @pytest.mark.asyncio
-async def test_document_service_rejects_oversized_text():
+async def test_document_service_rejects_oversized_text(monkeypatch):
     """Verify oversized raw text is truncated rather than parsed without bound."""
+    async def fake_extract_facts_from_text(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(
+        "core.services.gemini_service.GeminiService.extract_facts_from_text",
+        fake_extract_facts_from_text,
+    )
+
     service = DocumentService()
     facts = await service.extract_facts(
         raw_text="A" * 500_000 + "\nStudent Name: Test User"
@@ -781,6 +803,7 @@ async def test_openrouter_fallback_when_gemini_fails(monkeypatch):
 
     monkeypatch.setattr(service, "_generate_openrouter_async", fake_openrouter)
     monkeypatch.setattr("core.services.gemini_service.is_openrouter_configured", lambda: True)
+    monkeypatch.setenv("OPENROUTER_AUTHORIZED", "true")
 
     facts = await service.extract_facts_from_text(
         text="Student: Priya Nair",
@@ -1187,6 +1210,7 @@ async def test_fast_ai_failover_gemini_to_openrouter(monkeypatch):
 
     monkeypatch.setattr(service, "_generate_async", fake_gemini_fail)
     monkeypatch.setattr("core.services.gemini_service.is_openrouter_configured", lambda: True)
+    monkeypatch.setenv("OPENROUTER_AUTHORIZED", "true")
 
     async def fake_openrouter(messages, temperature=0.1, timeout=None):
         return json.dumps(
@@ -1452,6 +1476,7 @@ async def test_openrouter_outbound_payload_contains_zero_profile_values(monkeypa
     monkeypatch.setattr(service, "_generate_with_failover", fake_failover_fail)
     monkeypatch.setattr(service, "_generate_openrouter_async", fake_openrouter)
     monkeypatch.setattr("core.services.gemini_service.is_openrouter_configured", lambda: True)
+    monkeypatch.setenv("OPENROUTER_AUTHORIZED", "true")
 
     SECRET_PHONE = "SENSITIVE_SECRET_PHONE_0000000000"
     facts = [
@@ -1470,6 +1495,122 @@ async def test_openrouter_outbound_payload_contains_zero_profile_values(monkeypa
     all_openrouter_text = json.dumps(captured_openrouter_messages)
     assert SECRET_PHONE not in all_openrouter_text, "CRITICAL LEAK: Profile value reached OpenRouter!"
     assert all(m.fact_value is None for m in mappings)
+
+
+@pytest.mark.asyncio
+async def test_openrouter_fallback_disabled_by_default_uses_local_heuristic_mapping(monkeypatch):
+    """
+    Assert OpenRouter fallback is disabled by default.
+
+    When Gemini fails and OpenRouter is NOT authorized, NO requests reach OpenRouter
+    and the service transparently engages local heuristic mapping fallback instead.
+    """
+    from core.services.gemini_service import GeminiService, is_openrouter_authorized
+
+    service = GeminiService()
+    monkeypatch.setattr(service, "client", object())
+
+    # Simulate Gemini failure
+    async def fake_failover_fail(*args, **kwargs):
+        return None, True, "Gemini Unavailable"
+
+    openrouter_called = False
+
+    async def fake_openrouter(*args, **kwargs):
+        nonlocal openrouter_called
+        openrouter_called = True
+        return '{"mappings": []}'
+
+    monkeypatch.setattr(service, "_generate_with_failover", fake_failover_fail)
+    monkeypatch.setattr(service, "_generate_openrouter_async", fake_openrouter)
+    monkeypatch.setattr("core.services.gemini_service.is_openrouter_configured", lambda: True)
+    # Ensure OPENROUTER_AUTHORIZED is unset/false by default
+    monkeypatch.delenv("OPENROUTER_AUTHORIZED", raising=False)
+
+    assert is_openrouter_authorized() is False, "OpenRouter must be unauthorized by default"
+
+    facts = [
+        ExtractedFact(key="student_name", label="Student Full Name", value="Aarav Sharma", confidence=0.95),
+        ExtractedFact(key="email", label="Email Address", value="aarav@example.com", confidence=0.95),
+    ]
+    snapshot = FormSnapshot(
+        url="https://school.edu/admission",
+        title="School Admission",
+        fields=[
+            FormFieldSnapshot(ref="field_001", label="Student Name", type="text", required=True),
+            FormFieldSnapshot(ref="field_002", label="Email", type="email", required=True),
+        ],
+    )
+
+    mappings, clars, unmapped = await service.map_form_fields(form_snapshot=snapshot, facts=facts)
+
+    # OpenRouter must NEVER have been called
+    assert openrouter_called is False, "OpenRouter was engaged despite being unauthorized!"
+
+    # Heuristic mapping fallback must have mapped the fields locally
+    assert len(mappings) >= 2
+    student_map = next((m for m in mappings if m.field_ref == "field_001"), None)
+    assert student_map is not None
+    assert student_map.fact_key == "student_name"
+
+    # Zero-value contract preserved: fact_value is None in API response
+    assert all(m.fact_value is None for m in mappings)
+
+
+@pytest.mark.asyncio
+async def test_openrouter_authorization_and_transparent_disclosure(monkeypatch):
+    """
+    Verify OpenRouter authorization flags and transparent disclosure logging.
+    """
+    import logging as py_logging
+    from core.services import gemini_service
+    from core.services.gemini_service import GeminiService, is_openrouter_authorized
+
+    service = GeminiService()
+    monkeypatch.setattr(service, "client", object())
+
+    # 1. Unset authorization
+    monkeypatch.delenv("OPENROUTER_AUTHORIZED", raising=False)
+    monkeypatch.setattr("core.services.gemini_service.is_openrouter_configured", lambda: True)
+    assert is_openrouter_authorized() is False
+
+    # 2. Set authorization to 'true'
+    monkeypatch.setenv("OPENROUTER_AUTHORIZED", "true")
+    assert is_openrouter_authorized() is True
+
+    # 3. Verify disclosure logging when authorized fallback engages
+    async def fake_failover_fail(*args, **kwargs):
+        return None, True, "503 Gemini Service Unavailable"
+
+    async def fake_openrouter(*args, **kwargs):
+        return '{"mappings": [{"field_ref": "f1", "field_label": "Name", "fact_key": "name", "confidence": 0.9}]}'
+
+    monkeypatch.setattr(service, "_generate_with_failover", fake_failover_fail)
+    monkeypatch.setattr(service, "_generate_openrouter_async", fake_openrouter)
+
+    snapshot = FormSnapshot(
+        url="https://test.edu/form",
+        title="Test",
+        fields=[FormFieldSnapshot(ref="f1", label="Name", type="text")],
+    )
+    facts = [ExtractedFact(key="name", label="Name", value="Test User", confidence=1.0)]
+
+    records = []
+    class RecordHandler(py_logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    handler = RecordHandler()
+    gemini_service.logging.addHandler(handler)
+    try:
+        await service.map_form_fields(form_snapshot=snapshot, facts=facts)
+    finally:
+        gemini_service.logging.removeHandler(handler)
+
+    assert any("Third-Party Provider Disclosure" in r for r in records), (
+        f"Transparent disclosure log message was not emitted when engaging OpenRouter: {records}"
+    )
+
 
 
 

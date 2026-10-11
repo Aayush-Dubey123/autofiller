@@ -46,7 +46,7 @@ export class PolicyEngine {
       ['select_radio', 'MUTATING'],
       ['set_checkbox', 'MUTATING'],
       ['request_clarification', 'READ_ONLY'],
-      ['click_pagination', 'READ_ONLY'],
+      ['click_pagination', 'MUTATING'],
     ]);
 
     this.forbiddenButtonTerms =

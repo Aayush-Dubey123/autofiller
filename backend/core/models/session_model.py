@@ -60,6 +60,7 @@ class FormFieldSnapshot(BaseModel):
     options: Optional[List[str]] = Field(default=None, description="Options for select or radio groups")
     disabled: bool = Field(default=False, description="Whether control is disabled")
     visible: bool = Field(default=True, description="Whether control is visible")
+    is_honeypot: Optional[bool] = Field(default=False, description="Whether control is a honeypot/trap")
 
 
 class FormSnapshot(BaseModel):

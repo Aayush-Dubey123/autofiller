@@ -977,11 +977,13 @@ export class AgentController {
 
         // 3. Mapping Completeness Check:
         // Explicitly determine:
-        // - required form fields (non-disabled)
+        // - required form fields (non-disabled, not honeypots)
         // - mapped fields (usable value)
         // - unmapped required fields
         // - fields with no available fact
-        const requiredFields = probeSnapshot.fields.filter((f) => f.required && !f.disabled);
+        const requiredFields = probeSnapshot.fields.filter(
+          (f) => f.required && !f.disabled && !f.isHoneypot
+        );
         const mappedWithUsableValue = new Set(
           preflightMappings
             .filter(
@@ -1116,7 +1118,7 @@ export class AgentController {
 
         // Treat active DOM as authoritative: visible enabled fields belong to current section
         let activeSectionFields = formSnapshot.fields.filter(
-          (field) => field.visible && !field.disabled
+          (field) => field.visible && !field.disabled && !field.isHoneypot
         );
         let activeRequiredFields = activeSectionFields.filter((field) => field.required);
         for (const rf of activeRequiredFields) {
@@ -1140,7 +1142,9 @@ export class AgentController {
 
             // If mapping hook updated DOM visibility (e.g. unhid wizard sections), refresh active visible fields
             const postMapSnapshot = await this.browserManager.scanActiveForm().catch(() => formSnapshot);
-            activeSectionFields = postMapSnapshot.fields.filter((field) => field.visible && !field.disabled);
+            activeSectionFields = postMapSnapshot.fields.filter(
+              (field) => field.visible && !field.disabled && !field.isHoneypot
+            );
             activeRequiredFields = activeSectionFields.filter((field) => field.required);
             for (const rf of activeRequiredFields) {
               allDiscoveredRequiredRefs.add(rf.ref);

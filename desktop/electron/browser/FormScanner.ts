@@ -21,6 +21,7 @@ export interface FormFieldSnapshot {
   options?: string[];
   disabled: boolean;
   visible: boolean;
+  isHoneypot?: boolean;
 }
 
 export interface FormSnapshot {
@@ -43,6 +44,7 @@ interface RawControl {
   options: string[];
   disabled: boolean;
   visible: boolean;
+  isHoneypot?: boolean;
   checked: boolean;
 }
 
@@ -78,6 +80,7 @@ export class FormScanner {
         groupLegend: string;
         disabled: boolean;
         visible: boolean;
+        isHoneypot: boolean;
         checked: boolean;
       }> = [];
 
@@ -88,8 +91,6 @@ export class FormScanner {
       formControls.forEach((el, index) => {
         const htmlEl = el as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
         const style = window.getComputedStyle(htmlEl);
-        const isVisible =
-          style.display !== 'none' && style.visibility !== 'hidden' && htmlEl.offsetParent !== null;
 
         // Skip submit/button/reset/image controls (PolicyEngine guard and cleaner scan).
         const tagName = htmlEl.tagName.toLowerCase();
@@ -105,16 +106,36 @@ export class FormScanner {
         }
 
         let labelText = '';
+        let isLabelVisible = false;
         const id = htmlEl.id;
+        let labelEl: HTMLElement | null = null;
         if (id) {
-          const labelEl = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+          labelEl = document.querySelector(`label[for="${CSS.escape(id)}"]`);
           if (labelEl) {
             labelText = labelEl.textContent?.trim() || '';
           }
         }
-        if (!labelText && htmlEl.closest('label')) {
-          labelText = htmlEl.closest('label')?.textContent?.trim() || '';
+        const enclosingLabel = htmlEl.closest('label');
+        if (!labelText && enclosingLabel) {
+          labelText = enclosingLabel.textContent?.trim() || '';
         }
+        const associatedLabel = labelEl || enclosingLabel;
+        if (associatedLabel) {
+          const lStyle = window.getComputedStyle(associatedLabel);
+          const lRect = associatedLabel.getBoundingClientRect();
+          isLabelVisible =
+            lStyle.display !== 'none' &&
+            lStyle.visibility !== 'hidden' &&
+            lStyle.visibility !== 'collapse' &&
+            parseFloat(lStyle.opacity || '1') > 0 &&
+            lRect.width > 0 &&
+            lRect.height > 0 &&
+            lRect.right > 0 &&
+            lRect.bottom > 0 &&
+            lRect.left < (window.innerWidth || 1920) + 500 &&
+            lRect.top < (window.innerHeight || 1080) + 500;
+        }
+
         if (!labelText) {
           labelText =
             htmlEl.getAttribute('aria-label') ||
@@ -122,6 +143,89 @@ export class FormScanner {
             htmlEl.getAttribute('name') ||
             `Field ${index + 1}`;
         }
+
+        // Direct geometry and visibility of the control element itself
+        const rect = htmlEl.getBoundingClientRect();
+        const hasZeroDims =
+          (rect.width === 0 && rect.height === 0) ||
+          (rect.width <= 1 &&
+            rect.height <= 1 &&
+            (style.overflow === 'hidden' ||
+              style.clip === 'rect(0px, 0px, 0px, 0px)' ||
+              style.clipPath !== 'none'));
+        const isOffscreen =
+          rect.right <= 0 ||
+          rect.bottom <= 0 ||
+          rect.left <= -500 ||
+          rect.top <= -500 ||
+          rect.left >= 10000 ||
+          rect.top >= 10000;
+        const isTransparent = parseFloat(style.opacity || '1') === 0;
+        const isDisplayNone = style.display === 'none' || htmlEl.offsetParent === null;
+        const isVisibilityHidden =
+          style.visibility === 'hidden' || style.visibility === 'collapse';
+
+        let isAncestorOffscreenOrHidden = false;
+        let parent = htmlEl.parentElement;
+        while (parent && parent !== document.body) {
+          const pStyle = window.getComputedStyle(parent);
+          const pRect = parent.getBoundingClientRect();
+          if (
+            pStyle.display === 'none' ||
+            pStyle.visibility === 'hidden' ||
+            pRect.right <= 0 ||
+            pRect.bottom <= 0 ||
+            pRect.left <= -500 ||
+            pRect.top <= -500
+          ) {
+            isAncestorOffscreenOrHidden = true;
+            break;
+          }
+          parent = parent.parentElement;
+        }
+
+        const isDirectlyVisible =
+          !isDisplayNone &&
+          !isVisibilityHidden &&
+          !isTransparent &&
+          !hasZeroDims &&
+          !isOffscreen &&
+          !isAncestorOffscreenOrHidden;
+
+        // Anti-bot honeypot detection:
+        // Exclude genuinely hidden trap fields while preserving legitimate controls that
+        // may use tabindex=-1, aria-hidden, or off-screen positioning (e.g. styled controls with visible labels).
+        const nameAttr = htmlEl.getAttribute('name') || '';
+        const idAttr = htmlEl.id || '';
+        const tabIndexAttr = htmlEl.getAttribute('tabindex');
+        const isAutocompleteOff = htmlEl.getAttribute('autocomplete') === 'off';
+        const hasAntiBotName =
+          /(?:^|_|-)(?:hp|honeypot|bot_trap|anti_bot|trap)(?:_|-|$)/i.test(nameAttr) ||
+          /(?:^|_|-)(?:hp|honeypot|bot_trap|anti_bot|trap)(?:_|-|$)/i.test(idAttr);
+        const hasLeaveBlankWarning =
+          /(?:leave\s+(?:this\s+)?(?:field\s+)?(?:blank|empty)|do\s+not\s+fill|if\s+you\s+are\s+human)/i.test(
+            labelText
+          );
+
+        let isHoneypot = false;
+        if (hasLeaveBlankWarning) {
+          isHoneypot = true;
+        } else if (!isDirectlyVisible && !isLabelVisible) {
+          if (
+            hasAntiBotName ||
+            (isAutocompleteOff && tabIndexAttr === '-1') ||
+            isOffscreen ||
+            hasZeroDims ||
+            (isTransparent && style.pointerEvents === 'none') ||
+            Boolean(htmlEl.closest('[aria-hidden="true"]'))
+          ) {
+            isHoneypot = true;
+          }
+        } else if (hasAntiBotName && (!isDirectlyVisible || !isLabelVisible)) {
+          isHoneypot = true;
+        }
+
+        const isVisible = !isHoneypot && (isDirectlyVisible || isLabelVisible);
 
         const optionsList: string[] = [];
         if (htmlEl.tagName.toLowerCase() === 'select') {
@@ -167,6 +271,7 @@ export class FormScanner {
           options: optionsList,
           disabled: htmlEl.disabled,
           visible: isVisible,
+          isHoneypot,
           checked: Boolean((htmlEl as HTMLInputElement).checked),
         });
       });
@@ -212,6 +317,7 @@ export class FormScanner {
           ),
           disabled: groupControls.every((candidate) => candidate.disabled),
           visible: groupControls.some((candidate) => candidate.visible),
+          isHoneypot: groupControls.some((candidate) => candidate.isHoneypot),
         });
         return;
       }
@@ -239,6 +345,7 @@ export class FormScanner {
         options: item.options.length > 0 ? item.options : undefined,
         disabled: item.disabled,
         visible: item.visible,
+        isHoneypot: item.isHoneypot,
       });
     });
 

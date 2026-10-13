@@ -15,7 +15,8 @@ export interface FormFieldSnapshot {
   ref: string;
   role?: string;
   label: string;
-  type: 'text' | 'number' | 'email' | 'select' | 'radio' | 'checkbox' | 'date' | 'textarea';
+  type: 'text' | 'number' | 'email' | 'tel' | 'select' | 'combobox' | 'radio' | 'checkbox' | 'date' | 'textarea' | 'password' | 'other';
+  autocomplete?: string;
   required: boolean;
   currentValue?: string;
   options?: string[];
@@ -38,6 +39,8 @@ export type BlockerType = 'login' | 'otp' | 'captcha' | 'no-form' | 'none';
 export interface BlockerDetectionResult {
   type: BlockerType;
   reason: string;
+  matchedRule?: string | null;
+  triggerElementOrHost?: string | null;
 }
 
 /**
@@ -80,7 +83,7 @@ export function getFormReadinessState(
   const isVisible = (el: Element): boolean => {
     if (!el) return false;
     const htmlEl = el as HTMLElement;
-    if (htmlEl.hidden || htmlEl.getAttribute('aria-hidden') === 'true') return false;
+    if (htmlEl.hidden) return false;
     if (w && typeof w.getComputedStyle === 'function') {
       try {
         const style = w.getComputedStyle(htmlEl);
@@ -105,7 +108,7 @@ export function getFormReadinessState(
     }
     let parent = htmlEl.parentElement;
     while (parent && parent !== d.body && parent !== d.documentElement) {
-      if (parent.hidden || parent.getAttribute('aria-hidden') === 'true') return false;
+      if (parent.hidden) return false;
       if (w && typeof w.getComputedStyle === 'function') {
         try {
           const ps = w.getComputedStyle(parent);
@@ -147,7 +150,12 @@ export function getFormReadinessState(
       for (let i = 0; i < elems.length; i++) {
         if (isVisible(elems[i])) {
           return {
-            blocker: { type: 'captcha', reason: 'Security check or CAPTCHA detected on page' },
+            blocker: {
+              type: 'captcha',
+              reason: 'Security check or CAPTCHA detected on page',
+              matchedRule: 'captcha_pattern',
+              triggerElementOrHost: captchaSelectors[cIdx],
+            },
             fillableVisibleCount: 0,
             fieldSignature: '',
           };
@@ -164,7 +172,12 @@ export function getFormReadinessState(
     if (!isVisible(inp)) continue;
     if (inp.getAttribute('autocomplete') === 'one-time-code') {
       return {
-        blocker: { type: 'otp', reason: 'One-time verification code input detected' },
+        blocker: {
+          type: 'otp',
+          reason: 'One-time verification code input detected',
+          matchedRule: 'otp_autocomplete',
+          triggerElementOrHost: 'input[autocomplete="one-time-code"]',
+        },
         fillableVisibleCount: 0,
         fieldSignature: '',
       };
@@ -193,14 +206,45 @@ export function getFormReadinessState(
       otpPattern.test(labelText)
     ) {
       return {
-        blocker: { type: 'otp', reason: 'One-time verification code input detected' },
+        blocker: {
+          type: 'otp',
+          reason: 'One-time verification code input detected',
+          matchedRule: 'otp_pattern',
+          triggerElementOrHost: id ? `#${id}` : (name || 'input[otp]'),
+        },
         fillableVisibleCount: 0,
         fieldSignature: '',
       };
     }
   }
 
-  // 3. Password visibility check
+  // 3. Known authentication host detection (evaluated INDEPENDENTLY of token count and visible password presence)
+  const host = (w?.location?.hostname || (d as any)?.location?.hostname || '').toLowerCase();
+  const knownLoginHosts = [
+    'accounts.google.com',
+    'login.microsoftonline.com',
+    'login.live.com',
+    'appleid.apple.com',
+    'auth0.com',
+    'okta.com',
+  ];
+  if (
+    knownLoginHosts.some((h) => host === h || host.endsWith('.' + h)) ||
+    /^(login|auth|signin|sso|id)\./i.test(host)
+  ) {
+    return {
+      blocker: {
+        type: 'login',
+        reason: `Known sign-in service host (${host})`,
+        matchedRule: 'known_login_host',
+        triggerElementOrHost: host,
+      },
+      fillableVisibleCount: 0,
+      fieldSignature: '',
+    };
+  }
+
+  // 4. Password visibility check
   const pwInputs = d.querySelectorAll('input[type="password"]');
   let hasVisiblePassword = false;
   for (let i = 0; i < pwInputs.length; i++) {
@@ -210,9 +254,9 @@ export function getFormReadinessState(
     }
   }
 
-  // 4. Gather visible fillable fields (including modern custom controls: radio, checkbox, textbox)
+  // 5. Gather visible fillable fields (including modern custom controls: radio, checkbox, combobox, listbox, switch)
   const fillableCandidates = d.querySelectorAll(
-    'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]):not([type="password"]), select, textarea, [role="textbox"], [role="radio"], [role="checkbox"], [contenteditable="true"]'
+    'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]):not([type="password"]), select, textarea, [role="textbox"], [role="radio"], [role="radiogroup"], [role="checkbox"], [role="switch"], [role="listbox"], [role="combobox"], [aria-haspopup="listbox"], [contenteditable="true"]'
   );
 
   const tokens: string[] = [];
@@ -249,6 +293,15 @@ export function getFormReadinessState(
           .join(' ');
       }
     }
+    if (!labelText && el.closest) {
+      const itemParent = el.closest('[role="listitem"], .question-block');
+      if (itemParent) {
+        const heading = itemParent.querySelector('[role="heading"], .q-label');
+        if (heading) {
+          labelText = heading.textContent?.trim() || '';
+        }
+      }
+    }
     if (!labelText) {
       labelText = el.getAttribute('aria-label') || el.getAttribute('placeholder') || '';
     }
@@ -258,51 +311,46 @@ export function getFormReadinessState(
     tokens.push(`${tag}:${inputType}:${name}:${id}:${cleanLabel}`);
   }
 
-  // 5. Evaluate Login blocker:
+  // 6. Evaluate Login blocker:
   // If a password field is visible on screen:
   // - If <= 1 other fillable field exists (standard username + password gate): classify as login blocker.
   // - If 2 or more fillable fields exist (e.g. registration form): do not block, user is on a fillable form.
   if (hasVisiblePassword && tokens.length <= 1) {
     return {
-      blocker: { type: 'login', reason: 'Visible password field detected' },
+      blocker: {
+        type: 'login',
+        reason: 'Visible password field detected',
+        matchedRule: 'visible_password',
+        triggerElementOrHost: 'input[type="password"]',
+      },
       fillableVisibleCount: 0,
       fieldSignature: '',
     };
   }
 
-  // If no fillable fields exist yet, evaluate sign-in host and pathname segments
+  // If no fillable fields exist yet, evaluate sign-in pathname segments or conclude no-form
   if (tokens.length === 0) {
-    const host = (w?.location?.hostname || (d as any)?.location?.hostname || '').toLowerCase();
-    const knownLoginHosts = [
-      'accounts.google.com',
-      'login.microsoftonline.com',
-      'login.live.com',
-      'appleid.apple.com',
-      'auth0.com',
-      'okta.com',
-    ];
-    if (
-      knownLoginHosts.some((h) => host === h || host.endsWith('.' + h)) ||
-      /^(login|auth|signin|sso|id)\./i.test(host)
-    ) {
-      return {
-        blocker: { type: 'login', reason: `Known sign-in service host (${host})` },
-        fillableVisibleCount: 0,
-        fieldSignature: '',
-      };
-    }
-
     const path = (w?.location?.pathname || (d as any)?.location?.pathname || '').toLowerCase();
     if (/(?:^|\/)(login|signin|sign-in|sso|authenticate)(?:\/|$|\.|\?)/i.test(path)) {
       return {
-        blocker: { type: 'login', reason: `Sign-in URL path segment (${path})` },
+        blocker: {
+          type: 'login',
+          reason: `Sign-in URL path segment (${path})`,
+          matchedRule: 'login_path_segment',
+          triggerElementOrHost: path,
+        },
         fillableVisibleCount: 0,
         fieldSignature: '',
       };
     }
 
     return {
-      blocker: { type: 'no-form', reason: 'No visible fillable form fields found' },
+      blocker: {
+        type: 'no-form',
+        reason: 'No visible fillable form fields found',
+        matchedRule: 'zero_fillable_fields',
+        triggerElementOrHost: `${host}${path}`,
+      },
       fillableVisibleCount: 0,
       fieldSignature: '',
     };
@@ -320,7 +368,12 @@ export function getFormReadinessState(
   const fieldSignature = (hash >>> 0).toString(16);
 
   return {
-    blocker: { type: 'none', reason: 'Fillable form detected' },
+    blocker: {
+      type: 'none',
+      reason: 'Fillable form detected',
+      matchedRule: null,
+      triggerElementOrHost: null,
+    },
     fillableVisibleCount: tokens.length,
     fieldSignature,
   };
@@ -345,7 +398,9 @@ export function detectBlocker(
 interface RawControl {
   selector: string;
   tag: string;
+  role?: string;
   inputType: string;
+  autocomplete?: string;
   name: string;
   label: string;
   /** Text of the enclosing fieldset legend, when the control sits in a fieldset. */
@@ -366,6 +421,8 @@ export class FormScanner {
   private locatorMap: Map<string, Locator> = new Map();
   private selectorMap: Map<string, string> = new Map();
   private nameMap: Map<string, string> = new Map();
+  private frameMap: Map<string, any> = new Map();
+  private labelMap: Map<string, string> = new Map();
 
   /**
    * Scan the active page DOM and compile a structured FormSnapshot.
@@ -377,314 +434,468 @@ export class FormScanner {
     this.locatorMap.clear();
     this.selectorMap.clear();
     this.nameMap.clear();
+    this.frameMap.clear();
+    this.labelMap.clear();
 
     const title = await page.title();
     const url = page.url();
 
-    const controls = await page.evaluate(() => {
-      const collected: Array<{
-        selector: string;
-        tag: string;
-        inputType: string;
-        name: string;
-        label: string;
-        required: boolean;
-        currentValue: string;
-        options: string[];
-        groupLegend: string;
-        disabled: boolean;
-        visible: boolean;
-        isHoneypot: boolean;
-        checked: boolean;
-        labelSource: string;
-        enabledState: 'enabled' | 'readonly' | 'disabled';
-        location: string;
-      }> = [];
+    const frames = page.frames();
 
-      const formControls = Array.from(
-        document.querySelectorAll('input:not([type="hidden"]), select, textarea')
-      );
+    // 1. Remove existing data-af-ref attributes from all frames before scanning
+    for (const frame of frames) {
+      try {
+        await frame.evaluate(() => {
+          document.querySelectorAll('[data-af-ref]').forEach((el) => el.removeAttribute('data-af-ref'));
+        });
+      } catch {}
+    }
 
-      formControls.forEach((el, index) => {
-        const htmlEl = el as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement;
-        const style = window.getComputedStyle(htmlEl);
+    // 2. Discover and tag all controls frame-by-frame
+    let globalIndex = 0;
+    const allCollected: Array<{ frame: any; item: any }> = [];
 
-        // Skip submit/button/reset/image controls (PolicyEngine guard and cleaner scan).
-        // Also skip password and one-time-code / OTP inputs (never fill sensitive auth fields).
-        const tagName = htmlEl.tagName.toLowerCase();
-        const typeAttr = (htmlEl.getAttribute('type') || '').toLowerCase().trim();
-        if (
-          tagName === 'button' ||
-          typeAttr === 'submit' ||
-          typeAttr === 'button' ||
-          typeAttr === 'reset' ||
-          typeAttr === 'image' ||
-          typeAttr === 'password' ||
-          htmlEl.getAttribute('autocomplete') === 'one-time-code'
-        ) {
-          return;
-        }
+    for (const frame of frames) {
+      try {
+        const frameResult = await frame.evaluate((startIndex: number) => {
+          const collected: Array<{
+            ref: string;
+            selector: string;
+            tag: string;
+            role?: string;
+            inputType: string;
+            autocomplete?: string;
+            name: string;
+            label: string;
+            required: boolean;
+            currentValue: string;
+            options: string[];
+            groupLegend: string;
+            disabled: boolean;
+            visible: boolean;
+            isHoneypot: boolean;
+            checked: boolean;
+            labelSource: string;
+            enabledState: 'enabled' | 'readonly' | 'disabled';
+            location: string;
+          }> = [];
 
-        let labelText = '';
-        let labelSource = '';
-        let isLabelVisible = false;
-        const id = htmlEl.id;
-        let labelEl: HTMLElement | null = null;
-        if (id) {
-          labelEl = document.querySelector(`label[for="${CSS.escape(id)}"]`);
-          if (labelEl) {
-            labelText = labelEl.textContent?.trim() || '';
-            if (labelText) labelSource = 'label-for';
-          }
-        }
-        const enclosingLabel = htmlEl.closest('label');
-        if (!labelText && enclosingLabel) {
-          labelText = enclosingLabel.textContent?.trim() || '';
-          if (labelText) labelSource = 'label-for';
-        }
-        const associatedLabel = labelEl || enclosingLabel;
-        if (associatedLabel) {
-          const lStyle = window.getComputedStyle(associatedLabel);
-          const lRect = associatedLabel.getBoundingClientRect();
-          isLabelVisible =
-            lStyle.display !== 'none' &&
-            lStyle.visibility !== 'hidden' &&
-            lStyle.visibility !== 'collapse' &&
-            parseFloat(lStyle.opacity || '1') > 0 &&
-            lRect.width > 0 &&
-            lRect.height > 0 &&
-            lRect.right > 0 &&
-            lRect.bottom > 0 &&
-            lRect.left < (window.innerWidth || 1920) + 500 &&
-            lRect.top < (window.innerHeight || 1080) + 500;
-        }
-
-        if (!labelText) {
-          const ariaLabelledBy = htmlEl.getAttribute('aria-labelledby');
-          if (ariaLabelledBy) {
-            const idList = ariaLabelledBy.trim().split(/\s+/);
-            labelText = idList
-              .map((targetId) => document.getElementById(targetId)?.textContent?.trim() || '')
-              .filter(Boolean)
-              .join(' ');
-            if (labelText) labelSource = 'aria-labelledby';
-          }
-        }
-
-        if (!labelText) {
-          const itemParent = htmlEl.closest('[role="listitem"]');
-          if (itemParent) {
-            const heading = itemParent.querySelector('[role="heading"]');
-            if (heading) {
-              labelText = heading.textContent?.trim() || '';
-              if (labelText) labelSource = 'container heading';
-            }
-          }
-        }
-
-        if (!labelText) {
-          const ariaLabel = htmlEl.getAttribute('aria-label');
-          const placeholder = htmlEl.getAttribute('placeholder');
-          if (ariaLabel) {
-            labelText = ariaLabel;
-            labelSource = 'aria-label';
-          } else if (placeholder) {
-            labelText = placeholder;
-            labelSource = 'placeholder';
-          } else if (htmlEl.getAttribute('name')) {
-            labelText = htmlEl.getAttribute('name') || '';
-            labelSource = 'nearby text';
-          } else {
-            labelText = `Field ${index + 1}`;
-            labelSource = 'nearby text';
-          }
-        }
-
-        // Direct geometry and visibility of the control element itself
-        const rect = htmlEl.getBoundingClientRect();
-        const hasZeroDims =
-          (rect.width === 0 && rect.height === 0) ||
-          (rect.width <= 1 &&
-            rect.height <= 1 &&
-            (style.overflow === 'hidden' ||
-              style.clip === 'rect(0px, 0px, 0px, 0px)' ||
-              style.clipPath !== 'none'));
-        const isOffscreen =
-          rect.right <= 0 ||
-          rect.bottom <= 0 ||
-          rect.left <= -500 ||
-          rect.top <= -500 ||
-          rect.left >= 10000 ||
-          rect.top >= 10000;
-        const isTransparent = parseFloat(style.opacity || '1') === 0;
-        const isDisplayNone = style.display === 'none' || htmlEl.offsetParent === null;
-        const isVisibilityHidden =
-          style.visibility === 'hidden' || style.visibility === 'collapse';
-
-        let isAncestorOffscreenOrHidden = false;
-        let parent = htmlEl.parentElement;
-        while (parent && parent !== document.body) {
-          const pStyle = window.getComputedStyle(parent);
-          const pRect = parent.getBoundingClientRect();
-          if (
-            pStyle.display === 'none' ||
-            pStyle.visibility === 'hidden' ||
-            pRect.right <= 0 ||
-            pRect.bottom <= 0 ||
-            pRect.left <= -500 ||
-            pRect.top <= -500
-          ) {
-            isAncestorOffscreenOrHidden = true;
-            break;
-          }
-          parent = parent.parentElement;
-        }
-
-        const isDirectlyVisible =
-          !isDisplayNone &&
-          !isVisibilityHidden &&
-          !isTransparent &&
-          !hasZeroDims &&
-          !isOffscreen &&
-          !isAncestorOffscreenOrHidden;
-
-        // Anti-bot honeypot detection:
-        // Exclude genuinely hidden trap fields while preserving legitimate controls that
-        // may use tabindex=-1, aria-hidden, or off-screen positioning (e.g. styled controls with visible labels).
-        const nameAttr = htmlEl.getAttribute('name') || '';
-        const idAttr = htmlEl.id || '';
-        const tabIndexAttr = htmlEl.getAttribute('tabindex');
-        const isAutocompleteOff = htmlEl.getAttribute('autocomplete') === 'off';
-        const hasAntiBotName =
-          /(?:^|_|-)(?:hp|honeypot|bot_trap|anti_bot|trap)(?:_|-|$)/i.test(nameAttr) ||
-          /(?:^|_|-)(?:hp|honeypot|bot_trap|anti_bot|trap)(?:_|-|$)/i.test(idAttr);
-        const hasLeaveBlankWarning =
-          /(?:leave\s+(?:this\s+)?(?:field\s+)?(?:blank|empty)|do\s+not\s+fill|if\s+you\s+are\s+human)/i.test(
-            labelText
+          const formControls = Array.from(
+            document.querySelectorAll(
+              'input:not([type="hidden"]), select, textarea, [role="radiogroup"], [role="checkbox"], [role="switch"], [role="listbox"], [role="combobox"], [aria-haspopup="listbox"]'
+            )
           );
 
-        let isHoneypot = false;
-        if (hasLeaveBlankWarning) {
-          isHoneypot = true;
-        } else if (!isDirectlyVisible && !isLabelVisible) {
-          if (
-            hasAntiBotName ||
-            (isAutocompleteOff && tabIndexAttr === '-1') ||
-            isOffscreen ||
-            hasZeroDims ||
-            (isTransparent && style.pointerEvents === 'none') ||
-            Boolean(htmlEl.closest('[aria-hidden="true"]'))
-          ) {
-            isHoneypot = true;
-          }
-        } else if (hasAntiBotName && (!isDirectlyVisible || !isLabelVisible)) {
-          isHoneypot = true;
-        }
+          let currentIndex = startIndex;
+          const radioGroupRefs = new Map<string, string>();
 
-        const isVisible = !isHoneypot && (isDirectlyVisible || isLabelVisible);
+          formControls.forEach((el) => {
+            const htmlEl = el as HTMLElement;
+            const style = window.getComputedStyle(htmlEl);
 
-        const optionsList: string[] = [];
-        if (htmlEl.tagName.toLowerCase() === 'select') {
-          const selectEl = htmlEl as HTMLSelectElement;
-          Array.from(selectEl.options).forEach((opt) => {
-            const optVal = opt.textContent?.trim() || opt.value.trim();
-            if (optVal && !optionsList.includes(optVal)) {
-              optionsList.push(optVal);
+            const tagName = htmlEl.tagName.toLowerCase();
+            const roleAttr = (htmlEl.getAttribute('role') || '').toLowerCase().trim();
+            const ariaHasPopup = (htmlEl.getAttribute('aria-haspopup') || '').toLowerCase().trim();
+            const rawTypeAttr = (htmlEl.getAttribute('type') || '').toLowerCase().trim();
+
+            // Skip submit/button/reset/image controls (PolicyEngine guard and cleaner scan).
+            // Also skip password and one-time-code / OTP inputs (never fill sensitive auth fields).
+            if (
+              tagName === 'button' ||
+              rawTypeAttr === 'submit' ||
+              rawTypeAttr === 'button' ||
+              rawTypeAttr === 'reset' ||
+              rawTypeAttr === 'image' ||
+              rawTypeAttr === 'password' ||
+              htmlEl.getAttribute('autocomplete') === 'one-time-code'
+            ) {
+              return;
             }
+
+            // Never touch a control whose role or label indicates a submit action
+            if (
+              roleAttr === 'button' ||
+              htmlEl.getAttribute('aria-roledescription') === 'button'
+            ) {
+              const btnText = (htmlEl.textContent || htmlEl.getAttribute('aria-label') || '').toLowerCase();
+              if (/(submit|apply\s*now|register\s*now|place\s*order|complete\s*order|finish\s*app)/i.test(btnText)) {
+                return;
+              }
+            }
+
+            // Skip child radios inside a [role="radiogroup"] (the radiogroup represents the whole question)
+            if (roleAttr === 'radio' && htmlEl.closest('[role="radiogroup"]')) {
+              return;
+            }
+
+            // Skip popup options container itself if it is a secondary container inside a popup
+            if (
+              roleAttr === 'listbox' &&
+              !htmlEl.hasAttribute('aria-haspopup') &&
+              !htmlEl.hasAttribute('aria-expanded') &&
+              htmlEl.getAttribute('tabindex') !== '0' &&
+              htmlEl.closest('.popup-options, [role="presentation"]')
+            ) {
+              return;
+            }
+
+            let effectiveType = rawTypeAttr;
+            if (roleAttr === 'radiogroup') {
+              effectiveType = 'radio';
+            } else if (roleAttr === 'checkbox' || roleAttr === 'switch') {
+              effectiveType = 'checkbox';
+            } else if (roleAttr === 'combobox') {
+              effectiveType = 'combobox';
+            } else if (roleAttr === 'listbox' || ariaHasPopup === 'listbox') {
+              effectiveType = 'select';
+            } else if (tagName === 'select') {
+              effectiveType = 'select';
+            } else if (tagName === 'textarea') {
+              effectiveType = 'textarea';
+            } else if (!effectiveType) {
+              effectiveType = 'text';
+            }
+
+            // Stable targeting: tag discovered control with unique data-af-ref="field_NNN"
+            let fieldRef: string;
+            const nameAttr = htmlEl.getAttribute('name') || '';
+            if (effectiveType === 'radio' && nameAttr) {
+              if (radioGroupRefs.has(nameAttr)) {
+                fieldRef = radioGroupRefs.get(nameAttr)!;
+              } else {
+                currentIndex += 1;
+                fieldRef = `field_${String(currentIndex).padStart(3, '0')}`;
+                radioGroupRefs.set(nameAttr, fieldRef);
+              }
+            } else {
+              currentIndex += 1;
+              fieldRef = `field_${String(currentIndex).padStart(3, '0')}`;
+            }
+            htmlEl.setAttribute('data-af-ref', fieldRef);
+            const uniqueSelector = `[data-af-ref="${fieldRef}"]`;
+
+            let labelText = '';
+            let labelSource = '';
+            let isLabelVisible = false;
+            const id = htmlEl.id;
+            let labelEl: HTMLElement | null = null;
+            if (id) {
+              labelEl = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+              if (labelEl) {
+                labelText = labelEl.textContent?.trim() || '';
+                if (labelText) labelSource = 'label-for';
+              }
+            }
+            const enclosingLabel = htmlEl.closest('label');
+            if (!labelText && enclosingLabel) {
+              labelText = enclosingLabel.textContent?.trim() || '';
+              if (labelText) labelSource = 'label-for';
+            }
+            const associatedLabel = labelEl || enclosingLabel;
+            if (associatedLabel) {
+              const lStyle = window.getComputedStyle(associatedLabel);
+              const lRect = associatedLabel.getBoundingClientRect();
+              isLabelVisible =
+                lStyle.display !== 'none' &&
+                lStyle.visibility !== 'hidden' &&
+                lStyle.visibility !== 'collapse' &&
+                parseFloat(lStyle.opacity || '1') > 0 &&
+                lRect.width > 0 &&
+                lRect.height > 0 &&
+                lRect.right > 0 &&
+                lRect.bottom > 0 &&
+                lRect.left < (window.innerWidth || 1920) + 500 &&
+                lRect.top < (window.innerHeight || 1080) + 500;
+            }
+
+            if (!labelText) {
+              const ariaLabelledBy = htmlEl.getAttribute('aria-labelledby');
+              if (ariaLabelledBy) {
+                const idList = ariaLabelledBy.trim().split(/\s+/);
+                labelText = idList
+                  .map((targetId) => document.getElementById(targetId)?.textContent?.trim() || '')
+                  .filter(Boolean)
+                  .join(' ');
+                if (labelText) labelSource = 'aria-labelledby';
+              }
+            }
+
+            if (!labelText) {
+              const itemParent = htmlEl.closest('[role="listitem"], .question-block, .geS5n');
+              if (itemParent) {
+                const heading = itemParent.querySelector('[role="heading"], .q-label');
+                if (heading) {
+                  labelText = heading.textContent?.trim() || '';
+                  if (labelText) labelSource = 'container heading';
+                }
+              }
+            }
+
+            if (!labelText) {
+              const ariaLabel = htmlEl.getAttribute('aria-label');
+              const placeholder = htmlEl.getAttribute('placeholder');
+              if (ariaLabel) {
+                labelText = ariaLabel;
+                labelSource = 'aria-label';
+              } else if (placeholder) {
+                labelText = placeholder;
+                labelSource = 'placeholder';
+              } else if (htmlEl.getAttribute('name')) {
+                labelText = htmlEl.getAttribute('name') || '';
+                labelSource = 'nearby text';
+              } else if (roleAttr === 'checkbox' || roleAttr === 'switch') {
+                labelText = htmlEl.textContent?.trim() || '';
+                if (labelText) labelSource = 'visible text';
+              } else {
+                labelText = `Field ${currentIndex}`;
+                labelSource = 'nearby text';
+              }
+            }
+
+            // Direct geometry and visibility of the control element itself
+            const rect = htmlEl.getBoundingClientRect();
+            const hasZeroDims =
+              (rect.width === 0 && rect.height === 0) ||
+              (rect.width <= 1 &&
+                rect.height <= 1 &&
+                (style.overflow === 'hidden' ||
+                  style.clip === 'rect(0px, 0px, 0px, 0px)' ||
+                  style.clipPath !== 'none'));
+            const isOffscreen =
+              rect.right <= 0 ||
+              rect.bottom <= 0 ||
+              rect.left <= -500 ||
+              rect.top <= -500 ||
+              rect.left >= 10000 ||
+              rect.top >= 10000;
+            const isTransparent = parseFloat(style.opacity || '1') === 0;
+            const isDisplayNone = style.display === 'none' || htmlEl.offsetParent === null;
+            const isVisibilityHidden =
+              style.visibility === 'hidden' || style.visibility === 'collapse';
+
+            let isAncestorOffscreenOrHidden = false;
+            let parent = htmlEl.parentElement;
+            while (parent && parent !== document.body) {
+              const pStyle = window.getComputedStyle(parent);
+              const pRect = parent.getBoundingClientRect();
+              if (
+                pStyle.display === 'none' ||
+                pStyle.visibility === 'hidden' ||
+                pRect.right <= 0 ||
+                pRect.bottom <= 0 ||
+                pRect.left <= -500 ||
+                pRect.top <= -500
+              ) {
+                isAncestorOffscreenOrHidden = true;
+                break;
+              }
+              parent = parent.parentElement;
+            }
+
+            const isDirectlyVisible =
+              !isDisplayNone &&
+              !isVisibilityHidden &&
+              !isTransparent &&
+              !hasZeroDims &&
+              !isOffscreen &&
+              !isAncestorOffscreenOrHidden;
+
+            // Anti-bot honeypot detection:
+            const idAttr = htmlEl.id || '';
+            const tabIndexAttr = htmlEl.getAttribute('tabindex');
+            const isAutocompleteOff = htmlEl.getAttribute('autocomplete') === 'off';
+            const hasAntiBotName =
+              /(?:^|_|-)(?:hp|honeypot|bot_trap|anti_bot|trap)(?:_|-|$)/i.test(nameAttr) ||
+              /(?:^|_|-)(?:hp|honeypot|bot_trap|anti_bot|trap)(?:_|-|$)/i.test(idAttr);
+            const hasLeaveBlankWarning =
+              /(?:leave\s+(?:this\s+)?(?:field\s+)?(?:blank|empty)|do\s+not\s+fill|if\s+you\s+are\s+human)/i.test(
+                labelText
+              );
+
+            let isHoneypot = false;
+            if (hasLeaveBlankWarning) {
+              isHoneypot = true;
+            } else if (!isDirectlyVisible && !isLabelVisible) {
+              if (
+                hasAntiBotName ||
+                (isAutocompleteOff && tabIndexAttr === '-1') ||
+                isOffscreen ||
+                hasZeroDims ||
+                (isTransparent && style.pointerEvents === 'none') ||
+                Boolean(htmlEl.closest('[aria-hidden="true"]'))
+              ) {
+                isHoneypot = true;
+              }
+            } else if (hasAntiBotName && (!isDirectlyVisible || !isLabelVisible)) {
+              isHoneypot = true;
+            }
+
+            const isTextual =
+              effectiveType === 'text' ||
+              effectiveType === 'email' ||
+              effectiveType === 'number' ||
+              effectiveType === 'date' ||
+              effectiveType === 'textarea';
+
+            const isVisible = isTextual
+              ? (!isHoneypot && isDirectlyVisible)
+              : (!isHoneypot && (isDirectlyVisible || isLabelVisible));
+
+            const optionsList: string[] = [];
+            let currentValue = (htmlEl as HTMLInputElement).value || '';
+
+            if (roleAttr === 'radiogroup') {
+              const radioChildren = Array.from(htmlEl.querySelectorAll('[role="radio"]'));
+              radioChildren.forEach((rc) => {
+                const optVal = (
+                  rc.getAttribute('aria-label') ||
+                  rc.getAttribute('data-value') ||
+                  rc.textContent?.trim() ||
+                  ''
+                ).trim();
+                if (optVal && !optionsList.includes(optVal)) {
+                  optionsList.push(optVal);
+                }
+              });
+              const checkedRadio = radioChildren.find((rc) => rc.getAttribute('aria-checked') === 'true');
+              if (checkedRadio) {
+                currentValue = (
+                  checkedRadio.getAttribute('data-value') ||
+                  checkedRadio.getAttribute('aria-label') ||
+                  checkedRadio.textContent?.trim() ||
+                  ''
+                ).trim();
+              }
+            } else if (roleAttr === 'checkbox' || roleAttr === 'switch') {
+              const isAriaChecked = htmlEl.getAttribute('aria-checked') === 'true';
+              currentValue = isAriaChecked ? 'true' : 'false';
+            } else if (tagName === 'select') {
+              const selectEl = htmlEl as HTMLSelectElement;
+              Array.from(selectEl.options).forEach((opt) => {
+                const optVal = opt.textContent?.trim() || opt.value.trim();
+                if (optVal && !optionsList.includes(optVal)) {
+                  optionsList.push(optVal);
+                }
+              });
+            } else if (roleAttr === 'listbox' || roleAttr === 'combobox' || ariaHasPopup === 'listbox') {
+              const container = htmlEl.closest('.dropdown-container, [role="listitem"]') || htmlEl.parentElement;
+              if (container) {
+                const optElements = Array.from(container.querySelectorAll('[role="option"]'));
+                optElements.forEach((opt) => {
+                  const optVal = (
+                    opt.getAttribute('data-value') ||
+                    opt.getAttribute('aria-label') ||
+                    opt.textContent?.trim() ||
+                    ''
+                  ).trim();
+                  if (optVal && !optionsList.includes(optVal)) {
+                    optionsList.push(optVal);
+                  }
+                });
+              }
+              currentValue = htmlEl.textContent?.trim() || '';
+            }
+
+            // Capture any enclosing fieldset legend, which names the group as a whole.
+            let groupLegend = '';
+            const fieldset = htmlEl.closest('fieldset');
+            if (fieldset) {
+              const legend = fieldset.querySelector('legend');
+              groupLegend = legend?.textContent?.trim() || '';
+            }
+
+            let loc = 'main';
+            try {
+              if (window.self !== window.top) {
+                loc = 'iframe';
+              } else if (htmlEl.getRootNode && htmlEl.getRootNode() instanceof ShadowRoot) {
+                loc = 'shadow';
+              }
+            } catch {
+              loc = 'main';
+            }
+
+            const enabledState: 'enabled' | 'readonly' | 'disabled' =
+              (htmlEl as any).disabled || htmlEl.getAttribute('aria-disabled') === 'true'
+                ? 'disabled'
+                : Boolean((htmlEl as any).readOnly || htmlEl.hasAttribute('readonly'))
+                  ? 'readonly'
+                  : 'enabled';
+
+            const isRequired =
+              (htmlEl as any).required ||
+              htmlEl.getAttribute('aria-required') === 'true' ||
+              /\*/.test(labelText) ||
+              Boolean(
+                htmlEl.closest('[role="listitem"], .question-block, .geS5n')?.querySelector('.req, [aria-label*="required" i]')
+              ) ||
+              Boolean(htmlEl.parentElement && htmlEl.parentElement.querySelector('.req'));
+
+            collected.push({
+              ref: fieldRef,
+              selector: uniqueSelector,
+              tag: htmlEl.tagName.toLowerCase(),
+              role: roleAttr || undefined,
+              inputType: effectiveType,
+              autocomplete: htmlEl.getAttribute('autocomplete') || '',
+              name: htmlEl.getAttribute('name') || '',
+              groupLegend,
+              label: labelText.replace(/[\s]+/g, ' ').trim(),
+              required: isRequired,
+              currentValue: currentValue,
+              options: optionsList,
+              disabled: enabledState === 'disabled',
+              visible: isVisible,
+              isHoneypot,
+              checked: Boolean(
+                (htmlEl as HTMLInputElement).checked || htmlEl.getAttribute('aria-checked') === 'true'
+              ),
+              labelSource: labelSource || 'nearby text',
+              enabledState,
+              location: loc,
+            });
           });
-        }
 
-        let uniqueSelector = '';
-        if (id) {
-          uniqueSelector = `#${CSS.escape(id)}`;
-        } else if (htmlEl.getAttribute('name')) {
-          uniqueSelector = `${htmlEl.tagName.toLowerCase()}[name="${CSS.escape(htmlEl.getAttribute('name')!)}"]`;
-        } else {
-          uniqueSelector = `${htmlEl.tagName.toLowerCase()}:nth-of-type(${index + 1})`;
-        }
+          return { controls: collected, nextIndex: currentIndex };
+        }, globalIndex);
 
-        // Capture any enclosing fieldset legend, which names the group as a whole.
-        let groupLegend = '';
-        const fieldset = htmlEl.closest('fieldset');
-        if (fieldset) {
-          const legend = fieldset.querySelector('legend');
-          groupLegend = legend?.textContent?.trim() || '';
-        }
-
-        let loc = 'main';
-        try {
-          if (window.self !== window.top) {
-            loc = 'iframe';
-          } else if (htmlEl.getRootNode && htmlEl.getRootNode() instanceof ShadowRoot) {
-            loc = 'shadow';
+        if (frameResult && frameResult.controls) {
+          for (const item of frameResult.controls) {
+            allCollected.push({ frame, item });
           }
-        } catch {
-          loc = 'main';
+          globalIndex = frameResult.nextIndex;
         }
-
-        const enabledState: 'enabled' | 'readonly' | 'disabled' = htmlEl.disabled
-          ? 'disabled'
-          : Boolean((htmlEl as any).readOnly || htmlEl.hasAttribute('readonly'))
-            ? 'readonly'
-            : 'enabled';
-
-        collected.push({
-          selector: uniqueSelector,
-          tag: htmlEl.tagName.toLowerCase(),
-          inputType: typeAttr || (htmlEl.tagName.toLowerCase() === 'select' ? 'select' : 'text'),
-          name: htmlEl.getAttribute('name') || '',
-          groupLegend,
-          label: labelText.replace(/[\s]+/g, ' ').trim(),
-          required:
-            htmlEl.required ||
-            htmlEl.getAttribute('aria-required') === 'true' ||
-            /\*/.test(labelText) ||
-            Boolean(htmlEl.parentElement && htmlEl.parentElement.querySelector('.req')),
-          currentValue: (htmlEl as HTMLInputElement).value || '',
-          options: optionsList,
-          disabled: htmlEl.disabled,
-          visible: isVisible,
-          isHoneypot,
-          checked: Boolean((htmlEl as HTMLInputElement).checked),
-          labelSource: labelSource || 'nearby text',
-          enabledState,
-          location: loc,
-        });
-      });
-
-      return collected;
-    });
+      } catch {}
+    }
 
     const fields: FormFieldSnapshot[] = [];
     const seenRadioGroups = new Set<string>();
 
-    controls.forEach((item, index) => {
-      const fieldRef = `field_${String(index + 1).padStart(3, '0')}`;
+    allCollected.forEach(({ frame, item }) => {
+      const fieldRef = item.ref;
 
-      // Collapse a radio group into one logical field keyed by its name attribute,
-      // so a downstream selection cannot land in an unrelated group.
+      // Collapse a native radio group into one logical field keyed by its name attribute
       if (item.inputType === 'radio' && item.name) {
         if (seenRadioGroups.has(item.name)) {
           return;
         }
         seenRadioGroups.add(item.name);
 
-        const groupControls = controls.filter(
-          (candidate) => candidate.inputType === 'radio' && candidate.name === item.name
-        );
-        const groupSelector = `input[type="radio"][name="${this.escapeAttribute(item.name)}"]`;
+        const groupControls = allCollected
+          .filter((candidate) => candidate.item.inputType === 'radio' && candidate.item.name === item.name)
+          .map((candidate) => candidate.item);
+        const groupSelector = `[data-af-ref="${fieldRef}"]`;
         this.selectorMap.set(fieldRef, groupSelector);
         this.nameMap.set(fieldRef, item.name);
-        this.locatorMap.set(fieldRef, page.locator(groupSelector).first());
+        this.frameMap.set(fieldRef, frame);
+        this.locatorMap.set(fieldRef, frame.locator(groupSelector));
 
-        // A radio's own accessible text is just its option ("Yes"). Fall back to the
-        // group's question so the model sees a meaningful label like
-        // "Does the student require transport?" instead of a bare "Yes".
         const groupLabel = this.resolveRadioGroupLabel(item, groupControls);
+        this.labelMap.set(fieldRef, groupLabel);
 
         let groupLabelSource = item.labelSource || 'label-for';
         if (item.groupLegend) {
-          const optionTexts = new Set(groupControls.map((c) => c.label.trim().toLowerCase()));
+          const optionTexts = new Set(groupControls.map((c: any) => c.label.trim().toLowerCase()));
           if (optionTexts.has(item.label.trim().toLowerCase())) {
             groupLabelSource = 'container heading';
           }
@@ -692,41 +903,48 @@ export class FormScanner {
 
         fields.push({
           ref: fieldRef,
+          role: 'radio',
           label: groupLabel,
           type: 'radio',
-          required: groupControls.some((candidate) => candidate.required),
-          currentValue: groupControls.find((candidate) => candidate.checked)?.currentValue || '',
+          required: groupControls.some((candidate: any) => candidate.required),
+          currentValue: groupControls.find((candidate: any) => candidate.checked)?.currentValue || '',
           options: Array.from(
-            new Set(groupControls.map((candidate) => candidate.currentValue).filter(Boolean))
+            new Set(groupControls.map((candidate: any) => candidate.currentValue).filter(Boolean))
           ),
-          disabled: groupControls.every((candidate) => candidate.disabled),
-          visible: groupControls.some((candidate) => candidate.visible),
-          isHoneypot: groupControls.some((candidate) => candidate.isHoneypot),
+          disabled: groupControls.every((candidate: any) => candidate.disabled),
+          visible: groupControls.some((candidate: any) => candidate.visible),
+          isHoneypot: groupControls.some((candidate: any) => candidate.isHoneypot),
           labelSource: groupLabelSource,
-          enabledState: groupControls.every((candidate) => candidate.disabled) ? 'disabled' : 'enabled',
+          enabledState: groupControls.every((candidate: any) => candidate.disabled) ? 'disabled' : 'enabled',
           location: item.location || 'main',
         });
         return;
       }
 
       let fieldType: FormFieldSnapshot['type'] = 'text';
-      if (item.tag === 'select') fieldType = 'select';
-      else if (item.tag === 'textarea') fieldType = 'textarea';
-      else if (item.inputType === 'checkbox') fieldType = 'checkbox';
+      if (item.tag === 'select' || item.inputType === 'select') fieldType = 'select';
+      else if (item.inputType === 'combobox') fieldType = 'combobox';
+      else if (item.tag === 'textarea' || item.inputType === 'textarea') fieldType = 'textarea';
+      else if (item.inputType === 'checkbox' || item.inputType === 'switch') fieldType = 'checkbox';
+      else if (item.inputType === 'radio') fieldType = 'radio';
       else if (item.inputType === 'number') fieldType = 'number';
       else if (item.inputType === 'email') fieldType = 'email';
       else if (item.inputType === 'date') fieldType = 'date';
 
       this.selectorMap.set(fieldRef, item.selector);
-      this.locatorMap.set(fieldRef, page.locator(item.selector).first());
+      this.locatorMap.set(fieldRef, frame.locator(item.selector).first());
+      this.frameMap.set(fieldRef, frame);
+      this.labelMap.set(fieldRef, item.label);
       if (item.name) {
         this.nameMap.set(fieldRef, item.name);
       }
 
       fields.push({
         ref: fieldRef,
+        role: item.role,
         label: item.label,
         type: fieldType,
+        autocomplete: item.autocomplete || undefined,
         required: item.required,
         currentValue: item.currentValue,
         options: item.options.length > 0 ? item.options : undefined,
@@ -799,6 +1017,16 @@ export class FormScanner {
   }
 
   /**
+   * Override or re-bind the internal Playwright Locator for a field reference.
+   *
+   * @param fieldRef Stable field reference such as 'field_001'.
+   * @param locator New Locator to associate.
+   */
+  public setLocator(fieldRef: string, locator: Locator): void {
+    this.locatorMap.set(fieldRef, locator);
+  }
+
+  /**
    * Retrieve the internal CSS selector for a field reference.
    *
    * @param fieldRef Stable field reference such as 'field_001'.
@@ -819,18 +1047,59 @@ export class FormScanner {
   }
 
   /**
+   * Retrieve the human label for a field reference.
+   *
+   * @param fieldRef Stable field reference such as 'field_001'.
+   * @returns The mapped label, or undefined when unknown.
+   */
+  public getLabel(fieldRef: string): string | undefined {
+    return this.labelMap.get(fieldRef);
+  }
+
+  /**
+   * Retrieve the frame where the field reference resides.
+   *
+   * @param fieldRef Stable field reference such as 'field_001'.
+   * @returns The mapped Frame, or undefined when unknown.
+   */
+  public getFrame(fieldRef: string): any {
+    return this.frameMap.get(fieldRef);
+  }
+
+  /**
    * Evaluate pure DOM detectBlocker on the given Playwright page safely.
    *
    * @param page Playwright Page instance.
-   * @param _waitMs Optional parameter kept for interface compatibility (no polling).
+   * @param waitMs Optional bounded timeout for condition wait if initially seeing zero fillable fields.
    * @returns BlockerDetectionResult.
    */
   public async detectBlockerOnPage(
     page: Page,
-    _waitMs: number = 0
+    waitMs: number = 0
   ): Promise<BlockerDetectionResult> {
     try {
-      const state: FormReadinessState = await page.evaluate(getFormReadinessState as any);
+      let state: FormReadinessState = await page.evaluate(getFormReadinessState as any);
+      if (
+        state.blocker.type === 'no-form' &&
+        state.blocker.matchedRule === 'zero_fillable_fields' &&
+        waitMs > 0
+      ) {
+        try {
+          await page.waitForFunction(
+            () => {
+              const el = document.querySelector(
+                'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"]):not([type="password"]), select, textarea, [role="textbox"], [role="radio"], [role="radiogroup"], [role="checkbox"], [role="switch"], [role="listbox"], [role="combobox"], [aria-haspopup="listbox"], [contenteditable="true"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"]'
+              );
+              return Boolean(el);
+            },
+            undefined,
+            { timeout: Math.min(waitMs, 5000) }
+          );
+          state = await page.evaluate(getFormReadinessState as any);
+        } catch {
+          // Bounded condition timeout reached; keep initial or re-evaluated no-form state
+        }
+      }
       return state.blocker;
     } catch (err: any) {
       const msg = err?.message || '';

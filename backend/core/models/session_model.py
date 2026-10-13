@@ -16,6 +16,7 @@ class FormFieldType(str, Enum):
     EMAIL = "email"
     TEL = "tel"
     SELECT = "select"
+    COMBOBOX = "combobox"
     RADIO = "radio"
     CHECKBOX = "checkbox"
     DATE = "date"
@@ -44,7 +45,7 @@ class ExtractedFact(BaseModel):
     """A discrete structured fact extracted from a user document."""
     key: str = Field(description="Normalized key identifier, e.g. student_name, dob, parent_phone")
     label: str = Field(description="Human readable label")
-    value: str = Field(description="Extracted text value")
+    value: Optional[str] = Field(default=None, description="Extracted text value")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="Extraction confidence score")
     source_page: Optional[int] = Field(default=None, description="Page number where fact was discovered")
 
@@ -55,6 +56,7 @@ class FormFieldSnapshot(BaseModel):
     role: Optional[str] = Field(default=None, description="ARIA or semantic role")
     label: str = Field(description="Human readable label or aria-label")
     type: str = Field(default="text", description="Input field control type")
+    autocomplete: Optional[str] = Field(default=None, description="Autocomplete token if present")
     required: bool = Field(default=False, description="Whether field is mandatory")
     current_value: Optional[str] = Field(default="", description="Existing value in DOM")
     options: Optional[List[str]] = Field(default=None, description="Options for select or radio groups")

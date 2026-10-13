@@ -15,6 +15,9 @@ const { PolicyEngine } = require(path.join(DIST, 'policy/PolicyEngine'));
 const {
   matchOption,
   OPTION_CONFIDENCE_THRESHOLD,
+  isConsentCheckbox,
+  checkFieldCompatibility,
+  mapHeuristicFallback,
 } = require(path.join(DIST, 'agent/OptionMatcher'));
 
 let passed = 0;
@@ -214,6 +217,169 @@ async function runToolRegistryTests() {
     const emptyMatch = matchOption('', ['Male', 'Female']);
     assert.strictEqual(emptyMatch.matchedOption, null);
     assert.strictEqual(emptyMatch.needsClarification, true);
+  });
+
+  await test('Compatibility Gate enforces type structural constraints before fill', async () => {
+    // Gate tests: name into email field rejected
+    const nameInEmail = checkFieldCompatibility({ type: 'email', label: 'Email' }, 'Aarav Sharma');
+    assert.strictEqual(nameInEmail.valid, false, 'Name into email field must be rejected');
+
+    // Phone into date field rejected
+    const phoneInDate = checkFieldCompatibility({ type: 'date', label: 'Date of Birth' }, '+91 98450 78901');
+    assert.strictEqual(phoneInDate.valid, false, 'Phone into date field must be rejected');
+
+    // Non-numeric into number field rejected
+    const textInNumber = checkFieldCompatibility({ type: 'number', label: 'Age' }, 'fifteen');
+    assert.strictEqual(textInNumber.valid, false, 'Non-numeric into number field must be rejected');
+
+    // Invalid telephone (too short or too long) rejected
+    const shortPhone = checkFieldCompatibility({ type: 'tel', label: 'Phone' }, '12345');
+    assert.strictEqual(shortPhone.valid, false, 'Phone with < 7 digits must be rejected');
+    const longPhone = checkFieldCompatibility({ type: 'tel', label: 'Phone' }, '1234567890123456');
+    assert.strictEqual(longPhone.valid, false, 'Phone with > 15 digits must be rejected');
+
+    // Select/radio value not matching choices rejected
+    const invalidOption = checkFieldCompatibility(
+      { type: 'select', label: 'Gender', options: ['Male', 'Female', 'Other'] },
+      'Unknown Category'
+    );
+    assert.strictEqual(invalidOption.valid, false, 'Invalid option into select must be rejected');
+
+    // Non-boolean into checkbox rejected
+    const invalidCheckbox = checkFieldCompatibility({ type: 'checkbox', label: 'Opt in' }, 'maybe');
+    assert.strictEqual(invalidCheckbox.valid, false, 'Non-boolean into checkbox must be rejected');
+
+    // Valid values must pass the gate
+    assert.strictEqual(checkFieldCompatibility({ type: 'email', label: 'Email' }, 'aarav@example.com').valid, true);
+    assert.strictEqual(checkFieldCompatibility({ type: 'tel', label: 'Phone' }, '+91 98450 78901').valid, true);
+    assert.strictEqual(checkFieldCompatibility({ type: 'date', label: 'Date of Birth' }, '2010-05-20').valid, true);
+    assert.strictEqual(checkFieldCompatibility({ type: 'date', label: 'Date of Birth' }, '20/05/2010').valid, true);
+    assert.strictEqual(checkFieldCompatibility({ type: 'number', label: 'Age' }, '15').valid, true);
+    assert.strictEqual(
+      checkFieldCompatibility({ type: 'select', label: 'Gender', options: ['Male', 'Female'] }, 'Male').valid,
+      true
+    );
+    assert.strictEqual(checkFieldCompatibility({ type: 'checkbox', label: 'Terms' }, true).valid, true);
+    assert.strictEqual(checkFieldCompatibility({ type: 'checkbox', label: 'Terms' }, 'yes').valid, true);
+  });
+
+  await test('Consent detector recognizes legal/agreement checkboxes and skips auto-ticking', async () => {
+    assert.strictEqual(
+      isConsentCheckbox({ type: 'checkbox', label: 'I agree to the terms and conditions*' }),
+      true
+    );
+    assert.strictEqual(
+      isConsentCheckbox({ type: 'checkbox', label: 'Student Undertaking and Declaration' }),
+      true
+    );
+    assert.strictEqual(
+      isConsentCheckbox({ type: 'checkbox', label: 'Parent Consent Required' }),
+      true
+    );
+    assert.strictEqual(
+      isConsentCheckbox({ type: 'checkbox', label: 'Hostel Accommodation Required' }),
+      false
+    );
+    assert.strictEqual(
+      isConsentCheckbox({ type: 'text', label: 'I agree to the terms and conditions*' }),
+      false
+    );
+  });
+
+  await test('Heuristic Mapper label->expected-key table test and confidence calibration', async () => {
+    const facts = [
+      { key: 'student_name', label: 'Student Full Name', value: 'Aarav Sharma', confidence: 0.99 },
+      { key: 'email', label: 'Email Address', value: 'aarav@example.com', confidence: 0.99 },
+      { key: 'phone', label: 'Contact Phone Number', value: '+919876543210', confidence: 0.99 },
+      { key: 'address', label: 'Residential Address', value: '123 MG Road', confidence: 0.99 },
+      { key: 'pincode', label: 'Pincode / Zip Code', value: '560001', confidence: 0.99 },
+      { key: 'father_name', label: "Father's Name", value: 'Rajesh Sharma', confidence: 0.99 },
+      { key: 'previous_school', label: 'Previous School Attended', value: 'Delhi Public School', confidence: 0.99 },
+    ];
+
+    const testCases = [
+      { label: 'Student Email Address*', type: 'email', expectedKey: 'email' },
+      { label: 'E-mail address:', type: 'text', expectedKey: 'email' },
+      { label: 'Contact Phone Number*', type: 'tel', expectedKey: 'phone' },
+      { label: 'Residential Address*', type: 'textarea', expectedKey: 'address' },
+      { label: 'Name of Student *', type: 'text', expectedKey: 'student_name' },
+      { label: 'Pincode / Zip Code*', type: 'text', expectedKey: 'pincode' },
+      { label: "Father's Name*", type: 'text', expectedKey: 'father_name' },
+      { label: 'Delivery instructions:', type: 'text', expectedKey: null },
+      { label: 'I agree to the school admission terms and conditions*', type: 'checkbox', expectedKey: 'consent' },
+    ];
+
+    for (const { label, type, expectedKey } of testCases) {
+      const field = {
+        ref: 'f_test',
+        label,
+        type,
+        required: true,
+      };
+      const result = mapHeuristicFallback([field], facts);
+
+      if (expectedKey === null) {
+        assert.ok(
+          result.unmapped_fields.includes('f_test'),
+          `'${label}' was expected to be unmapped, but got mapped: ${JSON.stringify(result.mappings)}`
+        );
+        const mapped = result.mappings.find((m) => m.field_ref === 'f_test' && m.fact_key);
+        assert.strictEqual(
+          mapped,
+          undefined,
+          `'${label}' was expected to have no fact_key, got ${JSON.stringify(mapped)}`
+        );
+      } else {
+        const match = result.mappings.find((m) => m.field_ref === 'f_test' && m.fact_key === expectedKey);
+        assert.ok(
+          match,
+          `'${label}' was expected to map to '${expectedKey}', got mappings: ${JSON.stringify(result.mappings)}`
+        );
+        assert.ok(
+          match.confidence >= 0.6,
+          `Confidence ${match.confidence} for '${label}' must be >= 0.6 threshold`
+        );
+        assert.notStrictEqual(
+          match.confidence,
+          0.95,
+          `Confidence for '${label}' must be calibrated, never constant 0.95`
+        );
+      }
+    }
+  });
+
+  await test('One fact, one field: duplicate fact assignments keep higher score and unmap other', async () => {
+    const facts = [
+      { key: 'student_name', label: 'Student Full Name', value: 'Aarav Sharma', confidence: 0.99 },
+      { key: 'email', label: 'Email Address', value: 'aarav@example.com', confidence: 0.99 },
+    ];
+
+    const fields = [
+      { ref: 'f1', label: 'Student Email Address*', type: 'email', required: true },
+      { ref: 'f2', label: 'E-mail address:', type: 'email', required: true },
+    ];
+
+    const result = mapHeuristicFallback(fields, facts);
+    const emailMappings = result.mappings.filter((m) => m.fact_key === 'email');
+    assert.strictEqual(emailMappings.length, 1, 'Only one field should be mapped to the same fact key');
+    assert.ok(emailMappings[0].confidence in [0.7, 0.9] || emailMappings[0].confidence >= 0.7);
+    assert.notStrictEqual(emailMappings[0].confidence, 0.95);
+
+    const otherRef = emailMappings[0].field_ref === 'f1' ? 'f2' : 'f1';
+    assert.ok(result.unmapped_fields.includes(otherRef), 'Other field must be marked unmapped');
+    assert.ok(
+      result.clarifications_required.some((c) => c.field_ref === otherRef),
+      'Clarification must be raised for the other unmapped field'
+    );
+
+    // Near-identical labels: both can be mapped
+    const identicalFields = [
+      { ref: 'f1', label: 'Student Full Name*', type: 'text', required: true },
+      { ref: 'f2', label: 'Student Full Name:', type: 'text', required: true },
+    ];
+    const identicalResult = mapHeuristicFallback(identicalFields, facts);
+    const nameMappings = identicalResult.mappings.filter((m) => m.fact_key === 'student_name');
+    assert.strictEqual(nameMappings.length, 2, 'Near-identical labels should both be mapped');
   });
 
   console.log(`\nAll ${passed} ToolRegistry assertions passed.`);

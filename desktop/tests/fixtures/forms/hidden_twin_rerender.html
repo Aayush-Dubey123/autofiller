@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Hidden Twin and Re-render Test Form</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: auto; }
+    .question-block { margin-bottom: 20px; padding: 12px; border: 1px solid #ccc; border-radius: 6px; }
+    .q-label { font-weight: bold; margin-bottom: 8px; }
+    .twin-hidden { display: none !important; }
+    input[type="text"], input[type="email"] { width: 100%; padding: 8px; box-sizing: border-box; }
+    button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
+    #section-2 { display: none; }
+  </style>
+</head>
+<body>
+  <h1>Registration Form</h1>
+
+  <!-- Section 1 -->
+  <div id="section-1">
+    <!-- (a) Question whose first input is a display:none twin and whose visible input is a sibling in the same listitem -->
+    <div role="listitem" class="question-block" id="q-name">
+      <div role="heading" class="q-label">Full Name *</div>
+      <input type="text" name="entry_fullname_hidden" class="twin-hidden" tabindex="-1" value="" />
+      <input type="text" name="entry_fullname" id="fullname-visible" class="visible-input" required />
+    </div>
+
+    <!-- (b) Input replaced by a new node about 1 s after load (simulating a re-render) -->
+    <div role="listitem" class="question-block" id="q-email">
+      <div role="heading" class="q-label">Email Address *</div>
+      <div id="rerender-container">
+        <input type="email" name="entry_email" id="email-initial" class="visible-input" required />
+      </div>
+    </div>
+
+    <button type="button" id="continue-btn" onclick="nextSection()">Continue</button>
+  </div>
+
+  <!-- (c) Second section hidden until Continue -->
+  <div id="section-2">
+    <div role="listitem" class="question-block" id="q-city">
+      <div role="heading" class="q-label">City *</div>
+      <input type="text" name="entry_city" id="city-visible" class="visible-input" required />
+    </div>
+
+    <button type="submit" id="submitBtn">Submit Application</button>
+  </div>
+
+  <script>
+    // Simulate DOM re-render about 1 s after load
+    setTimeout(() => {
+      const container = document.getElementById('rerender-container');
+      if (container) {
+        container.innerHTML = '<input type="email" name="entry_email" id="email-fresh" class="visible-input" required />';
+      }
+    }, 1000);
+
+    function nextSection() {
+      document.getElementById('section-1').style.display = 'none';
+      document.getElementById('section-2').style.display = 'block';
+    }
+  </script>
+</body>
+</html>

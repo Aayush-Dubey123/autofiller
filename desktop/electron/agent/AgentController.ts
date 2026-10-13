@@ -18,7 +18,7 @@ import { BrowserManager, OperationCancelledError } from '../browser/BrowserManag
 import { BlockerDetectionResult, FormReadinessState } from '../browser/FormScanner';
 import { PolicyEngine, SubmissionControl } from '../policy/PolicyEngine';
 import { BackendClient, coerceClarificationValue } from '../services/BackendClient';
-import { matchOption } from './OptionMatcher';
+import { matchOption, checkFieldCompatibility, isConsentCheckbox } from './OptionMatcher';
 import {
   AgentEventPayload,
   ClarificationPromptPayload,
@@ -32,6 +32,7 @@ import {
   FieldTraceRecord,
   ScanTraceRecord,
   RunTrace,
+  PageCensusRecord,
 } from '../shared/types';
 import { deriveFacts } from '../shared/profileSchema';
 
@@ -91,6 +92,11 @@ export class AgentController {
     string,
     { resolve: (answer: string) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
   > = new Map();
+
+  /** Answers provided in clarifications, retained for the entire session run. */
+  private clarifiedAnswers: Map<string, string> = new Map();
+  /** Unfilled required fields pending manual user completion. */
+  private pendingUnfilledRequired: FormFieldSnapshot[] = [];
 
   private eventListeners: Array<(event: AgentEventPayload) => void> = [];
   private clarificationListeners: Array<(prompt: ClarificationPromptPayload) => void> = [];
@@ -243,10 +249,62 @@ export class AgentController {
         console.log(`\nScan #${scan.scanIndex}: ${scan.hostAndPath} | Frames: ${scan.frameCount} | Fields: ${scan.fieldCount} | Time Since Nav: ${scan.timeSinceNavMs}ms`);
         this.printCompactTable(scan.fields);
       });
+      if (this.currentRunTrace.pageCensus) {
+        this.printCensusTable(this.currentRunTrace.pageCensus);
+      }
       console.log(`==========================================================\n`);
     } catch (err: any) {
       console.warn('Could not write run trace:', err?.message || err);
     }
+  }
+
+  private async captureCensusAndScreenshot(blocker?: BlockerDetectionResult): Promise<void> {
+    if (!this.browserManager) return;
+    try {
+      const dir = this.resolveUserDataDir();
+      fs.mkdirSync(dir, { recursive: true });
+      const screenshotPath = path.join(dir, 'diagnostic-blocker-screenshot.png');
+      await this.browserManager.saveScreenshot(screenshotPath);
+      console.log(`\nDiagnostic Screenshot: ${screenshotPath}`);
+
+      const census = await this.browserManager.collectPageCensus(blocker);
+      census.screenshotPath = screenshotPath;
+      this.currentRunTrace.pageCensus = census;
+
+      const traceFile = path.join(dir, 'autofiller-trace.json');
+      fs.writeFileSync(traceFile, JSON.stringify(this.currentRunTrace, null, 2), 'utf-8');
+
+      this.printCensusTable(census);
+    } catch (err: any) {
+      console.warn('Could not capture page census and screenshot:', err?.message || err);
+    }
+  }
+
+  private printCensusTable(census: PageCensusRecord): void {
+    console.log(`\n================== PAGE CENSUS ==================`);
+    console.log(`Final URL Host: ${census.finalUrlHost}`);
+    console.log(`Final URL Path: ${census.finalUrlPath}`);
+    console.log(`Page Title: ${census.pageTitle}`);
+    console.log(`Matched Blocker Rule: ${census.matchedBlockerRule || 'none'}`);
+    console.log(`Trigger Element / Host: ${census.triggerElementOrHost || 'none'}`);
+    console.log(`Screenshot: ${census.screenshotPath || 'none'}`);
+    console.log(`\nPer-Frame Element Census (${census.frames.length} frame(s)):`);
+    census.frames.forEach((f) => {
+      console.log(`--------------------------------------------------`);
+      console.log(`Frame: ${f.frameId} ${f.isMainFrame ? '[MAIN FRAME]' : '[IFRAME]'}`);
+      console.log(`URL: ${f.url} ${f.name ? `| Name: ${f.name}` : ''}`);
+      console.log(`Shadow Roots Present: ${f.hasShadowRoots ? 'YES' : 'NO'}`);
+      console.log(`Inputs (visible): ${JSON.stringify(f.inputsByType.visible)}`);
+      console.log(`Inputs (hidden):  ${JSON.stringify(f.inputsByType.hidden)}`);
+      console.log(`Textarea:         visible=${f.textarea.visible}, hidden=${f.textarea.hidden}`);
+      console.log(`Select:           visible=${f.select.visible}, hidden=${f.select.hidden}`);
+      console.log(`[role=radio]:     visible=${f.roleRadio.visible}, hidden=${f.roleRadio.hidden}`);
+      console.log(`[role=checkbox]:  visible=${f.roleCheckbox.visible}, hidden=${f.roleCheckbox.hidden}`);
+      console.log(`[role=listbox]:   visible=${f.roleListbox.visible}, hidden=${f.roleListbox.hidden}`);
+      console.log(`[role=combobox]:  visible=${f.roleCombobox.visible}, hidden=${f.roleCombobox.hidden}`);
+      console.log(`contenteditable:  visible=${f.contenteditable.visible}, hidden=${f.contenteditable.hidden}`);
+    });
+    console.log(`==================================================\n`);
   }
 
   private printCompactTable(fields: FieldTraceRecord[]): void {
@@ -639,6 +697,13 @@ export class AgentController {
 
     while (Date.now() - startTime < MAX_WAIT_MS) {
       try {
+        if (this.pendingUnfilledRequired.length > 0) {
+          // If waiting on user-filled required fields, resume to re-verify in DOM
+          this.isTakeoverState = false;
+          this.browserManager.unblockReadiness();
+          return { resolved: true, message: 'Resuming to verify form fields.' };
+        }
+
         latestReadiness = await this.browserManager.evaluateReadinessState();
         const isReady =
           latestReadiness.blocker.type === 'none' ||
@@ -666,7 +731,9 @@ export class AgentController {
 
     const check = latestReadiness?.blocker || { type: 'login', reason: 'Sign-in page still active' };
     const msg =
-      check.type === 'login'
+      this.pendingUnfilledRequired.length > 0
+        ? `Please fill in required field: ${this.pendingUnfilledRequired.map((f) => f.label).join(', ')}`
+        : check.type === 'login'
         ? 'Still on a sign-in page.'
         : check.type === 'otp'
         ? 'Still waiting for verification code.'
@@ -676,7 +743,7 @@ export class AgentController {
 
     this.emitEvent(
       this.buildEvent('STATE_CHANGED', msg, {
-        metadata: { blockerType: check.type, blockerReason: check.reason },
+        metadata: { blockerType: check.type, blockerReason: check.reason, plainDescription: msg },
       })
     );
     return { resolved: false, message: msg };
@@ -700,6 +767,9 @@ export class AgentController {
 
     // Blocker detected! Bring browser window to front
     await this.browserManager.bringToFront();
+
+    // Capture diagnostic census and screenshot at blocker encounter
+    await this.captureCensusAndScreenshot(initialBlocker);
 
     // Plain wording based on blocker type (no technical words)
     let plainDescription = '';
@@ -1006,6 +1076,9 @@ export class AgentController {
         );
       }
 
+      const normLabel = this.normalizeLabel(prompt.field_label);
+      this.clarifiedAnswers.set(normLabel, answer);
+
       if (!prompt.clarification_id.startsWith('preflight_')) {
         try {
           await this.backendClient.answerClarification(
@@ -1022,7 +1095,11 @@ export class AgentController {
         }
       }
 
-      let target = mappings.find((mapping) => mapping.field_ref === prompt.field_ref);
+      let target = mappings.find(
+        (mapping) =>
+          mapping.field_ref === prompt.field_ref ||
+          (mapping.field_label && this.labelsMatch(mapping.field_label, prompt.field_label))
+      );
       if (target) {
         target.fact_value = answer;
         target.status = 'RESOLVED';
@@ -1035,6 +1112,18 @@ export class AgentController {
           status: 'RESOLVED',
         };
         mappings.push(target);
+      }
+
+      // Re-scan immediately after clarification answer arrives
+      if (this.browserManager && this.browserManager.hasOpenPage()) {
+        try {
+          const freshSnap = await this.browserManager.scanActiveForm();
+          const rebound = this.rebindMappings(mappings, freshSnap);
+          mappings.length = 0;
+          mappings.push(...rebound);
+        } catch {
+          // Non-fatal if page re-scan fails
+        }
       }
     }
   }
@@ -1050,6 +1139,9 @@ export class AgentController {
    * @returns Desired checked state.
    */
   private resolveCheckboxState(mapping: FieldMapping, field: FormFieldSnapshot): boolean {
+    if (isConsentCheckbox(field)) {
+      return false;
+    }
     const value = (mapping.fact_value || '').toString().trim().toLowerCase();
     const affirmative = new Set(['true', 'yes', 'y', '1', 'on', 'checked', 'agree', 'accepted']);
     const negative = new Set(['false', 'no', 'n', '0', 'off', 'unchecked', 'declined']);
@@ -1122,13 +1214,105 @@ export class AgentController {
   }
 
   /**
+   * Normalize field label by stripping punctuation, asterisks, and multiple spaces.
+   */
+  private normalizeLabel(label?: string): string {
+    if (!label) return '';
+    return label.toLowerCase().replace(/[*:\s]+/g, ' ').trim();
+  }
+
+  /**
    * Determine whether two field labels match, normalizing trailing asterisks, colons, and casing.
    */
   private labelsMatch(a?: string, b?: string): boolean {
     if (!a || !b) return false;
-    const cleanA = a.toLowerCase().replace(/[*:\s]+$/, '').trim();
-    const cleanB = b.toLowerCase().replace(/[*:\s]+$/, '').trim();
+    const cleanA = this.normalizeLabel(a);
+    const cleanB = this.normalizeLabel(b);
     return cleanA === cleanB;
+  }
+
+  /**
+   * Carry mappings across form scans by label + control type + order.
+   */
+  private rebindMappings(
+    existingMappings: FieldMapping[],
+    newSnapshot: FormSnapshot,
+    previousFields?: FormFieldSnapshot[]
+  ): FieldMapping[] {
+    const prevTypeByRef = new Map<string, string>();
+    if (previousFields) {
+      for (const pf of previousFields) {
+        prevTypeByRef.set(pf.ref, pf.type);
+      }
+    }
+
+    const existingPool: {
+      normLabel: string;
+      type?: string;
+      mapping: FieldMapping;
+      used: boolean;
+    }[] = existingMappings.map((m) => ({
+      normLabel: this.normalizeLabel(m.field_label),
+      type: prevTypeByRef.get(m.field_ref),
+      mapping: m,
+      used: false,
+    }));
+
+    const sortedFields = [
+      ...newSnapshot.fields.filter((f) => f.visible),
+      ...newSnapshot.fields.filter((f) => !f.visible),
+    ];
+
+    const newMappings: FieldMapping[] = [];
+
+    for (const field of sortedFields) {
+      const normLabel = this.normalizeLabel(field.label);
+      const type = field.type;
+
+      let match = existingPool.find(
+        (e) => !e.used && e.normLabel === normLabel && (!e.type || e.type === type)
+      );
+
+      if (!match) {
+        match = existingPool.find((e) => !e.used && e.normLabel === normLabel);
+      }
+
+      if (!match) {
+        match = existingPool.find(
+          (e) => !e.used && this.labelsMatch(e.mapping.field_label, field.label)
+        );
+      }
+
+      if (match) {
+        match.used = true;
+        const rebound: FieldMapping = {
+          ...match.mapping,
+          field_ref: field.ref,
+          field_label: field.label,
+        };
+        if (this.clarifiedAnswers.has(normLabel)) {
+          rebound.fact_value = this.clarifiedAnswers.get(normLabel);
+          rebound.status = 'RESOLVED';
+        }
+        newMappings.push(rebound);
+      } else if (this.clarifiedAnswers.has(normLabel)) {
+        newMappings.push({
+          field_ref: field.ref,
+          field_label: field.label,
+          fact_value: this.clarifiedAnswers.get(normLabel),
+          confidence: 1.0,
+          status: 'RESOLVED',
+        });
+      }
+    }
+
+    for (const e of existingPool) {
+      if (!e.used) {
+        newMappings.push(e.mapping);
+      }
+    }
+
+    return newMappings;
   }
 
   /**
@@ -1146,6 +1330,8 @@ export class AgentController {
     this.isStoppedState = false;
     this.isPausedState = false;
     this.isTakeoverState = false;
+    this.clarifiedAnswers.clear();
+    this.pendingUnfilledRequired = [];
     this.abortController = new AbortController();
     this.persistenceQueue = Promise.resolve();
 
@@ -1320,7 +1506,7 @@ export class AgentController {
         // - unmapped required fields
         // - fields with no available fact
         const requiredFields = probeSnapshot.fields.filter(
-          (f) => f.required && !f.disabled && !f.isHoneypot
+          (f) => f.required && !f.disabled && !f.isHoneypot && !isConsentCheckbox(f)
         );
         const mappedWithUsableValue = new Set(
           preflightMappings
@@ -1473,9 +1659,17 @@ export class AgentController {
         let activeSectionFields = formSnapshot.fields.filter(
           (field) => field.visible && !field.disabled && !field.isHoneypot
         );
-        let activeRequiredFields = activeSectionFields.filter((field) => field.required);
+        let activeRequiredFields = activeSectionFields.filter((field) => field.required && !isConsentCheckbox(field));
         for (const rf of activeRequiredFields) {
           allDiscoveredRequiredRefs.add(rf.ref);
+        }
+
+        // Capture page census if zero fillable fields scanned
+        if (formSnapshot.fields.length === 0 || activeSectionFields.length === 0) {
+          if (!this.currentRunTrace.pageCensus) {
+            const currentBlocker = await this.browserManager.detectBlocker(0);
+            await this.captureCensusAndScreenshot(currentBlocker);
+          }
         }
 
         // 3b: Map unmapped fields if initial section or newly revealed fields appear
@@ -1501,7 +1695,7 @@ export class AgentController {
             activeSectionFields = postMapSnapshot.fields.filter(
               (field) => field.visible && !field.disabled && !field.isHoneypot
             );
-            activeRequiredFields = activeSectionFields.filter((field) => field.required);
+            activeRequiredFields = activeSectionFields.filter((field) => field.required && !isConsentCheckbox(field));
             for (const rf of activeRequiredFields) {
               allDiscoveredRequiredRefs.add(rf.ref);
             }
@@ -1578,20 +1772,48 @@ export class AgentController {
         // 3c: Identify all required/unresolved fields for current section
         // Collect ALL missing information needed rather than arbitrarily stopping after two
         const neededClarifications: ClarificationRequest[] = sectionClarifications.filter(
-          (c) =>
-            !verifiedFieldRefs.has(c.field_ref) &&
-            activeSectionFields.some((f) => f.ref === c.field_ref) &&
-            !mappings.some(
-              (m) =>
-                m.field_ref === c.field_ref &&
-                m.status === 'RESOLVED' &&
-                m.fact_value !== undefined &&
-                m.fact_value !== null &&
-                String(m.fact_value).trim().length > 0
-            )
+          (c) => {
+            const normLabel = this.normalizeLabel(c.field_label);
+            if (this.clarifiedAnswers.has(normLabel)) return false;
+            return (
+              !verifiedFieldRefs.has(c.field_ref) &&
+              activeSectionFields.some((f) => f.ref === c.field_ref) &&
+              !mappings.some(
+                (m) =>
+                  m.field_ref === c.field_ref &&
+                  m.status === 'RESOLVED' &&
+                  m.fact_value !== undefined &&
+                  m.fact_value !== null &&
+                  String(m.fact_value).trim().length > 0
+              )
+            );
+          }
         );
 
         for (const reqField of activeRequiredFields) {
+          const normLabel = this.normalizeLabel(reqField.label);
+          if (this.clarifiedAnswers.has(normLabel)) {
+            let m = mappings.find(
+              (cand) =>
+                cand.field_ref === reqField.ref ||
+                (cand.field_label && reqField.label && this.labelsMatch(cand.field_label, reqField.label))
+            );
+            if (!m) {
+              m = {
+                field_ref: reqField.ref,
+                field_label: reqField.label,
+                fact_value: this.clarifiedAnswers.get(normLabel),
+                confidence: 1.0,
+                status: 'RESOLVED',
+              };
+              mappings.push(m);
+            } else {
+              m.fact_value = this.clarifiedAnswers.get(normLabel);
+              m.status = 'RESOLVED';
+            }
+            continue;
+          }
+
           const m = mappings.find(
             (cand) =>
               cand.field_ref === reqField.ref ||
@@ -1617,14 +1839,35 @@ export class AgentController {
           await this.resolveClarifications(neededClarifications, mappings);
         }
 
+        // 2. FRESH BINDING: re-scan immediately before filling each section
+        try {
+          const preFillSnapshot = await this.browserManager.scanActiveForm();
+          const rebound = this.rebindMappings(mappings, preFillSnapshot, lastFormSnapshot?.fields);
+          mappings.length = 0;
+          mappings.push(...rebound);
+          lastFormSnapshot = preFillSnapshot;
+          activeSectionFields = preFillSnapshot.fields.filter(
+            (field) => field.visible && !field.disabled && !field.isHoneypot
+          );
+          activeRequiredFields = activeSectionFields.filter(
+            (field) => field.required && !isConsentCheckbox(field)
+          );
+          for (const rf of activeRequiredFields) {
+            allDiscoveredRequiredRefs.add(rf.ref);
+          }
+        } catch (err: any) {
+          console.warn('Pre-fill scan failed:', err?.message || err);
+        }
+
         // 3d: Fill actionable fields in current section
+        // Fill only controls that are visible in the CURRENT scan
         const actionableFields = activeSectionFields.filter(
-          (field) => !verifiedFieldRefs.has(field.ref)
+          (field) => field.visible && !verifiedFieldRefs.has(field.ref)
         );
 
         if (actionableFields.length > 0) {
           this.stateMachine.transition('FILLING_FORM');
-          for (const field of actionableFields) {
+          for (let field of actionableFields) {
             await this.checkPauseOrStop();
             stepCount += 1;
             if (stepCount > MAX_STEPS) {
@@ -1642,6 +1885,55 @@ export class AgentController {
                 (candidate.field_label && field.label && this.labelsMatch(candidate.field_label, field.label))
             );
             const fieldTrace = scanTrace.fields.find((ft) => ft.ref === field.ref);
+
+            if (isConsentCheckbox(field)) {
+              this.emitEvent(
+                this.buildEvent('STATE_CHANGED', `Left for you: ${field.label}`)
+              );
+              if (fieldTrace) {
+                fieldTrace.skippedReason = 'user skipped';
+              }
+              verifiedFieldRefs.add(field.ref);
+              verifications.push({
+                field_ref: mapping ? mapping.field_ref : field.ref,
+                field_label: field.label,
+                verified: true,
+              });
+              continue;
+            }
+            const normLabel = this.normalizeLabel(field.label);
+            if (
+              (!mapping ||
+                mapping.fact_value === undefined ||
+                mapping.fact_value === null ||
+                !String(mapping.fact_value).trim()) &&
+              this.clarifiedAnswers.has(normLabel)
+            ) {
+              const ans = this.clarifiedAnswers.get(normLabel)!;
+              if (mapping) {
+                mapping.fact_value = ans;
+                mapping.status = 'RESOLVED';
+              } else {
+                mapping = {
+                  field_ref: field.ref,
+                  field_label: field.label,
+                  fact_value: ans,
+                  confidence: 1.0,
+                  status: 'RESOLVED',
+                };
+                mappings.push(mapping);
+              }
+              if (fieldTrace) {
+                fieldTrace.mapping = {
+                  factKey: mapping.fact_key || field.ref,
+                  confidence: 1.0,
+                  source: 'clarification',
+                };
+                fieldTrace.valueAvailable = true;
+                fieldTrace.skippedReason = null;
+              }
+            }
+
             if (
               !mapping ||
               mapping.fact_value === undefined ||
@@ -1669,6 +1961,7 @@ export class AgentController {
                 );
                 const answer = coerceClarificationValue(clarificationResult);
                 if (answer) {
+                  this.clarifiedAnswers.set(normLabel, answer);
                   if (mapping) {
                     mapping.fact_value = answer;
                     mapping.status = 'RESOLVED';
@@ -1698,6 +1991,27 @@ export class AgentController {
                       console.warn('Could not forward clarification answer to backend:', err?.message || err);
                     }
                   }
+
+                  // Re-scan immediately after clarification answer arrives
+                  try {
+                    const postClarifySnapshot = await this.browserManager.scanActiveForm();
+                    const rebound = this.rebindMappings(mappings, postClarifySnapshot, lastFormSnapshot?.fields);
+                    mappings.length = 0;
+                    mappings.push(...rebound);
+                    lastFormSnapshot = postClarifySnapshot;
+                    activeSectionFields = postClarifySnapshot.fields.filter(
+                      (f) => f.visible && !f.disabled && !f.isHoneypot
+                    );
+                    activeRequiredFields = activeSectionFields.filter(
+                      (f) => f.required && !isConsentCheckbox(f)
+                    );
+                    const freshField = activeSectionFields.find(
+                      (f) => this.labelsMatch(f.label, field.label)
+                    );
+                    if (freshField) {
+                      field = freshField;
+                    }
+                  } catch {}
                   this.stateMachine.transition('FILLING_FORM');
                 } else {
                   if (fieldTrace) fieldTrace.skippedReason = 'user skipped';
@@ -1710,8 +2024,87 @@ export class AgentController {
               }
             }
 
+            // Compatibility Gate before any fill:
+            // email field needs email-shaped value, tel digits (7-15), date parseable,
+            // number numeric, select/radio value must match an option via OptionMatcher,
+            // checkbox needs boolean-like value.
+            // On failure do not fill; raise a clarification naming the field label (never the value).
+            const compatCheck = checkFieldCompatibility(field, mapping.fact_value);
+            if (!compatCheck.valid) {
+              this.emitEvent(
+                this.buildEvent(
+                  'TOOL_FAILED',
+                  `Compatibility check failed for '${field.label}'. Clarification required.`,
+                  { success: false, metadata: { fieldRef: field.ref } }
+                )
+              );
+              this.stateMachine.transition('CLARIFICATION_REQUIRED');
+              const compatClarifyId = `clarify_compat_${field.ref}_${Date.now()}`;
+              const prompt: ClarificationPromptPayload = {
+                clarificationId: compatClarifyId,
+                fieldRef: field.ref,
+                fieldLabel: field.label,
+                question: `Please provide a valid value for required field '${field.label}':`,
+                options: field.options || [],
+                total: 1,
+                currentIndex: 1,
+              };
+              const clarifyRes = await this.runTool<any>(
+                'request_clarification',
+                prompt,
+                `Awaiting valid value for '${field.label}'...`,
+                () => `Human provided value for '${field.label}'.`
+              );
+              const answer = coerceClarificationValue(clarifyRes);
+              if (answer) {
+                this.clarifiedAnswers.set(normLabel, answer);
+                mapping.fact_value = answer;
+                mapping.status = 'RESOLVED';
+                if (fieldTrace) {
+                  fieldTrace.mapping.source = 'clarification';
+                  fieldTrace.valueAvailable = true;
+                }
+                try {
+                  await this.backendClient.answerClarification(this.sessionId, compatClarifyId, answer);
+                } catch (err: any) {
+                  if (err?.status !== 404) {
+                    console.warn('Could not forward clarification answer to backend:', err?.message || err);
+                  }
+                }
+
+                // Re-scan immediately after clarification answer arrives
+                try {
+                  const postClarifySnapshot = await this.browserManager.scanActiveForm();
+                  const rebound = this.rebindMappings(mappings, postClarifySnapshot, lastFormSnapshot?.fields);
+                  mappings.length = 0;
+                  mappings.push(...rebound);
+                  lastFormSnapshot = postClarifySnapshot;
+                  activeSectionFields = postClarifySnapshot.fields.filter(
+                    (f) => f.visible && !f.disabled && !f.isHoneypot
+                  );
+                  activeRequiredFields = activeSectionFields.filter(
+                    (f) => f.required && !isConsentCheckbox(f)
+                  );
+                  const freshField = activeSectionFields.find(
+                    (f) => this.labelsMatch(f.label, field.label)
+                  );
+                  if (freshField) {
+                    field = freshField;
+                  }
+                } catch {}
+                this.stateMachine.transition('FILLING_FORM');
+                const recheck = checkFieldCompatibility(field, answer);
+                if (!recheck.valid) {
+                  if (fieldTrace) fieldTrace.skippedReason = 'user skipped';
+                  continue;
+                }
+              } else {
+                if (fieldTrace) fieldTrace.skippedReason = 'user skipped';
+                continue;
+              }
+            }
+
             // For select and radio fields, validate option match against available choices locally.
-            // Below confidence threshold, emit TOOL_FAILED and raise clarification instead of guessing.
             if (
               (field.type === 'select' || field.type === 'radio') &&
               field.options &&
@@ -1721,51 +2114,6 @@ export class AgentController {
               const optionMatch = matchOption(String(mapping.fact_value), field.options);
               if (optionMatch.matchedOption) {
                 mapping.fact_value = optionMatch.matchedOption;
-              } else if (optionMatch.needsClarification) {
-                this.emitEvent(
-                  this.buildEvent(
-                    'TOOL_FAILED',
-                    `Could not match option for '${field.label}' (confidence ${(optionMatch.confidence * 100).toFixed(0)}% below threshold). Clarification required.`,
-                    { success: false, metadata: { fieldRef: field.ref } }
-                  )
-                );
-                this.stateMachine.transition('CLARIFICATION_REQUIRED');
-                const optionClarifyId = `clarify_opt_${field.ref}_${Date.now()}`;
-                const prompt: ClarificationPromptPayload = {
-                  clarificationId: optionClarifyId,
-                  fieldRef: field.ref,
-                  fieldLabel: field.label,
-                  question: `Please select an option for '${field.label}':`,
-                  options: field.options || [],
-                  total: 1,
-                  currentIndex: 1,
-                };
-                const clarifyRes = await this.runTool<any>(
-                  'request_clarification',
-                  prompt,
-                  `Awaiting option selection for '${field.label}'...`,
-                  () => `Human selected option for '${field.label}'.`
-                );
-                const answer = coerceClarificationValue(clarifyRes);
-                if (answer) {
-                  mapping.fact_value = answer;
-                  mapping.status = 'RESOLVED';
-                  if (fieldTrace) {
-                    fieldTrace.mapping.source = 'clarification';
-                    fieldTrace.valueAvailable = true;
-                  }
-                  try {
-                    await this.backendClient.answerClarification(this.sessionId, optionClarifyId, answer);
-                  } catch (err: any) {
-                    if (err?.status !== 404) {
-                      console.warn('Could not forward clarification answer to backend:', err?.message || err);
-                    }
-                  }
-                  this.stateMachine.transition('FILLING_FORM');
-                } else {
-                  if (fieldTrace) fieldTrace.skippedReason = 'user skipped';
-                  continue;
-                }
               }
             }
 
@@ -1774,13 +2122,15 @@ export class AgentController {
             let attempts = 0;
             const MAX_FILL_ATTEMPTS = 2;
             const fieldStrategy =
-              field.type === 'select'
+              field.type === 'select' || field.type === 'combobox'
                 ? 'select_option'
                 : field.type === 'radio'
                   ? 'select_radio'
                   : field.type === 'checkbox'
                     ? 'set_checkbox'
                     : 'fill_text';
+
+            mapping.field_ref = field.ref;
 
             while (!isVerified && attempts < MAX_FILL_ATTEMPTS) {
               attempts += 1;
@@ -1803,7 +2153,7 @@ export class AgentController {
                   this.buildEvent(
                     'TOOL_FAILED',
                     `Fill attempt ${attempts} for '${field.label}' failed: ${fieldError?.message || 'could not be populated'}`,
-                    { success: false, metadata: { fieldRef: mapping.field_ref } }
+                    { success: false, metadata: { fieldRef: field.ref } }
                   )
                 );
               }
@@ -1817,7 +2167,7 @@ export class AgentController {
                 classification?: 'match' | 'normalized-match' | 'mismatch' | 'empty' | 'unreadable';
               }>(
                 'verify_field',
-                { fieldRef: mapping.field_ref, expectedValue: mapping.fact_value },
+                { fieldRef: field.ref, expectedValue: mapping.fact_value },
                 `Verifying '${mapping.field_label}' in browser DOM...`,
                 (outcome) =>
                   outcome.verified
@@ -1841,91 +2191,6 @@ export class AgentController {
               }
             }
 
-            // If verification failed and field is required:
-            // "If verification fails, retry safely or request clarification."
-            // "Simulate a typo/mismatched value and prove the agent retries or requests clarification instead of advancing."
-            if (!isVerified && field.required) {
-              this.stateMachine.transition('CLARIFICATION_REQUIRED');
-              const clarifyFixId = `clarify_fix_${mapping.field_ref}_${Date.now()}`;
-              const prompt: ClarificationPromptPayload = {
-                clarificationId: clarifyFixId,
-                fieldRef: mapping.field_ref,
-                fieldLabel: mapping.field_label,
-                question: `Verification failed for '${mapping.field_label}'. Please confirm or provide correct value:`,
-                options: field.options || [],
-                total: 1,
-                currentIndex: 1,
-              };
-
-              const clarificationResult = await this.runTool<any>(
-                'request_clarification',
-                prompt,
-                `Awaiting correction for '${mapping.field_label}'...`,
-                () => `Human provided corrected value for '${mapping.field_label}'.`
-              );
-
-              const correctedAnswer = coerceClarificationValue(clarificationResult);
-              if (correctedAnswer) {
-                mapping.fact_value = correctedAnswer;
-                mapping.status = 'RESOLVED';
-                if (fieldTrace) {
-                  fieldTrace.mapping.source = 'clarification';
-                  fieldTrace.valueAvailable = true;
-                }
-                try {
-                  await this.backendClient.answerClarification(
-                    this.sessionId,
-                    clarifyFixId,
-                    correctedAnswer
-                  );
-                } catch (err: any) {
-                  if (err?.status !== 404) {
-                    console.warn('Could not forward clarification answer to backend:', err?.message || err);
-                  }
-                }
-
-                this.stateMachine.transition('FILLING_FORM');
-                try {
-                  const strat = await this.fillField(mapping, field);
-                  if (fieldTrace) {
-                    fieldTrace.fillStrategies.push({ strategy: strat, outcome: 'ok' });
-                  }
-                } catch (err: any) {
-                  if (err?.name === 'OperationCancelledError') throw err;
-                  if (fieldTrace) {
-                    fieldTrace.fillStrategies.push({
-                      strategy: fieldStrategy,
-                      outcome: err?.name || 'error',
-                    });
-                  }
-                }
-
-                this.stateMachine.transition('VERIFYING');
-                const retryVerify = await this.runTool<{
-                  verified: boolean;
-                  actualValue: string;
-                  expectedValue: string;
-                  classification?: 'match' | 'normalized-match' | 'mismatch' | 'empty' | 'unreadable';
-                }>(
-                  'verify_field',
-                  { fieldRef: mapping.field_ref, expectedValue: mapping.fact_value },
-                  `Verifying corrected '${mapping.field_label}' in browser DOM...`,
-                  (outcome) =>
-                    outcome.verified
-                      ? `Verified '${mapping.field_label}' in browser DOM.`
-                      : `Mismatch on '${mapping.field_label}'.`,
-                  true
-                );
-                if (fieldTrace) {
-                  fieldTrace.domReadBack =
-                    retryVerify.classification || (retryVerify.verified ? 'match' : 'mismatch');
-                }
-                if (retryVerify.verified) {
-                  isVerified = true;
-                }
-              }
-            }
-
             // Required invariant: A field is COMPLETE only when actual DOM value is successfully filled AND verified
             if (isVerified) {
               verifiedFieldRefs.add(field.ref);
@@ -1936,6 +2201,9 @@ export class AgentController {
                 verified: true,
               });
             } else {
+              this.emitEvent(
+                this.buildEvent('STATE_CHANGED', `Left for you: ${field.label}`)
+              );
               failedFields.push({
                 field_ref: mapping.field_ref,
                 field_label: field.label,
@@ -1958,50 +2226,77 @@ export class AgentController {
         // "Never advance to Continue while required browser fields remain unverified."
         // "Do not Continue while any required field is unresolved."
         let unverifiedRequired = activeRequiredFields.filter(
-          (rf) => !verifiedFieldRefs.has(rf.ref)
+          (rf) => !verifiedFieldRefs.has(rf.ref) && !isConsentCheckbox(rf)
         );
 
         if (unverifiedRequired.length > 0) {
-          const resolveRemaining: ClarificationRequest[] = unverifiedRequired.map((rf) => ({
-            clarification_id: `clarify_req_${rf.ref}_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`,
-            field_ref: rf.ref,
-            field_label: rf.label,
-            question: `Please provide value for required field '${rf.label}':`,
-            options: rf.options || [],
-            selected_value: '',
-          }));
+          // Bring browser window to front
+          await this.browserManager.bringToFront();
 
+          const blockedLabels = unverifiedRequired.map((f) => f.label).join(', ');
+          const bannerMsg = `Couldn't fill ${blockedLabels}. Fill it in the browser window, then press I'm done, continue`;
+
+          this.isTakeoverState = true;
+          this.pendingUnfilledRequired = [...unverifiedRequired];
+          this.currentRunTrace.blockedNavigationReason = `Unverified required field(s): ${blockedLabels}`;
+          this.stateMachine.transition('USER_TAKEOVER');
+          this.emitEvent(
+            this.buildEvent('STATE_CHANGED', bannerMsg, {
+              metadata: {
+                blockerType: 'unfilled-required',
+                plainDescription: bannerMsg,
+                unverifiedRequired: unverifiedRequired.map((f) => f.ref),
+              },
+            })
+          );
+
+          // Wait for user (require explicit operator continue)
           try {
-            await this.resolveClarifications(resolveRemaining, mappings);
-            for (const rf of unverifiedRequired) {
-              const m = mappings.find(
-                (cand) =>
-                  cand.field_ref === rf.ref ||
-                  (cand.field_label && rf.label && this.labelsMatch(cand.field_label, rf.label))
-              );
-              if (m && m.fact_value) {
-                this.stateMachine.transition('FILLING_FORM');
-                await this.fillField(m, rf);
-                this.stateMachine.transition('VERIFYING');
-                const verifyRes = await this.runTool<{ verified: boolean }>(
-                  'verify_field',
-                  { fieldRef: rf.ref, expectedValue: m.fact_value },
-                  `Verifying '${rf.label}' in browser DOM...`,
-                  (out) => out.verified ? `Verified '${rf.label}' in browser DOM.` : `Mismatch on '${rf.label}'.`,
-                  true
-                );
-                if (verifyRes.verified) {
-                  verifiedFieldRefs.add(rf.ref);
-                  verifiedCount += 1;
+            await this.browserManager.waitUntilReady(this.abortController?.signal, true);
+          } catch (err: any) {
+            if (this.isStoppedState || err?.name === 'OperationCancelledError') {
+              throw new OperationCancelledError();
+            }
+            throw err;
+          } finally {
+            this.isTakeoverState = false;
+            this.pendingUnfilledRequired = [];
+          }
+
+          if (this.stateMachine.getState() === 'USER_TAKEOVER') {
+            this.stateMachine.transition('VERIFYING');
+          }
+
+          // Then re-verify by reading the DOM using verifyField
+          for (const rf of unverifiedRequired) {
+            let hasValue = false;
+            try {
+              const res = await this.browserManager.verifyField(rf.ref, '');
+              if (res.classification !== 'empty' && res.classification !== 'unreadable') {
+                hasValue = true;
+              }
+            } catch {
+              const loc = this.browserManager.getScanner().getLocator(rf.ref);
+              if (loc) {
+                const val = (await loc.inputValue().catch(() => '')) || '';
+                if (val.trim().length > 0) {
+                  hasValue = true;
                 }
               }
             }
-          } catch (clarifyErr: any) {
-            console.warn('Clarification resolution for unverified fields interrupted:', clarifyErr?.message);
+            if (hasValue) {
+              verifiedFieldRefs.add(rf.ref);
+              verifiedCount += 1;
+              verifications.push({
+                field_ref: rf.ref,
+                field_label: rf.label,
+                verified: true,
+              });
+            }
           }
 
           unverifiedRequired = activeRequiredFields.filter(
-            (rf) => !verifiedFieldRefs.has(rf.ref)
+            (rf) => !verifiedFieldRefs.has(rf.ref) && !isConsentCheckbox(rf)
           );
         }
 
@@ -2020,9 +2315,6 @@ export class AgentController {
               }
             )
           );
-          if (this.stateMachine.getState() !== 'CLARIFICATION_REQUIRED') {
-            this.stateMachine.transition('CLARIFICATION_REQUIRED');
-          }
           break; // Stop loop! Do NOT Continue!
         }
 
@@ -2182,7 +2474,15 @@ export class AgentController {
       }
     } finally {
       this.saveAndPrintRunTrace();
-      await this.purgeSessionSafely();
+      const finalState = this.stateMachine.getState();
+      const isAwaitingUser =
+        finalState === 'REVIEW_READY' ||
+        finalState === 'USER_TAKEOVER' ||
+        finalState === 'CLARIFICATION_REQUIRED';
+
+      if (!isAwaitingUser) {
+        await this.purgeSessionSafely();
+      }
       this.isRunning = false;
       this.abortController = null;
       if (this.isStoppedState && this.stateMachine.getState() !== 'IDLE') {
@@ -2297,7 +2597,7 @@ export class AgentController {
     const label = field.label;
     const value = String(mapping.fact_value ?? '');
 
-    if (field.type === 'select') {
+    if (field.type === 'select' || field.type === 'combobox') {
       let optionVal = value;
       if (field.options && field.options.length > 0) {
         const match = matchOption(value, field.options);
@@ -2305,16 +2605,22 @@ export class AgentController {
           optionVal = match.matchedOption;
         }
       }
-      await this.runTool(
-        'select_option',
-        { fieldRef: field.ref, option: optionVal },
-        `Selecting option for '${label}'...`,
-        (result: any) =>
-          result.success
-            ? `Selected option for '${label}'.`
-            : `Could not select option for '${label}'.`,
-        false
-      );
+      try {
+        await this.runTool(
+          'select_option',
+          { fieldRef: field.ref, option: optionVal },
+          `Selecting option for '${label}'...`,
+          (result: any) =>
+            result.success
+              ? `Selected option for '${label}'.`
+              : `Could not select option for '${label}'.`,
+          false
+        );
+      } catch (err: any) {
+        if (err?.name === 'OperationCancelledError') throw err;
+        this.emitEvent(this.buildEvent('STATE_CHANGED', `Left for you: ${field.label}`));
+        return 'select_option';
+      }
       return 'select_option';
     }
 

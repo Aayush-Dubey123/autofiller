@@ -13,6 +13,8 @@ import * as fs from 'fs';
 import { chromium, Browser, BrowserContext, Page, Locator } from 'playwright';
 import { FormScanner, FormSnapshot, BlockerDetectionResult, FormReadinessState } from './FormScanner';
 import { PolicyEngine, SubmissionControl } from '../policy/PolicyEngine';
+import { PageCensusRecord, FrameCensus } from '../shared/types';
+import { matchOption } from '../agent/OptionMatcher';
 
 /** Error raised when the operator cancels an in-flight browser operation. */
 export class OperationCancelledError extends Error {
@@ -20,6 +22,24 @@ export class OperationCancelledError extends Error {
     super(message);
     this.name = 'OperationCancelledError';
   }
+}
+
+export interface FailureEvidenceItem {
+  frame: string;
+  visible: boolean;
+  boundingBox: { width: number; height: number };
+  computed: { display: string; visibility: string; opacity: string };
+  firstHidingAncestor: string | null;
+  insideAriaHiddenOrHidden: boolean;
+  visibleInputsInContainer: number;
+}
+
+export interface FailureEvidenceRecord {
+  fieldRef: string;
+  fieldLabel: string;
+  matchingCount: number;
+  matches: FailureEvidenceItem[];
+  screenshotPath?: string;
 }
 
 export class BrowserManager {
@@ -32,6 +52,8 @@ export class BrowserManager {
   private changeWaiters: Array<() => void> = [];
   private unblocked: boolean = false;
   private navStartTime: number = 0;
+  private failureScreenshotSaved: boolean = false;
+  private failureScreenshotPath: string | null = null;
 
   constructor() {
     this.scanner = new FormScanner();
@@ -306,6 +328,14 @@ export class BrowserManager {
     });
   }
 
+  public hasOpenPage(): boolean {
+    return this.page !== null && !this.page.isClosed();
+  }
+
+  public getScanner(): FormScanner {
+    return this.scanner;
+  }
+
   /**
    * Scan the active web form into a structured FormSnapshot.
    *
@@ -329,6 +359,183 @@ export class BrowserManager {
       return { type: 'none', reason: 'Browser page is not open.' };
     }
     return await this.scanner.detectBlockerOnPage(this.page, waitMs);
+  }
+
+  /**
+   * Save a full-page diagnostic screenshot to the given path.
+   */
+  public async saveScreenshot(targetPath: string): Promise<string> {
+    if (!this.page) return '';
+    try {
+      const parentDir = path.dirname(targetPath);
+      if (!fs.existsSync(parentDir)) {
+        fs.mkdirSync(parentDir, { recursive: true });
+      }
+      await this.page.screenshot({ path: targetPath, fullPage: true });
+      return targetPath;
+    } catch (err: any) {
+      console.warn('Could not save diagnostic screenshot:', err?.message || err);
+      return '';
+    }
+  }
+
+  /**
+   * Collect a complete page census across the main frame and all iframes (metadata only, no text values).
+   */
+  public async collectPageCensus(blockerResult?: BlockerDetectionResult): Promise<PageCensusRecord> {
+    if (!this.page) {
+      return {
+        finalUrlHost: '',
+        finalUrlPath: '',
+        pageTitle: '',
+        matchedBlockerRule: blockerResult?.matchedRule || null,
+        triggerElementOrHost: blockerResult?.triggerElementOrHost || null,
+        screenshotPath: null,
+        frames: [],
+      };
+    }
+
+    const pageUrl = this.page.url();
+    let finalUrlHost = '';
+    let finalUrlPath = '';
+    try {
+      const parsed = new URL(pageUrl);
+      finalUrlHost = parsed.hostname;
+      finalUrlPath = parsed.pathname;
+    } catch {
+      finalUrlHost = pageUrl;
+    }
+    const pageTitle = await this.page.title().catch(() => '');
+
+    const frames = this.page.frames();
+    const frameCensuses: FrameCensus[] = [];
+
+    for (let i = 0; i < frames.length; i++) {
+      const frame = frames[i];
+      const isMain = frame === this.page.mainFrame();
+      const fUrl = frame.url();
+      let fHostAndPath = '';
+      try {
+        const pu = new URL(fUrl);
+        fHostAndPath = `${pu.hostname}${pu.pathname}`;
+      } catch {
+        fHostAndPath = fUrl;
+      }
+
+      try {
+        const counts = await frame.evaluate(() => {
+          const isVisible = (el: Element): boolean => {
+            const htmlEl = el as HTMLElement;
+            if (!htmlEl) return false;
+            if (htmlEl.hidden || htmlEl.getAttribute('aria-hidden') === 'true') return false;
+            if (htmlEl.offsetParent === null && htmlEl.tagName.toLowerCase() !== 'body') {
+              if (htmlEl.style.position !== 'fixed' && htmlEl.style.position !== 'sticky') {
+                const rect = htmlEl.getBoundingClientRect();
+                if (rect.width === 0 && rect.height === 0) return false;
+              }
+            }
+            const cs = window.getComputedStyle(htmlEl);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') return false;
+            if (parseFloat(cs.opacity || '1') === 0) return false;
+            return true;
+          };
+
+          const inputsByType: { visible: Record<string, number>; hidden: Record<string, number> } = {
+            visible: {},
+            hidden: {},
+          };
+          document.querySelectorAll('input').forEach((inp) => {
+            const t = (inp.getAttribute('type') || 'text').toLowerCase().trim();
+            const vis = isVisible(inp);
+            const target = vis ? inputsByType.visible : inputsByType.hidden;
+            target[t] = (target[t] || 0) + 1;
+          });
+
+          const countTagOrRole = (selector: string) => {
+            let visible = 0;
+            let hidden = 0;
+            document.querySelectorAll(selector).forEach((el) => {
+              if (isVisible(el)) visible++;
+              else hidden++;
+            });
+            return { visible, hidden };
+          };
+
+          const textarea = countTagOrRole('textarea');
+          const select = countTagOrRole('select');
+          const roleRadio = countTagOrRole('[role="radio"]');
+          const roleCheckbox = countTagOrRole('[role="checkbox"]');
+          const roleListbox = countTagOrRole('[role="listbox"]');
+          const roleCombobox = countTagOrRole('[role="combobox"]');
+          const contenteditable = countTagOrRole('[contenteditable="true"], [contenteditable=""]');
+
+          let hasShadowRoots = false;
+          try {
+            const all = document.querySelectorAll('*');
+            for (let j = 0; j < all.length; j++) {
+              if (all[j].shadowRoot) {
+                hasShadowRoots = true;
+                break;
+              }
+            }
+          } catch {}
+
+          return {
+            inputsByType,
+            textarea,
+            select,
+            roleRadio,
+            roleCheckbox,
+            roleListbox,
+            roleCombobox,
+            contenteditable,
+            hasShadowRoots,
+          };
+        });
+
+        frameCensuses.push({
+          frameId: `frame_${i}${isMain ? '_main' : ''}`,
+          url: fHostAndPath,
+          name: frame.name() || undefined,
+          isMainFrame: isMain,
+          inputsByType: counts ? counts.inputsByType : { visible: {}, hidden: {} },
+          textarea: counts ? counts.textarea : { visible: 0, hidden: 0 },
+          select: counts ? counts.select : { visible: 0, hidden: 0 },
+          roleRadio: counts ? counts.roleRadio : { visible: 0, hidden: 0 },
+          roleCheckbox: counts ? counts.roleCheckbox : { visible: 0, hidden: 0 },
+          roleListbox: counts ? counts.roleListbox : { visible: 0, hidden: 0 },
+          roleCombobox: counts ? counts.roleCombobox : { visible: 0, hidden: 0 },
+          contenteditable: counts ? counts.contenteditable : { visible: 0, hidden: 0 },
+          hasShadowRoots: counts ? counts.hasShadowRoots : false,
+        });
+      } catch (err: any) {
+        frameCensuses.push({
+          frameId: `frame_${i}${isMain ? '_main' : ''}`,
+          url: fHostAndPath,
+          name: frame.name() || undefined,
+          isMainFrame: isMain,
+          inputsByType: { visible: {}, hidden: {} },
+          textarea: { visible: 0, hidden: 0 },
+          select: { visible: 0, hidden: 0 },
+          roleRadio: { visible: 0, hidden: 0 },
+          roleCheckbox: { visible: 0, hidden: 0 },
+          roleListbox: { visible: 0, hidden: 0 },
+          roleCombobox: { visible: 0, hidden: 0 },
+          contenteditable: { visible: 0, hidden: 0 },
+          hasShadowRoots: false,
+        });
+      }
+    }
+
+    return {
+      finalUrlHost,
+      finalUrlPath,
+      pageTitle,
+      matchedBlockerRule: blockerResult?.matchedRule || null,
+      triggerElementOrHost: blockerResult?.triggerElementOrHost || null,
+      screenshotPath: null,
+      frames: frameCensuses,
+    };
   }
 
   /**
@@ -444,7 +651,10 @@ export class BrowserManager {
     this.notifyChange('unblocked');
   }
 
-  public async waitUntilReady(signal?: AbortSignal): Promise<FormReadinessState> {
+  public async waitUntilReady(
+    signal?: AbortSignal,
+    requireExplicitUnblock: boolean = false
+  ): Promise<FormReadinessState> {
     const TIMEOUT_MS = 15 * 60 * 1000;
     const startTime = Date.now();
 
@@ -521,7 +731,7 @@ export class BrowserManager {
 
       const now = Date.now();
 
-      if (state.blocker.type === 'none' && state.fillableVisibleCount >= 1) {
+      if (!requireExplicitUnblock && state.blocker.type === 'none' && state.fillableVisibleCount >= 1) {
         if (candidateSignature === state.fieldSignature) {
           if (now - candidateTimestamp >= 240) {
             // READY: no blocker, fillableVisibleCount >= 1, and the same fieldSignature
@@ -534,7 +744,7 @@ export class BrowserManager {
           candidateSignature = state.fieldSignature;
           candidateTimestamp = now;
         }
-      } else {
+      } else if (!requireExplicitUnblock) {
         // Blocker present or no fillable fields yet; reset candidate
         candidateSignature = null;
         candidateTimestamp = 0;
@@ -661,13 +871,17 @@ export class BrowserManager {
   public isDateField(fieldRef: string): boolean {
     const name = (this.scanner.getName(fieldRef) || '').toLowerCase();
     const selector = (this.scanner.getSelector(fieldRef) || '').toLowerCase();
+    const label = (this.scanner.getLabel(fieldRef) || '').toLowerCase();
     return (
       name.includes('dob') ||
       name.includes('birth') ||
       name.includes('date') ||
       selector.includes('dob') ||
       selector.includes('birth') ||
-      selector.includes('date')
+      selector.includes('date') ||
+      label.includes('dob') ||
+      label.includes('birth') ||
+      label.includes('date')
     );
   }
 
@@ -728,6 +942,295 @@ export class BrowserManager {
   }
 
   /**
+   * Helper to retrieve electron userData or filesystem equivalent directory.
+   */
+  private getUserDataDir(): string {
+    try {
+      const { app } = require('electron');
+      if (app && typeof app.getPath === 'function') {
+        return app.getPath('userData');
+      }
+    } catch {}
+    const base = process.env.APPDATA || process.env.HOME || process.cwd();
+    const dir = path.join(base, '.autofiller-userData');
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    return dir;
+  }
+
+  /**
+   * Capture failure evidence metadata (strictly no values) across matching elements in all frames.
+   * Also saves screenshot at the first failure to the Electron userData folder.
+   */
+  public async captureFailureEvidence(
+    fieldRef: string,
+    fieldLabel: string
+  ): Promise<FailureEvidenceRecord> {
+    const evidence: FailureEvidenceRecord = {
+      fieldRef,
+      fieldLabel,
+      matchingCount: 0,
+      matches: [],
+    };
+
+    if (!this.page) return evidence;
+
+    const frames = this.page.frames();
+    for (const frame of frames) {
+      try {
+        const frameMatches = await frame.evaluate((ref: string) => {
+          let elements = Array.from(document.querySelectorAll(`[data-af-ref="${ref}"]`));
+          if (elements.length === 0) {
+            elements = Array.from(
+              document.querySelectorAll(`input[name="${ref}"], textarea[name="${ref}"], select[name="${ref}"]`)
+            );
+          }
+
+          return elements.map((el) => {
+            const htmlEl = el as HTMLElement;
+            const cs = window.getComputedStyle(htmlEl);
+            const rect = htmlEl.getBoundingClientRect();
+
+            let firstHidingAncestor: string | null = null;
+            let insideAriaHiddenOrHidden = false;
+
+            let parent = htmlEl.parentElement;
+            while (parent && parent !== document.body && parent !== document.documentElement) {
+              if (parent.hidden || parent.getAttribute('aria-hidden') === 'true' || parent.hasAttribute('hidden')) {
+                insideAriaHiddenOrHidden = true;
+              }
+              const ps = window.getComputedStyle(parent);
+              if (
+                !firstHidingAncestor &&
+                (ps.display === 'none' ||
+                  ps.visibility === 'hidden' ||
+                  ps.visibility === 'collapse' ||
+                  parseFloat(ps.opacity || '1') === 0)
+              ) {
+                const tag = parent.tagName.toLowerCase();
+                const idStr = parent.id ? `#${parent.id}` : '';
+                const classStr =
+                  parent.className && typeof parent.className === 'string'
+                    ? `.${parent.className.trim().split(/\s+/).join('.')}`
+                    : '';
+                firstHidingAncestor = `${tag}${idStr}${classStr} (style.${ps.display === 'none' ? 'display=none' : ps.visibility === 'hidden' ? 'visibility=hidden' : 'opacity=0'})`;
+              }
+              if (!firstHidingAncestor && (parent.hidden || parent.hasAttribute('hidden'))) {
+                firstHidingAncestor = `${parent.tagName.toLowerCase()} ([hidden])`;
+              }
+              parent = parent.parentElement;
+            }
+
+            let visibleInputsInContainer = 0;
+            const container =
+              htmlEl.closest('[role="listitem"], .question-block, .geS5n, fieldset, form') ||
+              htmlEl.parentElement;
+            if (container) {
+              const inputs = Array.from(container.querySelectorAll('input:not([type="hidden"]), select, textarea'));
+              for (const inp of inputs) {
+                const ics = window.getComputedStyle(inp as HTMLElement);
+                const irect = inp.getBoundingClientRect();
+                if (
+                  ics.display !== 'none' &&
+                  ics.visibility !== 'hidden' &&
+                  parseFloat(ics.opacity || '1') > 0 &&
+                  irect.width > 0 &&
+                  irect.height > 0
+                ) {
+                  visibleInputsInContainer++;
+                }
+              }
+            }
+
+            const isVis =
+              cs.display !== 'none' &&
+              cs.visibility !== 'hidden' &&
+              parseFloat(cs.opacity || '1') > 0 &&
+              rect.width > 0 &&
+              rect.height > 0 &&
+              !firstHidingAncestor;
+
+            return {
+              visible: isVis,
+              boundingBox: { width: Math.round(rect.width), height: Math.round(rect.height) },
+              computed: {
+                display: cs.display || 'inline',
+                visibility: cs.visibility || 'visible',
+                opacity: cs.opacity || '1',
+              },
+              firstHidingAncestor,
+              insideAriaHiddenOrHidden,
+              visibleInputsInContainer,
+            };
+          });
+        }, fieldRef);
+
+        const fName = frame.name() || (frame === this.page.mainFrame() ? 'main' : frame.url());
+        for (const fm of frameMatches) {
+          evidence.matches.push({
+            ...fm,
+            frame: fName,
+          });
+        }
+      } catch {}
+    }
+
+    evidence.matchingCount = evidence.matches.length;
+
+    // Save screenshot at the first failure to the Electron userData folder (overwritten each run)
+    if (!this.failureScreenshotSaved) {
+      try {
+        const userDataDir = this.getUserDataDir();
+        const screenshotPath = path.join(userDataDir, 'failure_evidence.png');
+        await this.page.screenshot({ path: screenshotPath });
+        this.failureScreenshotSaved = true;
+        this.failureScreenshotPath = screenshotPath;
+        evidence.screenshotPath = screenshotPath;
+        console.log(`Saved failure evidence screenshot to: ${screenshotPath}`);
+      } catch (err: any) {
+        console.warn('Could not save failure evidence screenshot:', err?.message || err);
+      }
+    } else if (this.failureScreenshotPath) {
+      evidence.screenshotPath = this.failureScreenshotPath;
+    }
+
+    // Print failure evidence lines
+    console.log(`[Failure Evidence] Field '${fieldLabel}' (${fieldRef}): ${evidence.matchingCount} match(es)`);
+    evidence.matches.forEach((m, idx) => {
+      const hiding = m.firstHidingAncestor ? `, hidden by ${m.firstHidingAncestor}` : '';
+      const ariaHide = m.insideAriaHiddenOrHidden ? ', inside aria-hidden/hidden' : '';
+      console.log(
+        `  Match ${idx + 1} (${m.frame}): visible=${m.visible}, size=${m.boundingBox.width}x${m.boundingBox.height}, display=${m.computed.display}, visibility=${m.computed.visibility}, opacity=${m.computed.opacity}${hiding}${ariaHide}, visibleInputsInContainer=${m.visibleInputsInContainer}`
+      );
+    });
+
+    return evidence;
+  }
+
+  /**
+   * Re-resolve a field candidate by label inside the same question container, preferring the visible candidate.
+   */
+  private async reResolveVisibleCandidate(fieldRef: string): Promise<boolean> {
+    if (!this.page) return false;
+    const label = this.scanner.getLabel(fieldRef) || '';
+    const frames = this.page.frames();
+
+    for (const frame of frames) {
+      try {
+        const found = await frame.evaluate(
+          ({ ref, targetLabel }: { ref: string; targetLabel: string }) => {
+            const isVisible = (el: Element): boolean => {
+              const htmlEl = el as HTMLElement;
+              if (!htmlEl) return false;
+              if (htmlEl.hidden || htmlEl.getAttribute('aria-hidden') === 'true') return false;
+              const cs = window.getComputedStyle(htmlEl);
+              if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') return false;
+              if (parseFloat(cs.opacity || '1') === 0) return false;
+              const r = htmlEl.getBoundingClientRect();
+              if (r.width === 0 && r.height === 0) return false;
+              if (htmlEl.offsetParent === null && htmlEl.tagName.toLowerCase() !== 'body') return false;
+              return true;
+            };
+
+            // 1. Locate existing element tagged with data-af-ref
+            let existing = document.querySelector(`[data-af-ref="${ref}"]`);
+            let container: Element | null = null;
+            if (existing) {
+              container = existing.closest('[role="listitem"], .question-block, .geS5n, fieldset');
+            }
+
+            // 2. If no container yet, find container by label text
+            if (!container && targetLabel) {
+              const normTarget = targetLabel.toLowerCase().trim().replace(/[\s*:]+/g, ' ');
+              const headings = Array.from(
+                document.querySelectorAll('[role="heading"], label, .q-label, legend, h1, h2, h3, h4, h5, h6')
+              );
+              for (const h of headings) {
+                const hText = (h.textContent || '').toLowerCase().trim().replace(/[\s*:]+/g, ' ');
+                if (hText && (hText.includes(normTarget) || normTarget.includes(hText))) {
+                  container = h.closest('[role="listitem"], .question-block, .geS5n, fieldset') || h.parentElement;
+                  if (container) break;
+                }
+              }
+            }
+
+            if (!container) return false;
+
+            // 3. Find candidates inside container and prefer the VISIBLE candidate
+            const candidates = Array.from(
+              container.querySelectorAll(
+                'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="password"]), select, textarea'
+              )
+            );
+
+            const visibleCandidate = candidates.find((c) => isVisible(c));
+            if (visibleCandidate) {
+              visibleCandidate.setAttribute('data-af-ref', ref);
+              return true;
+            }
+
+            return false;
+          },
+          { ref: fieldRef, targetLabel: label }
+        );
+
+        if (found) {
+          this.scanner.setLocator(fieldRef, frame.locator(`[data-af-ref="${fieldRef}"]`).first());
+          return true;
+        }
+      } catch {}
+    }
+    return false;
+  }
+
+  /**
+   * Click the visible question container or label to focus it.
+   */
+  private async focusQuestionContainerOrLabel(
+    fieldRef: string,
+    label: string,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    if (!this.page) return false;
+    const frame = this.scanner.getFrame(fieldRef) || this.page.mainFrame();
+
+    try {
+      const containerLoc = frame
+        .locator(`[data-af-ref="${fieldRef}"]`)
+        .locator('xpath=ancestor::*[@role="listitem" or contains(@class,"question-block") or contains(@class,"geS5n") or self::label][1]');
+
+      if ((await containerLoc.count()) > 0) {
+        await this.withCancellation(signal, containerLoc.first().click({ timeout: timeoutMs }));
+        const targetInput = frame.locator(`[data-af-ref="${fieldRef}"]`).first();
+        if ((await targetInput.count()) > 0) {
+          await this.withCancellation(signal, targetInput.focus().catch(() => {}));
+          return true;
+        }
+      }
+    } catch {}
+
+    if (label) {
+      try {
+        const cleanLabel = label.replace(/[*:]+/g, '').trim();
+        const labelLoc = frame.locator(`text="${cleanLabel}"`).first();
+        if ((await labelLoc.count()) > 0) {
+          await this.withCancellation(signal, labelLoc.click({ timeout: timeoutMs }));
+          const container = labelLoc.locator('xpath=ancestor::*[@role="listitem" or contains(@class,"question-block") or contains(@class,"geS5n") or self::label][1]');
+          const inputInContainer = container.locator('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), select, textarea').first();
+          if ((await inputInContainer.count()) > 0) {
+            await this.withCancellation(signal, inputInContainer.focus().catch(() => {}));
+            return true;
+          }
+        }
+      } catch {}
+    }
+
+    return false;
+  }
+
+  /**
    * Resolve the locator and selector for a field reference.
    *
    * @param fieldRef Stable field reference such as 'field_001'.
@@ -744,7 +1247,14 @@ export class BrowserManager {
   }
 
   /**
-   * Populate a text, email, number, date, or textarea field.
+   * Populate a text, email, number, date, or textarea field using the 4-step Fill Ladder.
+   *
+   * Budget: about 10 s per field that does not shrink across attempts.
+   * Step a: Scroll into view and fill.
+   * Step b: If not visible / detached / multiple matches: re-scan, re-resolve by label inside container, prefer VISIBLE candidate, retry.
+   * Step c: Click visible container or label to focus it, then type with keyboard.
+   * Step d: Native value setter + input/change/blur events, only if control or its label is visible.
+   * Reads state back (match / mismatch / empty) after each attempt.
    *
    * @param fieldRef Stable field reference.
    * @param value Value to type into the field.
@@ -756,15 +1266,19 @@ export class BrowserManager {
     value: string,
     signal?: AbortSignal
   ): Promise<{ success: boolean; actualValue: string; expectedValue: string }> {
-    const { locator } = this.resolveField(fieldRef);
     if (!this.page) {
       throw new Error('Browser is not initialized or page is not open.');
     }
 
-    const inputType = ((await locator.getAttribute('type')) || '').toLowerCase();
-    const autocomplete = ((await locator.getAttribute('autocomplete')) || '').toLowerCase();
-    const inputName = ((await locator.getAttribute('name')) || '').toLowerCase();
-    const inputId = ((await locator.getAttribute('id')) || '').toLowerCase();
+    let locator = this.scanner.getLocator(fieldRef);
+    if (!locator) {
+      throw new Error(`Field reference '${fieldRef}' not found in active FormSnapshot.`);
+    }
+
+    const inputType = ((await locator.getAttribute('type').catch(() => '')) || '').toLowerCase();
+    const autocomplete = ((await locator.getAttribute('autocomplete').catch(() => '')) || '').toLowerCase();
+    const inputName = ((await locator.getAttribute('name').catch(() => '')) || '').toLowerCase();
+    const inputId = ((await locator.getAttribute('id').catch(() => '')) || '').toLowerCase();
     const resolvedName = (this.scanner.getName(fieldRef) || '').toLowerCase();
 
     // Safety guard: NEVER fill input[type=password], one-time-code, or CAPTCHA fields
@@ -789,42 +1303,168 @@ export class BrowserManager {
 
     let expectedValue = value;
     if (inputType === 'date') {
-      // HTML5 date input standard property requires YYYY-MM-DD format internally.
       expectedValue = this.normalizeDateValue(value);
     } else if (this.isDateField(fieldRef)) {
-      // Text inputs for dates are strictly formatted as DD/MM/YYYY.
       expectedValue = this.formatToStrictDDMMYYYY(value);
     }
 
-    await this.highlightField(locator);
-    await this.withCancellation(signal, locator.scrollIntoViewIfNeeded({ timeout: 2500 }));
-    if (inputType === 'date') {
-      // Use fill() for HTML5 date inputs to set the ISO YYYY-MM-DD value directly.
-      // With locale: 'en-IN' configured on the browser context, Chromium displays it as dd/mm/yyyy.
-      await this.withCancellation(signal, locator.fill(expectedValue));
-    } else {
-      await this.withCancellation(signal, locator.fill(''));
-      const typingDelay = process.env.NODE_ENV === 'test' ? 0 : 25;
-      await this.withCancellation(
-        signal,
-        locator.pressSequentially(expectedValue, { delay: typingDelay })
-      );
+    const fieldBudgetMs = 10000;
+    const deadline = Date.now() + fieldBudgetMs;
+    const typingDelay = process.env.NODE_ENV === 'test' ? 0 : 25;
+
+    const readStateBack = async () => {
+      return await this.verifyField(fieldRef, expectedValue);
+    };
+
+    // Ladder Attempt a: Scroll into view and fill
+    try {
+      const stepTimeout = Math.min(2500, Math.max(1000, deadline - Date.now()));
+      await this.highlightField(locator);
+      await this.withCancellation(signal, locator.scrollIntoViewIfNeeded({ timeout: stepTimeout }));
+      if (inputType === 'date') {
+        await this.withCancellation(signal, locator.fill(expectedValue, { timeout: stepTimeout }));
+      } else {
+        await this.withCancellation(signal, locator.fill('', { timeout: stepTimeout }));
+        await this.withCancellation(
+          signal,
+          locator.pressSequentially(expectedValue, { delay: typingDelay })
+        );
+      }
+      const stA = await readStateBack();
+      if (stA.verified) {
+        await this.clearHighlight();
+        return { success: true, actualValue: stA.actualValue, expectedValue };
+      }
+    } catch (errA: any) {
+      if (errA?.name === 'OperationCancelledError') throw errA;
     }
-    await this.cancellableDelay(150, signal);
 
-    const actualValue = await locator.inputValue();
+    // Ladder Attempt b: if reports not visible / detached / multiple matches / empty:
+    // Re-scan, re-resolve by label inside the same question container, prefer VISIBLE candidate, retry
+    try {
+      await this.scanActiveForm();
+      const reResolved = await this.reResolveVisibleCandidate(fieldRef);
+      if (reResolved) {
+        locator = this.scanner.getLocator(fieldRef) || locator;
+        const stepTimeout = Math.min(2500, Math.max(1000, deadline - Date.now()));
+        await this.highlightField(locator);
+        await this.withCancellation(signal, locator.scrollIntoViewIfNeeded({ timeout: stepTimeout }));
+        if (inputType === 'date') {
+          await this.withCancellation(signal, locator.fill(expectedValue, { timeout: stepTimeout }));
+        } else {
+          await this.withCancellation(signal, locator.fill('', { timeout: stepTimeout }));
+          await this.withCancellation(
+            signal,
+            locator.pressSequentially(expectedValue, { delay: typingDelay })
+          );
+        }
+        const stB = await readStateBack();
+        if (stB.verified) {
+          await this.clearHighlight();
+          return { success: true, actualValue: stB.actualValue, expectedValue };
+        }
+      }
+    } catch (errB: any) {
+      if (errB?.name === 'OperationCancelledError') throw errB;
+    }
+
+    // Ladder Attempt c: Click the visible container or label to focus it, then type
+    try {
+      const stepTimeout = Math.min(2000, Math.max(800, deadline - Date.now()));
+      const labelText = this.scanner.getLabel(fieldRef) || '';
+      const focused = await this.focusQuestionContainerOrLabel(fieldRef, labelText, stepTimeout, signal);
+      if (focused) {
+        await this.withCancellation(
+          signal,
+          this.page.keyboard.type(expectedValue, { delay: typingDelay })
+        );
+        const stC = await readStateBack();
+        if (stC.verified) {
+          await this.clearHighlight();
+          return { success: true, actualValue: stC.actualValue, expectedValue };
+        }
+      }
+    } catch (errC: any) {
+      if (errC?.name === 'OperationCancelledError') throw errC;
+    }
+
+    // Ladder Attempt d: Native value setter + input/change/blur events, only if the control or its label is visible
+    try {
+      const frame = this.scanner.getFrame(fieldRef) || this.page.mainFrame();
+      const nativeOk = await frame.evaluate(
+        ({ ref, val }: { ref: string; val: string }) => {
+          const el = document.querySelector(`[data-af-ref="${ref}"]`) as HTMLElement;
+          if (!el) return false;
+
+          const rect = el.getBoundingClientRect();
+          const cs = window.getComputedStyle(el);
+          const isDirectlyVis =
+            cs.display !== 'none' &&
+            cs.visibility !== 'hidden' &&
+            parseFloat(cs.opacity || '1') > 0 &&
+            rect.width > 0 &&
+            rect.height > 0 &&
+            el.offsetParent !== null;
+
+          let isLabelVis = false;
+          const enclosing = el.closest('label');
+          const id = el.id;
+          const forLabel = id ? document.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
+          const lbl = (forLabel || enclosing) as HTMLElement | null;
+          if (lbl) {
+            const lcs = window.getComputedStyle(lbl);
+            const lrect = lbl.getBoundingClientRect();
+            isLabelVis =
+              lcs.display !== 'none' &&
+              lcs.visibility !== 'hidden' &&
+              parseFloat(lcs.opacity || '1') > 0 &&
+              lrect.width > 0 &&
+              lrect.height > 0;
+          }
+
+          if (!isDirectlyVis && !isLabelVis) return false;
+
+          const proto =
+            el instanceof HTMLTextAreaElement
+              ? window.HTMLTextAreaElement.prototype
+              : window.HTMLInputElement.prototype;
+          const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+          if (nativeSetter) {
+            nativeSetter.call(el, val);
+          } else {
+            (el as any).value = val;
+          }
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('blur', { bubbles: true }));
+          return true;
+        },
+        { ref: fieldRef, val: expectedValue }
+      );
+
+      if (nativeOk) {
+        const stD = await readStateBack();
+        if (stD.verified) {
+          await this.clearHighlight();
+          return { success: true, actualValue: stD.actualValue, expectedValue };
+        }
+      }
+    } catch (errD: any) {
+      if (errD?.name === 'OperationCancelledError') throw errD;
+    }
+
     await this.clearHighlight();
+    const finalState = await readStateBack();
 
-    const isDate = inputType === 'date' || this.isDateField(fieldRef);
-    const matched =
-      actualValue === expectedValue ||
-      (isDate &&
-        (this.formatToStrictDDMMYYYY(actualValue) === this.formatToStrictDDMMYYYY(expectedValue) ||
-          this.normalizeDateValue(actualValue) === this.normalizeDateValue(expectedValue)));
+    // After all ladder attempts failed: capture failure evidence
+    if (!finalState.verified) {
+      const label = this.scanner.getLabel(fieldRef) || fieldRef;
+      await this.captureFailureEvidence(fieldRef, label);
+    }
 
     return {
-      success: matched,
-      actualValue,
+      success: finalState.verified,
+      actualValue: finalState.actualValue,
       expectedValue,
     };
   }
@@ -848,10 +1488,138 @@ export class BrowserManager {
     }
 
     await this.highlightField(locator);
-    await this.withCancellation(signal, locator.scrollIntoViewIfNeeded({ timeout: 2500 }));
+    await this.withCancellation(signal, locator.scrollIntoViewIfNeeded({ timeout: 2500 }).catch(() => {}));
 
-    // Bounded attempt: an option that does not exist must produce an honest failure
-    // result, not a long Playwright timeout that stalls the whole workflow.
+    const tagName = ((await locator.evaluate((el) => el.tagName.toLowerCase()).catch(() => '')) || '');
+
+    // ARIA Custom Dropdown / Listbox / Combobox
+    if (tagName !== 'select') {
+      try {
+        // 1. Click the trigger to open popup
+        await this.withCancellation(signal, locator.click({ timeout: 2500 }));
+
+        // 2. Condition wait for [role="option"] elements (no arbitrary sleeps)
+        try {
+          await this.page.waitForFunction(
+            () => {
+              const opts = document.querySelectorAll('[role="option"]');
+              for (let i = 0; i < opts.length; i++) {
+                const el = opts[i] as HTMLElement;
+                if (el.offsetParent !== null && window.getComputedStyle(el).display !== 'none') {
+                  return true;
+                }
+              }
+              return false;
+            },
+            undefined,
+            { timeout: 3000 }
+          );
+        } catch {}
+
+        // 3. Collect option elements
+        let optionLoc = this.page.locator('[role="option"]:visible');
+        let optCount = await optionLoc.count();
+        if (optCount === 0) {
+          optionLoc = this.page.locator('[role="option"]');
+          optCount = await optionLoc.count();
+        }
+
+        const optionCandidates: Array<{ loc: Locator; label: string }> = [];
+        for (let i = 0; i < optCount; i++) {
+          const optEl = optionLoc.nth(i);
+          const txt = (await optEl.textContent() || '').trim();
+          const val = (await optEl.getAttribute('data-value') || '').trim();
+          const ariaLbl = (await optEl.getAttribute('aria-label') || '').trim();
+          const candidateLabel = txt || val || ariaLbl;
+          if (candidateLabel) {
+            optionCandidates.push({ loc: optEl, label: candidateLabel });
+          }
+        }
+
+        if (optionCandidates.length === 0) {
+          await this.clearHighlight();
+          return {
+            success: false,
+            selectedOption: '',
+            expectedOption: option,
+            reason: `No options found for dropdown trigger '${fieldRef}'.`,
+          };
+        }
+
+        // 4. Match with OptionMatcher
+        const matchRes = matchOption(option, optionCandidates.map((c) => c.label));
+        const targetLabel = matchRes.matchedOption || option;
+        const matchedItem =
+          optionCandidates.find((c) => c.label.toLowerCase() === targetLabel.toLowerCase()) ||
+          optionCandidates[0];
+
+        // 4b. If combobox with text input, type then pick
+        const inputChild = locator.locator('input').first();
+        if ((await inputChild.count()) > 0) {
+          try {
+            await inputChild.fill(matchedItem.label);
+          } catch {}
+        }
+
+        // 5. Click the option
+        await this.withCancellation(signal, matchedItem.loc.click({ timeout: 2500 }));
+
+        // 6. Confirm popup closes (condition wait)
+        try {
+          await this.page.waitForFunction(
+            () => {
+              const opts = document.querySelectorAll('[role="option"]');
+              for (let i = 0; i < opts.length; i++) {
+                const el = opts[i] as HTMLElement;
+                if (el.offsetParent !== null && window.getComputedStyle(el).display !== 'none') {
+                  return false;
+                }
+              }
+              return true;
+            },
+            undefined,
+            { timeout: 2500 }
+          );
+        } catch {}
+
+        // 7. Read back selected text or aria-selected
+        let selectedText = '';
+        const selectedOpt = this.page.locator('[role="option"][aria-selected="true"]').first();
+        if ((await selectedOpt.count()) > 0) {
+          selectedText = (await selectedOpt.textContent() || '').trim();
+        }
+        if (!selectedText) {
+          selectedText = (await locator.textContent() || '').trim();
+        }
+
+        await this.clearHighlight();
+
+        const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+        const normSelected = normalize(selectedText);
+        const normExpected = normalize(option);
+        const isMatched =
+          normSelected === normExpected ||
+          normSelected.includes(normExpected) ||
+          normExpected.includes(normSelected) ||
+          matchOption(selectedText, [option]).confidence >= 0.8;
+
+        return {
+          success: isMatched,
+          selectedOption: selectedText || matchedItem.label,
+          expectedOption: option,
+        };
+      } catch (err: any) {
+        await this.clearHighlight();
+        return {
+          success: false,
+          selectedOption: '',
+          expectedOption: option,
+          reason: err?.message || 'Failed to select ARIA dropdown option',
+        };
+      }
+    }
+
+    // Native select element
     let applied = true;
     try {
       const optionDetails = await locator
@@ -942,16 +1710,88 @@ export class BrowserManager {
     optionValue: string,
     signal?: AbortSignal
   ): Promise<{ success: boolean; selectedValue: string }> {
-    const { name } = this.resolveField(fieldRef);
+    const { locator, name } = this.resolveField(fieldRef);
     if (!this.page) {
       throw new Error('Browser is not initialized or page is not open.');
     }
 
-    const groupSelector = name
-      ? `input[type="radio"][name="${this.escapeAttribute(name)}"]`
-      : 'input[type="radio"]';
-    const group = this.page.locator(groupSelector);
-    const groupSize = await group.count();
+    const isAriaRadiogroup = await locator.evaluate(
+      (el) => el.getAttribute('role') === 'radiogroup' || Boolean(el.querySelector('[role="radio"]'))
+    ).catch(() => false);
+
+    if (isAriaRadiogroup) {
+      const radioChildren = locator.locator('[role="radio"]');
+      const count = await radioChildren.count();
+      let targetChild: Locator | null = null;
+      let chosenValue = '';
+
+      for (let index = 0; index < count; index += 1) {
+        const candidate = radioChildren.nth(index);
+        const candidateValue = (await candidate.getAttribute('data-value')) || '';
+        const candidateAria = (await candidate.getAttribute('aria-label')) || '';
+        const candidateText = (await candidate.textContent()) || '';
+        const normOpt = optionValue.trim().toLowerCase();
+        if (
+          candidateValue.trim().toLowerCase() === normOpt ||
+          candidateAria.trim().toLowerCase() === normOpt ||
+          candidateText.trim().toLowerCase() === normOpt
+        ) {
+          targetChild = candidate;
+          chosenValue = candidateValue || candidateAria || candidateText.trim();
+          break;
+        }
+      }
+
+      if (!targetChild && count > 0) {
+        const candidates: Array<{ loc: Locator; label: string }> = [];
+        for (let i = 0; i < count; i++) {
+          const child = radioChildren.nth(i);
+          const dataVal = (await child.getAttribute('data-value') || '').trim();
+          const ariaLbl = (await child.getAttribute('aria-label') || '').trim();
+          const text = (await child.textContent() || '').trim();
+          candidates.push({ loc: child, label: text || dataVal || ariaLbl });
+        }
+        const matchRes = matchOption(optionValue, candidates.map((c) => c.label));
+        if (matchRes.matchedOption) {
+          const matched = candidates.find((c) => c.label === matchRes.matchedOption);
+          if (matched) {
+            targetChild = matched.loc;
+            chosenValue = matched.label;
+          }
+        }
+      }
+
+      if (!targetChild) {
+        throw new Error(
+          `Radio option '${optionValue}' not found in group for field '${fieldRef}'.`
+        );
+      }
+
+      await this.highlightField(targetChild);
+      await this.withCancellation(signal, targetChild.scrollIntoViewIfNeeded({ timeout: 2500 }).catch(() => {}));
+
+      await this.withCancellation(signal, targetChild.click({ timeout: 2500 }));
+      let checked = (await targetChild.getAttribute('aria-checked')) === 'true';
+
+      if (!checked) {
+        await this.withCancellation(signal, targetChild.click({ timeout: 1500, force: true }).catch(() => {}));
+        checked = (await targetChild.getAttribute('aria-checked')) === 'true';
+      }
+
+      await this.clearHighlight();
+      return { success: checked, selectedValue: chosenValue };
+    }
+
+    const frame = this.scanner.getFrame(fieldRef) || this.page.mainFrame();
+    let group = frame.locator(`[data-af-ref="${fieldRef}"]`);
+    let groupSize = await group.count();
+    if (groupSize === 0) {
+      const fallbackSelector = name
+        ? `input[type="radio"][name="${this.escapeAttribute(name)}"]`
+        : 'input[type="radio"]';
+      group = this.page.locator(fallbackSelector);
+      groupSize = await group.count();
+    }
     if (groupSize === 0) {
       throw new Error(`No radio controls found for field '${fieldRef}'.`);
     }
@@ -1008,8 +1848,6 @@ export class BrowserManager {
         await this.withCancellation(signal, target.check({ timeout: 1500, force: true }));
         checked = await target.isChecked();
       } catch {
-        // Fallback: check via associated label if direct input interaction timed out
-        // (common in styled accessible radio buttons where <input> is visually hidden by CSS)
         const id = await target.getAttribute('id').catch(() => null);
         if (id && this.page) {
           const forLabel = this.page.locator(`label[for="${CSS.escape(id)}"]`).first();
@@ -1053,6 +1891,28 @@ export class BrowserManager {
   ): Promise<{ success: boolean; isChecked: boolean; expectedChecked: boolean }> {
     const { locator } = this.resolveField(fieldRef);
 
+    const roleAttr = ((await locator.getAttribute('role').catch(() => '')) || '').toLowerCase();
+    const isAriaCheckbox = roleAttr === 'checkbox' || roleAttr === 'switch';
+
+    if (isAriaCheckbox) {
+      await this.highlightField(locator);
+      await this.withCancellation(signal, locator.scrollIntoViewIfNeeded({ timeout: 2500 }).catch(() => {}));
+
+      let curAria = (await locator.getAttribute('aria-checked')) === 'true';
+      if (curAria !== checked) {
+        await this.withCancellation(signal, locator.click({ timeout: 2500 }));
+        curAria = (await locator.getAttribute('aria-checked')) === 'true';
+      }
+
+      if (curAria !== checked) {
+        await this.withCancellation(signal, locator.click({ force: true, timeout: 1500 }).catch(() => {}));
+        curAria = (await locator.getAttribute('aria-checked')) === 'true';
+      }
+
+      await this.clearHighlight();
+      return { success: curAria === checked, isChecked: curAria, expectedChecked: checked };
+    }
+
     await this.highlightField(locator);
 
     let done = false;
@@ -1065,8 +1925,6 @@ export class BrowserManager {
     }
 
     if (!done) {
-      // Fallback: check via associated label element if direct input interaction timed out
-      // (common in styled checkboxes where <input> is visually hidden by CSS)
       const id = await locator.getAttribute('id').catch(() => null);
       let labelLoc: Locator | null = null;
       if (id && this.page) {
@@ -1090,7 +1948,6 @@ export class BrowserManager {
             await this.withCancellation(signal, labelLoc.click({ timeout: 2500 }));
           }
         } catch {
-          // If label interaction fails, fall through to final check
         }
       }
     }
@@ -1143,10 +2000,16 @@ export class BrowserManager {
     }
 
     const inputType = ((await locator.getAttribute('type').catch(() => '')) || '').toLowerCase();
+    const roleAttr = ((await locator.getAttribute('role').catch(() => '')) || '').toLowerCase();
 
     // Checkbox read-back verification: evaluate checked state against affirmative/negative tokens
-    if (inputType === 'checkbox') {
-      const isChecked = await locator.isChecked().catch(() => false);
+    if (inputType === 'checkbox' || roleAttr === 'checkbox' || roleAttr === 'switch') {
+      let isChecked = false;
+      if (roleAttr === 'checkbox' || roleAttr === 'switch') {
+        isChecked = (await locator.getAttribute('aria-checked').catch(() => '')) === 'true';
+      } else {
+        isChecked = await locator.isChecked().catch(() => false);
+      }
       const affirmative = new Set(['true', 'yes', 'y', '1', 'on', 'checked', 'agree', 'accepted']);
       const negative = new Set(['false', 'no', 'n', '0', 'off', 'unchecked', 'declined']);
       const normalizedExpected = expectedValue.trim().toLowerCase();
@@ -1175,26 +2038,41 @@ export class BrowserManager {
     }
 
     // Radio group read-back verification: find which radio in the group is checked
-    if (inputType === 'radio') {
-      const { name } = this.resolveField(fieldRef);
-      const groupSelector = name
-        ? `input[type="radio"][name="${this.escapeAttribute(name)}"]`
-        : 'input[type="radio"]';
+    if (inputType === 'radio' || roleAttr === 'radiogroup' || roleAttr === 'radio') {
       let checkedValue = '';
-      if (this.page) {
-        const group = this.page.locator(groupSelector);
-        const count = await group.count();
-        for (let i = 0; i < count; i++) {
-          const item = group.nth(i);
-          if (await item.isChecked().catch(() => false)) {
-            checkedValue = ((await item.getAttribute('value')) || '').trim();
-            break;
+      if (roleAttr === 'radiogroup' || (await locator.locator('[role="radio"]').count().catch(() => 0)) > 0) {
+        const checkedChild = locator.locator('[role="radio"][aria-checked="true"]').first();
+        if ((await checkedChild.count().catch(() => 0)) > 0) {
+          checkedValue = (
+            (await checkedChild.getAttribute('data-value').catch(() => '')) ||
+            (await checkedChild.getAttribute('aria-label').catch(() => '')) ||
+            (await checkedChild.textContent().catch(() => '')) ||
+            ''
+          ).trim();
+        }
+      } else {
+        const { name } = this.resolveField(fieldRef);
+        const groupSelector = name
+          ? `input[type="radio"][name="${this.escapeAttribute(name)}"]`
+          : 'input[type="radio"]';
+        if (this.page) {
+          const group = this.page.locator(groupSelector);
+          const count = await group.count();
+          for (let i = 0; i < count; i++) {
+            const item = group.nth(i);
+            if (await item.isChecked().catch(() => false)) {
+              checkedValue = ((await item.getAttribute('value')) || '').trim();
+              break;
+            }
           }
         }
       }
       const normalize = (raw: string) => raw.trim().toLowerCase().replace(/\s+/g, ' ');
       const isStrict = checkedValue === expectedValue;
-      const verified = normalize(checkedValue) === normalize(expectedValue);
+      const verified =
+        isStrict ||
+        normalize(checkedValue) === normalize(expectedValue) ||
+        matchOption(checkedValue, [expectedValue]).confidence >= 0.8;
       let classification: 'match' | 'normalized-match' | 'mismatch' | 'empty' | 'unreadable' = 'mismatch';
       if (isStrict) {
         classification = 'match';
@@ -1208,22 +2086,43 @@ export class BrowserManager {
       return { verified, actualValue: checkedValue, expectedValue, classification };
     }
 
-    // Select element read-back verification: verify against selected option value or visible text
+    // Select / dropdown element read-back verification: verify against selected option value or visible text
     const tagName = ((await locator.evaluate((el) => el.tagName.toLowerCase()).catch(() => '')) || '');
-    if (tagName === 'select') {
-      const selectedVal = (await locator.inputValue().catch(() => '')) || '';
-      const selectedLabel = await locator
-        .evaluate((el) => {
-          const select = el as HTMLSelectElement;
-          return select.options[select.selectedIndex]?.textContent?.trim() || '';
-        })
-        .catch(() => '');
+    if (tagName === 'select' || roleAttr === 'listbox' || roleAttr === 'combobox') {
+      let selectedVal = '';
+      let selectedLabel = '';
+      if (tagName === 'select') {
+        selectedVal = (await locator.inputValue().catch(() => '')) || '';
+        selectedLabel = await locator
+          .evaluate((el) => {
+            const select = el as HTMLSelectElement;
+            return select.options[select.selectedIndex]?.textContent?.trim() || '';
+          })
+          .catch(() => '');
+      } else {
+        if (this.page) {
+          const selectedOpt = this.page.locator('[role="option"][aria-selected="true"]').first();
+          if ((await selectedOpt.count().catch(() => 0)) > 0) {
+            selectedLabel = ((await selectedOpt.textContent().catch(() => '')) || '').trim();
+          }
+        }
+        if (!selectedLabel) {
+          selectedLabel = ((await locator.textContent().catch(() => '')) || '').trim();
+        }
+        selectedVal = selectedLabel;
+      }
       const normalize = (raw: string) => raw.trim().toLowerCase().replace(/\s+/g, ' ');
       const normExpected = normalize(expectedValue);
       const isStrict = selectedVal === expectedValue || selectedLabel === expectedValue;
       const verified =
+        isStrict ||
         normalize(selectedVal) === normExpected ||
-        normalize(selectedLabel) === normExpected;
+        normalize(selectedLabel) === normExpected ||
+        normalize(selectedVal).includes(normExpected) ||
+        normExpected.includes(normalize(selectedVal)) ||
+        normalize(selectedLabel).includes(normExpected) ||
+        normExpected.includes(normalize(selectedLabel)) ||
+        matchOption(selectedLabel || selectedVal, [expectedValue]).confidence >= 0.8;
       let classification: 'match' | 'normalized-match' | 'mismatch' | 'empty' | 'unreadable' = 'mismatch';
       if (isStrict) {
         classification = 'match';

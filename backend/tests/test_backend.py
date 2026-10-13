@@ -1656,6 +1656,119 @@ def test_document_service_schema_aliases():
     assert KEY_ALIASES.get("graduation_degree") == "education_grad_degree"
 
 
+@pytest.mark.asyncio
+async def test_heuristic_mapper_label_to_expected_key_table():
+    """Assert pure fast label-to-expected-key table test across all required prompt cases."""
+    from core.services.gemini_service import GeminiService
+    from core.models.session_model import FormFieldSnapshot, FormSnapshot, FactDescriptor
+
+    service = GeminiService()
+
+    facts = [
+        FactDescriptor(key="student_name", label="Student Full Name"),
+        FactDescriptor(key="dob", label="Date of Birth"),
+        FactDescriptor(key="gender", label="Gender"),
+        FactDescriptor(key="email", label="Email Address"),
+        FactDescriptor(key="phone", label="Contact Phone Number"),
+        FactDescriptor(key="address", label="Residential Address"),
+        FactDescriptor(key="pincode", label="Pincode / Zip Code"),
+        FactDescriptor(key="father_name", label="Father's Name"),
+        FactDescriptor(key="mother_name", label="Mother's Name"),
+        FactDescriptor(key="previous_school", label="Previous School Attended"),
+        FactDescriptor(key="grade", label="Applying Grade / Class"),
+        FactDescriptor(key="consent", label="Admission Terms & Conditions"),
+    ]
+
+    test_cases = [
+        ("Student Email Address*", "email", "email"),
+        ("E-mail address:", "text", "email"),
+        ("Contact Phone Number*", "text", "phone"),
+        ("Residential Address*", "textarea", "address"),
+        ("Name of Student *", "text", "student_name"),
+        ("Pincode / Zip Code*", "text", "pincode"),
+        ("Father's Name*", "text", "father_name"),
+        ("Delivery instructions:", "text", None),  # unmapped!
+        ("I agree to the school admission terms and conditions", "checkbox", "consent"),
+    ]
+
+    for label, field_type, expected_key in test_cases:
+        snapshot = FormSnapshot(
+            url="http://test.local/form",
+            title="Form",
+            fields=[
+                FormFieldSnapshot(
+                    ref="test_ref",
+                    label=label,
+                    type=field_type,
+                    required=True,
+                )
+            ],
+        )
+        mappings, clarifications, unmapped = service._map_heuristic_fallback(snapshot, facts)
+
+        if expected_key is None:
+            # Must be unmapped
+            assert "test_ref" in unmapped, f"'{label}' expected unmapped, but got mapped: {mappings}"
+            mapped_keys = [m.fact_key for m in mappings if m.field_ref == "test_ref" and m.fact_key]
+            assert not mapped_keys, f"'{label}' expected no fact_key, got {mapped_keys}"
+        else:
+            matching = [m for m in mappings if m.field_ref == "test_ref" and m.fact_key == expected_key]
+            assert matching, f"'{label}' expected key '{expected_key}', mappings were: {[(m.field_label, m.fact_key, m.confidence) for m in mappings]}"
+            assert matching[0].confidence >= 0.6, f"Confidence {matching[0].confidence} below 0.6 threshold"
+            assert matching[0].confidence != 0.95, "Confidence must be calibrated, never constant 0.95"
+
+
+@pytest.mark.asyncio
+async def test_heuristic_mapper_one_fact_one_field_and_confidence_calibration():
+    """Verify that one fact cannot feed two distinct fields unless labels are near-identical."""
+    from core.services.gemini_service import GeminiService
+    from core.models.session_model import FormFieldSnapshot, FormSnapshot, FactDescriptor
+
+    service = GeminiService()
+
+    facts = [
+        FactDescriptor(key="student_name", label="Student Full Name"),
+        FactDescriptor(key="email", label="Email Address"),
+    ]
+
+    # Two distinct fields both trying to map to email:
+    snapshot = FormSnapshot(
+        url="http://test.local/form",
+        title="Form",
+        fields=[
+            FormFieldSnapshot(ref="f1", label="Student Email Address*", type="email", required=True),
+            FormFieldSnapshot(ref="f2", label="E-mail address:", type="email", required=True),
+        ],
+    )
+    # Both map to email, but labels are NOT near-identical
+    mappings, clarifications, unmapped = service._map_heuristic_fallback(snapshot, facts)
+
+    # One must be accepted, the other must be left unmapped with clarification
+    email_mapped = [m for m in mappings if m.fact_key == "email"]
+    assert len(email_mapped) == 1, f"Expected exactly 1 email mapping, got {len(email_mapped)}"
+    assert email_mapped[0].confidence in (0.7, 0.9)
+    assert email_mapped[0].confidence != 0.95
+
+    # The other must be unmapped and in clarifications
+    unmapped_ref = "f2" if email_mapped[0].field_ref == "f1" else "f1"
+    assert unmapped_ref in unmapped
+    assert any(c.field_ref == unmapped_ref for c in clarifications)
+
+    # Near-identical labels test: both can map
+    snapshot_identical = FormSnapshot(
+        url="http://test.local/form",
+        title="Form",
+        fields=[
+            FormFieldSnapshot(ref="f1", label="Student Full Name*", type="text", required=True),
+            FormFieldSnapshot(ref="f2", label="Student Full Name:", type="text", required=True),
+        ],
+    )
+    m_id, _, _ = service._map_heuristic_fallback(snapshot_identical, facts)
+    name_mapped = [m for m in m_id if m.fact_key == "student_name"]
+    assert len(name_mapped) == 2, "Near-identical labels should both remain mapped"
+
+
+
 
 
 

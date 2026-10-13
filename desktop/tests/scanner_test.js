@@ -276,9 +276,110 @@ async function runScannerTest() {
   const customResult = await blockerManager.detectBlocker(0);
   assert.strictEqual(customResult.type, 'none', 'Page with custom ARIA controls must be recognized as fillable form');
 
+  // 8. Regression Defect A: Hydration Readiness (delayed mounting with condition retry)
+  console.log('\nRunning Defect A regression: Hydration readiness delayed mounting...');
+  await blockerPage.setContent('<html><body><div id="mount-target"><h1>Hydrating form...</h1></div></body></html>');
+  // Delayed mount after 250ms
+  await blockerPage.evaluate(() => {
+    setTimeout(() => {
+      const el = document.getElementById('mount-target');
+      if (el) {
+        el.innerHTML = '<input type="text" name="delayed_name" placeholder="Full Name">';
+      }
+    }, 250);
+  });
+  const delayedResult = await blockerManager.detectBlocker(2000);
+  assert.strictEqual(delayedResult.type, 'none', 'Delayed mounting within bounded wait must resolve to none (fillable)');
+
+  // Bounded timeout without fields mounts resolves to zero_fillable_fields no-form
+  await blockerPage.setContent('<html><body><h1>Static page without forms</h1></body></html>');
+  const neverMountedResult = await blockerManager.detectBlocker(300);
+  assert.strictEqual(neverMountedResult.type, 'no-form', 'When fields never mount, detectBlocker must conclude no-form');
+  assert.strictEqual(neverMountedResult.matchedRule, 'zero_fillable_fields');
+
+  // 9. Regression Defect B: Authentication Gate (independent of token count and password presence)
+  console.log('\nRunning Defect B regression: Authentication gate independent of token count...');
+  await blockerPage.route('https://accounts.google.com/**', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'text/html',
+      body: `
+        <!DOCTYPE html>
+        <html>
+          <head><title>Sign in - Google Accounts</title></head>
+          <body>
+            <h1>Sign in</h1>
+            <form>
+              <input type="email" name="identifier" id="identifierId" aria-label="Email or phone">
+              <select name="lang"><option value="en">English</option></select>
+            </form>
+          </body>
+        </html>
+      `,
+    });
+  });
+
+  await blockerPage.goto('https://accounts.google.com/v3/signin/identifier');
+  const authGateResult = await blockerManager.detectBlocker(0);
+  assert.strictEqual(authGateResult.type, 'login', 'accounts.google.com must be detected as login blocker');
+  assert.strictEqual(authGateResult.matchedRule, 'known_login_host', 'matchedRule must be known_login_host');
+  assert.strictEqual(authGateResult.triggerElementOrHost, 'accounts.google.com');
+
   await blockerManager.close();
 
-  console.log('✓ FormScanner honeypot protection, detectBlocker, and safety guard tests passed successfully!');
+  // 10. Test ARIA custom controls discovery on aria_controls.html fixture
+  console.log('\nRunning ARIA custom controls scanner discovery on aria_controls.html fixture...');
+  const ariaScannerManager = new BrowserManager();
+  await ariaScannerManager.launch(true);
+
+  const ariaFixturePath = path.resolve(__dirname, 'fixtures/forms/aria_controls.html');
+  assert.ok(fs.existsSync(ariaFixturePath), 'aria_controls.html fixture must exist');
+  const ariaUrl = `file://${ariaFixturePath.replace(/\\/g, '/')}`;
+  await ariaScannerManager.navigateTo(ariaUrl);
+
+  const ariaSnapshot = await ariaScannerManager.scanActiveForm();
+  console.log(`Discovered ${ariaSnapshot.fields.length} fields in ARIA controls fixture:`, ariaSnapshot.fields.map(f => ({ ref: f.ref, type: f.type, label: f.label })));
+
+  // Expect exactly 5 logical fields: text, textarea, radio group, checkbox, and dropdown/combobox
+  assert.strictEqual(ariaSnapshot.fields.length, 5, 'Expected exactly 5 fields in ARIA controls fixture');
+
+  // 1. Text input
+  const textF = ariaSnapshot.fields.find((f) => /student.*name/i.test(f.label));
+  assert.ok(textF, 'Student Full Name field must be discovered');
+  assert.strictEqual(textF.type, 'text');
+  assert.strictEqual(textF.required, true);
+
+  // 2. Textarea
+  const areaF = ariaSnapshot.fields.find((f) => /address/i.test(f.label));
+  assert.ok(areaF, 'Residential Address textarea must be discovered');
+  assert.strictEqual(areaF.type, 'textarea');
+
+  // 3. ARIA Radiogroup
+  const radioF = ariaSnapshot.fields.find((f) => /gender/i.test(f.label));
+  assert.ok(radioF, 'Gender ARIA radiogroup must be discovered');
+  assert.strictEqual(radioF.type, 'radio');
+  assert.ok(radioF.options.includes('Male'), 'Gender options must contain Male');
+  assert.ok(radioF.options.includes('Female'), 'Gender options must contain Female');
+
+  // 4. ARIA Checkbox
+  const cbF = ariaSnapshot.fields.find((f) => /hostel/i.test(f.label));
+  assert.ok(cbF, 'Hostel ARIA checkbox must be discovered');
+  assert.strictEqual(cbF.type, 'checkbox');
+
+  // 5. ARIA Listbox Dropdown
+  const dropF = ariaSnapshot.fields.find((f) => /grade/i.test(f.label));
+  assert.ok(dropF, 'Applying Grade ARIA dropdown must be discovered');
+  assert.ok(dropF.type === 'combobox' || dropF.type === 'select', 'Dropdown type must be combobox or select');
+
+  // Verify submit button is NOT included in FormSnapshot fields
+  const ariaSubmitInFields = ariaSnapshot.fields.find(
+    (f) => f.type === 'submit' || f.ref === 'submitBtn' || /submit/i.test(f.label)
+  );
+  assert.strictEqual(ariaSubmitInFields, undefined, 'Submit button must NOT be in ARIA FormSnapshot fields');
+
+  await ariaScannerManager.close();
+
+  console.log('✓ FormScanner honeypot protection, detectBlocker, Defect A/B regressions, and ARIA discovery passed successfully!');
 }
 
 runScannerTest().catch((err) => {

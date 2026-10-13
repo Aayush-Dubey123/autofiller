@@ -13,6 +13,7 @@ export type FormFieldType =
   | 'email'
   | 'tel'
   | 'select'
+  | 'combobox'
   | 'radio'
   | 'checkbox'
   | 'date'
@@ -26,6 +27,7 @@ export interface FormFieldSnapshot {
   role?: string;
   label: string;
   type: FormFieldType;
+  autocomplete?: string;
   required: boolean;
   currentValue?: string;
   options?: string[];
@@ -276,6 +278,37 @@ export interface ScanTraceRecord {
   fields: FieldTraceRecord[];
 }
 
+export interface FrameCensusCounts {
+  visible: Record<string, number>;
+  hidden: Record<string, number>;
+}
+
+export interface FrameCensus {
+  frameId: string;
+  url: string;
+  name?: string;
+  isMainFrame: boolean;
+  inputsByType: FrameCensusCounts;
+  textarea: { visible: number; hidden: number };
+  select: { visible: number; hidden: number };
+  roleRadio: { visible: number; hidden: number };
+  roleCheckbox: { visible: number; hidden: number };
+  roleListbox: { visible: number; hidden: number };
+  roleCombobox: { visible: number; hidden: number };
+  contenteditable: { visible: number; hidden: number };
+  hasShadowRoots: boolean;
+}
+
+export interface PageCensusRecord {
+  finalUrlHost: string;
+  finalUrlPath: string;
+  pageTitle: string;
+  matchedBlockerRule: string | null;
+  triggerElementOrHost: string | null;
+  screenshotPath?: string | null;
+  frames: FrameCensus[];
+}
+
 /** Complete zero-value trace for an execution run. */
 export interface RunTrace {
   timestamp: string;
@@ -283,4 +316,7 @@ export interface RunTrace {
   aiProvider: string;
   blockedNavigationReason: string | null;
   scans: ScanTraceRecord[];
+  pageCensus?: PageCensusRecord | null;
+  failureEvidence?: any[];
 }
+

@@ -58,10 +58,11 @@ async function test(name, body) {
 function getFullFormMappings(snapshot) {
   const mappings = [];
   const find = (needle) =>
+    snapshot.fields.find((field) => field.visible && field.label.toLowerCase().includes(needle)) ||
     snapshot.fields.find((field) => field.label.toLowerCase().includes(needle));
 
   // Section 1
-  const name = find('student full name') || find('student name');
+  const name = find('student full name') || find('student name') || find('full name');
   if (name) mappings.push({ field_ref: name.ref, field_label: name.label, fact_key: 'student_name', confidence: 1.0, status: 'PENDING' });
   const dob = find('date of birth') || find('dob');
   if (dob) mappings.push({ field_ref: dob.ref, field_label: dob.label, fact_key: 'dob', confidence: 1.0, status: 'PENDING' });
@@ -551,7 +552,7 @@ async function runE2E() {
     await controller.cleanup();
   });
 
-  await test('agreement checkbox is filled and verified without timeout and Never-Submit remains intact', async () => {
+  await test('agreement checkbox is left for operator without timeout and Never-Submit remains intact', async () => {
     const backend = makeStubBackend(FORM_URL);
     const controller = new AgentController(backend);
     backend.mapForm = async (sessionId, snapshot) => {
@@ -587,10 +588,13 @@ async function runE2E() {
 
     assert.strictEqual(controller.getStateMachine().getState(), 'REVIEW_READY');
 
-    const verifiedCheckbox = events.find(
-      (e) => e.type === 'TOOL_COMPLETED' && /Verified '.*terms/i.test(e.description)
+    const leftForYou = events.find(
+      (e) => e.type === 'STATE_CHANGED' && /Left for you:.*terms/i.test(e.description)
     );
-    assert.ok(verifiedCheckbox, 'terms checkbox must be verified');
+    assert.ok(leftForYou, 'terms checkbox must be reported in timeline as Left for you');
+
+    const termsChecked = await controller.getBrowserManager().page.isChecked('#terms');
+    assert.strictEqual(termsChecked, false, 'consent checkbox must remain unchecked');
 
     const submitBlocked = events.find((e) => e.type === 'POLICY_BLOCKED');
     assert.ok(submitBlocked, 'Never-Submit policy must block autonomous submission');
@@ -840,11 +844,11 @@ async function runE2E() {
       `Expected exactly 4 pagination clicks (sections 1->2, 2->3, 3->4, 4->5), got ${paginationCompletions.length}`
     );
 
-    // 3. Verify that all 5 sections were reached and Section 5 terms checkbox was verified
-    const termsVerified = events.find(
-      (e) => e.type === 'TOOL_COMPLETED' && /Verified '.*terms/i.test(e.description)
+    // 3. Verify that all 5 sections were reached and Section 5 terms checkbox was reported as Left for you
+    const termsLeftForYou = events.find(
+      (e) => e.type === 'STATE_CHANGED' && /Left for you:.*terms/i.test(e.description)
     );
-    assert.ok(termsVerified, 'Section 5 terms checkbox must be verified');
+    assert.ok(termsLeftForYou, 'Section 5 terms checkbox must be reported as Left for you');
 
     // 4. Verify that PolicyEngine detected and blocked the final submission button on Section 5
     const policyBlocked = events.find(
@@ -1141,12 +1145,12 @@ async function runE2E() {
       assert.strictEqual(match.verified, true, `Verification record for '${reqLabel}' must be verified=true`);
     }
 
-    // 2. Section 5 DOM must confirm grade and terms are populated in actual DOM
+    // 2. Section 5 DOM must confirm grade is populated and terms is left unchecked for operator
     const page = controller.getBrowserManager().page;
     const gradeVal = await page.inputValue('#grade');
     const termsChecked = await page.isChecked('#terms');
     assert.strictEqual(gradeVal, 'Grade 10');
-    assert.strictEqual(termsChecked, true);
+    assert.strictEqual(termsChecked, false, 'consent checkbox must remain unchecked');
 
     // 3. Final Submit was detected by PolicyEngine and blocked
     const policyBlocked = events.find((e) => e.type === 'POLICY_BLOCKED');
@@ -1448,8 +1452,10 @@ async function runE2E() {
     const bm = controller.getBrowserManager();
     assert.ok(bm.page && !bm.page.isClosed(), 'Browser must remain open for human review');
 
-    // 3. Operator reviews and clicks final submit on Section 5
+    // 3. Operator reviews, accepts terms, and clicks final submit on Section 5
     await bm.page.evaluate(() => {
+      const terms = document.getElementById('terms');
+      if (terms) terms.checked = true;
       const submitBtn = document.querySelector('button[type="submit"], input[type="submit"]');
       if (submitBtn) {
         submitBtn.click();
@@ -1506,9 +1512,11 @@ async function runE2E() {
 
       assert.strictEqual(controller.getStateMachine().getState(), 'REVIEW_READY');
 
-      // Operator manually submits
+      // Operator manually reviews, accepts terms, and submits
       const bm = controller.getBrowserManager();
       await bm.page.evaluate(() => {
+        const terms = document.getElementById('terms');
+        if (terms) terms.checked = true;
         const submitBtn = document.querySelector('button[type="submit"], input[type="submit"]');
         if (submitBtn) submitBtn.click();
       });
@@ -1993,6 +2001,148 @@ async function runE2E() {
     try {
       fs.rmSync(tempUserData, { recursive: true, force: true });
     } catch {}
+  });
+
+  await test('real agent fills custom ARIA controls fixture and halts at REVIEW_READY', async () => {
+    const ariaFixturePath = path.resolve(__dirname, 'fixtures/forms/aria_controls.html');
+    assert.ok(fs.existsSync(ariaFixturePath), 'aria_controls.html fixture must exist');
+    const ariaUrl = `file://${ariaFixturePath.replace(/\\/g, '/')}`;
+
+    const backend = makeStubBackend(ariaUrl);
+    const controller = new AgentController(backend);
+
+    const events = [];
+    const states = [];
+    controller.onEvent((event) => events.push(event));
+    controller.getStateMachine().onTransition((state) => states.push(state));
+
+    await controller.startSession({
+      documentText: 'Student Name: Aarav Sharma\nAddress: 123 Park Street\nGender: Male\nGrade: Grade 10\nTerms: agree',
+      documentName: 'student.pdf',
+      targetUrl: ariaUrl,
+    });
+
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      `expected REVIEW_READY, events were: ${events.map((e) => e.description).join(' | ')}`
+    );
+    assert.ok(states.includes('REVIEW_READY'), 'State machine must transition to REVIEW_READY');
+
+    // Inspect browser DOM state to confirm all ARIA controls were populated and verified
+    const browserMgr = controller.getBrowserManager();
+    const page = browserMgr.page;
+    assert.ok(page, 'Browser page must be active');
+
+    // 1. Text input
+    const filledName = await page.inputValue('#inp_student_name');
+    assert.strictEqual(filledName, 'Aarav Sharma', 'Text input must be filled');
+
+    // 2. Textarea
+    const filledAddress = await page.inputValue('#inp_address');
+    assert.strictEqual(filledAddress, '123 Park Street', 'Textarea must be filled');
+
+    // 3. ARIA Radiogroup: Male radio must be checked
+    const maleChecked = await page.getAttribute('div[role="radio"][data-value="Male"]', 'aria-checked');
+    assert.strictEqual(maleChecked, 'true', 'Male ARIA radio must have aria-checked="true"');
+    const femaleChecked = await page.getAttribute('div[role="radio"][data-value="Female"]', 'aria-checked');
+    assert.strictEqual(femaleChecked, 'false', 'Female ARIA radio must remain aria-checked="false"');
+
+    // 4. ARIA Checkbox: Hostel checkbox must be checked
+    const cbChecked = await page.getAttribute('#cb_hostel', 'aria-checked');
+    assert.strictEqual(cbChecked, 'true', 'ARIA checkbox must have aria-checked="true"');
+
+    // 5. ARIA Dropdown: Grade 10 selected, popup closed
+    const chosenGrade = await page.textContent('#dd_grade_val');
+    assert.ok(chosenGrade && chosenGrade.includes('Grade 10'), 'ARIA dropdown value must show Grade 10');
+    const popupDisplay = await page.evaluate(() => {
+      const p = document.getElementById('dd_grade_popup');
+      return p ? window.getComputedStyle(p).display : 'none';
+    });
+    assert.strictEqual(popupDisplay, 'none', 'Dropdown popup must be closed after selection');
+
+    // 6. Never-Submit safety boundary: Submit button was NEVER clicked
+    const submittedDisplay = await page.evaluate(() => {
+      const sub = document.getElementById('submitted-confirmation');
+      return sub ? window.getComputedStyle(sub).display : 'none';
+    });
+    assert.notStrictEqual(submittedDisplay, 'block', 'Submit button must never be triggered by the agent');
+
+    await controller.cleanup();
+  });
+
+  await test('hidden twin and re-render: fills visible input, survives re-render, no repeated clarification, halts at REVIEW_READY', async () => {
+    const fixturePath = path.resolve(__dirname, 'fixtures/forms/hidden_twin_rerender.html');
+    assert.ok(fs.existsSync(fixturePath), 'hidden_twin_rerender.html fixture must exist');
+    const fixtureUrl = `file://${fixturePath.replace(/\\/g, '/')}`;
+
+    const backend = makeStubBackend(fixtureUrl);
+    backend.extractDocument = async () => ({
+      document_name: 'test_doc.pdf',
+      fact_count: 2,
+      facts: [
+        { key: 'student_name', label: 'Full Name', value: 'Alex Mercer', confidence: 0.95 },
+        { key: 'city', label: 'City', value: 'Seattle', confidence: 0.95 },
+      ],
+    });
+
+    const controller = new AgentController(backend);
+
+    const events = [];
+    const states = [];
+    const clarificationPrompts = [];
+    controller.onEvent((event) => events.push(event));
+    controller.getStateMachine().onTransition((state) => states.push(state));
+
+    controller.onClarificationRequest((prompt) => {
+      clarificationPrompts.push(prompt);
+      setTimeout(() => {
+        controller.answerClarification(prompt.clarificationId, 'alex.mercer@example.com');
+      }, 300);
+    });
+
+    await controller.startSession({
+      documentText: 'Full Name: Alex Mercer\nCity: Seattle',
+      documentName: 'test_doc.pdf',
+      targetUrl: fixtureUrl,
+    });
+
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      `expected REVIEW_READY, events were: ${events.map((e) => e.description).join(' | ')}`
+    );
+
+    // 1. Zero re-asking: Email was missing from facts, so it should be asked EXACTLY ONCE
+    const emailPrompts = clarificationPrompts.filter((p) =>
+      p.fieldLabel.toLowerCase().includes('email')
+    );
+    assert.strictEqual(emailPrompts.length, 1, 'Email clarification must be asked exactly once (no re-asking)');
+
+    // Inspect browser DOM state to confirm targeting
+    const browserMgr = controller.getBrowserManager();
+    const page = browserMgr.page;
+    assert.ok(page, 'Browser page must be active');
+
+    // 2. Hidden twin check: visible input is filled, hidden twin is NOT filled
+    const visibleNameVal = await page.inputValue('#fullname-visible');
+    assert.strictEqual(visibleNameVal, 'Alex Mercer', 'Visible Full Name input must be filled with fact value');
+    const hiddenTwinVal = await page.inputValue('.twin-hidden');
+    assert.strictEqual(hiddenTwinVal, '', 'Hidden twin input must NOT be filled');
+
+    // 3. Re-render survival: email was filled in the freshly rendered input (#email-fresh)
+    const freshEmailVal = await page.inputValue('#email-fresh');
+    assert.strictEqual(freshEmailVal, 'alex.mercer@example.com', 'Fresh re-rendered email input must be filled');
+
+    // 4. Multi-section continuation: Section 2 City was filled
+    const cityVal = await page.inputValue('#city-visible');
+    assert.strictEqual(cityVal, 'Seattle', 'Section 2 City input must be filled');
+
+    // 5. Never-submit safety check: submit button was never clicked
+    const currentUrl = page.url();
+    assert.ok(currentUrl.includes('hidden_twin_rerender.html'), 'Page must remain on fixture URL without form submit');
+
+    await controller.cleanup();
   });
 
   console.log(`\nAll ${passed} end-to-end assertions passed.`);

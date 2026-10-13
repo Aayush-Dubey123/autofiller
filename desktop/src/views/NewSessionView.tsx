@@ -537,7 +537,9 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
         const latestBlockerEvent = [...events].reverse().find((e) => e.metadata?.blockerType);
         const blockerType = latestBlockerEvent?.metadata?.blockerType as string | undefined;
 
-        let takeoverMessage = "Your turn: sign in in the AutoFiller browser window. I'll continue when the form appears.";
+        let takeoverMessage =
+          (latestBlockerEvent?.metadata?.plainDescription as string) ||
+          "Your turn: sign in in the AutoFiller browser window. I'll continue when the form appears.";
         if (blockerType === 'otp') {
           takeoverMessage = "Your turn: enter the verification code in the AutoFiller browser window. I'll continue when the form appears.";
         } else if (blockerType === 'captcha') {

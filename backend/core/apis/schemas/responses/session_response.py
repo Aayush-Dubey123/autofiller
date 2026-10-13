@@ -4,10 +4,11 @@ Response schemas for FormPilot API endpoints.
 Defines wire output contracts for extraction, mapping, session queries, and verification.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 from core.models.session_model import (
     ExtractedFact,
+    FactDescriptor,
     FieldMapping,
     ClarificationRequest,
     VerificationRecord,
@@ -44,7 +45,7 @@ class SessionResponse(BaseModel):
     status: SessionStatus = Field(description="Current status")
     document_name: Optional[str] = Field(default=None, description="Document name")
     target_url: Optional[str] = Field(default=None, description="Target URL")
-    facts: List[ExtractedFact] = Field(default_factory=list, description="Facts")
+    facts: List[Union[ExtractedFact, FactDescriptor]] = Field(default_factory=list, description="Facts")
     mappings: List[FieldMapping] = Field(default_factory=list, description="Mappings")
     clarifications: List[ClarificationRequest] = Field(default_factory=list, description="Clarifications")
     verifications: List[VerificationRecord] = Field(default_factory=list, description="Verifications")

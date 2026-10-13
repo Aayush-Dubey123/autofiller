@@ -1091,22 +1091,23 @@ Respond ONLY with valid JSON."""
         """
         Deterministic heuristic fallback mapper when Gemini provider models are unavailable or rate-limited.
 
+        Ranks signals:
+        (a) Autocomplete attribute tokens (name, given-name, family-name, email, tel, bday, street-address, postal-code)
+        (b) Input type (email -> email fact, tel -> phone, date -> date fact)
+        (c) Label words matched as WHOLE WORDS against key names and aliases; most specific wins.
+        Confidence calibrated: exact/whole-phrase 0.9, whole-word 0.7, partial 0.4. Below 0.6 means unmapped.
+        One fact, one field: duplicate fact assignments keep higher score; other left unmapped.
+
         Zero-value contract: Matches form field labels to fact descriptor keys/labels only.
         Values are never accessed or returned.
-
-        Args:
-            form_snapshot (FormSnapshot): Target form fields.
-            facts (List[Union[FactDescriptor, ExtractedFact]]): Document fact descriptors.
-
-        Returns:
-            Tuple[List[FieldMapping], List[ClarificationRequest], List[str]]:
-                Synthesized field mappings, clarification requests, and unmapped field refs.
         """
         self.last_provider_used = "heuristic fallback"
         logging.warning(
             "Executing GeminiService._map_heuristic_fallback due to provider failure or rate limit"
         )
-        fact_dict: Dict[str, Union[FactDescriptor, ExtractedFact]] = {f.key.lower(): f for f in facts}
+        fact_dict: Dict[str, Union[FactDescriptor, ExtractedFact]] = {
+            f.key.lower().strip(): f for f in facts
+        }
 
         mappings: List[FieldMapping] = []
         clarifications: List[ClarificationRequest] = []
@@ -1115,139 +1116,515 @@ Respond ONLY with valid JSON."""
         phone_facts = [
             f
             for f in facts
-            if "phone" in f.key.lower()
-            or "mobile" in f.key.lower()
-            or "contact" in f.key.lower()
+            if any(k in f.key.lower() for k in ["phone", "mobile", "tel", "contact"])
         ]
 
+        def labels_are_near_identical(a: str, b: str) -> bool:
+            clean_a = re.sub(r'[*:\s]+$', '', (a or '').strip().lower())
+            clean_b = re.sub(r'[*:\s]+$', '', (b or '').strip().lower())
+            clean_a = re.sub(r'\s+', ' ', clean_a)
+            clean_b = re.sub(r'\s+', ' ', clean_b)
+            return clean_a == clean_b
+
+        # Knowledge base of field categories with signals, aliases, and specificity weights.
+        category_specs = [
+            {
+                "id": "email",
+                "specificity": 100,
+                "autocomplete_tokens": {"email"},
+                "input_types": {"email"},
+                "exact_phrases": [
+                    "student email address",
+                    "student email",
+                    "email address",
+                    "e-mail address",
+                    "email",
+                    "e-mail",
+                    "applicant email",
+                    "candidate email",
+                ],
+                "whole_words": ["email", "mail"],
+                "keys": ["email", "student_email", "applicant_email", "parent_email"],
+            },
+            {
+                "id": "phone",
+                "specificity": 90,
+                "autocomplete_tokens": {"tel", "tel-national", "mobile"},
+                "input_types": {"tel"},
+                "exact_phrases": [
+                    "contact phone number",
+                    "contact phone",
+                    "contact number",
+                    "mobile number",
+                    "phone number",
+                    "telephone number",
+                    "mobile",
+                    "phone",
+                    "telephone",
+                    "tel",
+                    "primary mobile",
+                ],
+                "whole_words": ["phone", "mobile", "tel", "telephone"],
+                "keys": ["phone", "mobile", "contact_phone", "alternate_phone", "emergency_phone", "contact"],
+            },
+            {
+                "id": "dob",
+                "specificity": 85,
+                "autocomplete_tokens": {"bday", "bday-day", "bday-month", "bday-year"},
+                "input_types": {"date"},
+                "exact_phrases": [
+                    "date of birth",
+                    "birth date",
+                    "dob",
+                    "birthday",
+                ],
+                "whole_words": ["dob", "birth", "birthday"],
+                "keys": ["dob", "date_of_birth", "birth_date"],
+            },
+            {
+                "id": "pincode",
+                "specificity": 80,
+                "autocomplete_tokens": {"postal-code"},
+                "input_types": set(),
+                "exact_phrases": [
+                    "pincode / zip code",
+                    "pincode/zip code",
+                    "pincode / zip",
+                    "pincode",
+                    "zip code",
+                    "postal code",
+                    "pin code",
+                    "zipcode",
+                    "current pincode",
+                    "zip",
+                    "pin",
+                ],
+                "whole_words": ["pincode", "zipcode", "postal", "zip", "pin"],
+                "keys": ["pincode", "zip_code", "postal_code", "zip", "pin"],
+            },
+            {
+                "id": "father_name",
+                "specificity": 75,
+                "autocomplete_tokens": set(),
+                "input_types": set(),
+                "exact_phrases": [
+                    "father's name",
+                    "father name",
+                    "fathers name",
+                    "guardian's name",
+                    "guardian name",
+                    "father",
+                ],
+                "whole_words": ["father", "fathers", "guardian"],
+                "keys": ["father_name", "father", "guardian_name"],
+            },
+            {
+                "id": "mother_name",
+                "specificity": 75,
+                "autocomplete_tokens": set(),
+                "input_types": set(),
+                "exact_phrases": [
+                    "mother's name",
+                    "mother name",
+                    "mothers name",
+                    "mother",
+                ],
+                "whole_words": ["mother", "mothers"],
+                "keys": ["mother_name", "mother"],
+            },
+            {
+                "id": "gender",
+                "specificity": 70,
+                "autocomplete_tokens": {"sex"},
+                "input_types": set(),
+                "exact_phrases": ["gender", "sex"],
+                "whole_words": ["gender", "sex"],
+                "keys": ["gender", "sex"],
+            },
+            {
+                "id": "address",
+                "specificity": 60,
+                "autocomplete_tokens": {"street-address", "address-line1", "address-line2"},
+                "input_types": set(),
+                "exact_phrases": [
+                    "residential address",
+                    "permanent address",
+                    "current address",
+                    "street address",
+                    "home address",
+                    "address",
+                ],
+                "whole_words": ["address", "residential"],
+                "keys": ["address", "residential_address", "permanent_address", "street_address"],
+            },
+            {
+                "id": "city",
+                "specificity": 60,
+                "autocomplete_tokens": {"address-level2"},
+                "input_types": set(),
+                "exact_phrases": ["city", "town", "current city"],
+                "whole_words": ["city", "town"],
+                "keys": ["city", "town"],
+            },
+            {
+                "id": "state",
+                "specificity": 60,
+                "autocomplete_tokens": {"address-level1"},
+                "input_types": set(),
+                "exact_phrases": ["state", "province", "current state"],
+                "whole_words": ["state", "province"],
+                "keys": ["state", "province"],
+            },
+            {
+                "id": "previous_school",
+                "specificity": 55,
+                "autocomplete_tokens": set(),
+                "input_types": set(),
+                "exact_phrases": [
+                    "previous school attended",
+                    "previous school",
+                    "school attended",
+                    "last school attended",
+                ],
+                "whole_words": ["previous_school"],
+                "keys": ["previous_school", "school"],
+            },
+            {
+                "id": "grade",
+                "specificity": 50,
+                "autocomplete_tokens": set(),
+                "input_types": set(),
+                "exact_phrases": [
+                    "applying grade / class",
+                    "applying grade",
+                    "applying class",
+                    "grade",
+                    "class",
+                    "standard",
+                ],
+                "whole_words": ["grade", "class", "standard"],
+                "keys": ["grade", "class", "applying_grade"],
+            },
+            {
+                "id": "allergies",
+                "specificity": 50,
+                "autocomplete_tokens": set(),
+                "input_types": set(),
+                "exact_phrases": [
+                    "does student have allergies",
+                    "allergies",
+                    "allergy",
+                ],
+                "whole_words": ["allergies", "allergy"],
+                "keys": ["allergies", "allergy"],
+            },
+            {
+                "id": "transport",
+                "specificity": 50,
+                "autocomplete_tokens": set(),
+                "input_types": set(),
+                "exact_phrases": [
+                    "does student require transport",
+                    "transport required",
+                    "transport",
+                ],
+                "whole_words": ["transport"],
+                "keys": ["transport"],
+            },
+            {
+                "id": "consent",
+                "specificity": 50,
+                "autocomplete_tokens": set(),
+                "input_types": {"checkbox"},
+                "exact_phrases": [
+                    "i agree to the school admission terms and conditions",
+                    "terms and conditions",
+                    "terms & conditions",
+                    "declaration and undertaking",
+                    "agree to terms",
+                ],
+                "whole_words": ["agree", "consent", "terms", "declaration", "undertaking"],
+                "keys": ["consent", "terms", "agreement"],
+            },
+            {
+                "id": "student_name",
+                "specificity": 20,
+                "autocomplete_tokens": {"name", "given-name"},
+                "input_types": set(),
+                "exact_phrases": [
+                    "student full name",
+                    "name of student",
+                    "student's full name",
+                    "student's name",
+                    "student name",
+                    "full name",
+                    "applicant name",
+                    "candidate name",
+                    "name",
+                ],
+                "whole_words": ["student", "applicant", "candidate"],
+                "keys": ["student_name", "full_name", "applicant_name", "candidate_name", "name"],
+            },
+        ]
+
+        raw_matches: List[Dict[str, Any]] = []
+
         for field in form_snapshot.fields:
-            label_lower = (field.label or "").lower()
-            ref_lower = (field.ref or "").lower()
-            name_lower = f"{label_lower} {ref_lower}"
+            raw_label = field.label or ""
+            clean_label = re.sub(r'[*:\s]+$', '', raw_label).strip().lower()
+            clean_label = re.sub(r'\be-mail\b', 'email', clean_label)
+            word_tokens = set(re.findall(r'\b[a-z0-9_]+\b', clean_label))
+            field_type = (field.type or "text").lower()
+            auto_val = (getattr(field, "autocomplete", None) or "").lower().strip()
+            auto_tokens = set(re.findall(r'\b[a-z0-9_-]+\b', auto_val))
 
-            matched_fact: Optional[Union[FactDescriptor, ExtractedFact]] = None
-            is_ambiguous = False
-            question = None
-            options: List[str] = []
+            is_consent = field_type == "checkbox" and bool(
+                re.search(r'\b(agree|consent|terms|declaration|undertaking)\b', clean_label)
+            )
 
-            if "father" in name_lower:
-                matched_fact = (
-                    fact_dict.get("father_name")
-                    or fact_dict.get("father")
-                    or fact_dict.get("guardian_name")
-                )
-            elif "mother" in name_lower:
-                matched_fact = fact_dict.get("mother_name") or fact_dict.get("mother")
-            elif "student" in name_lower or (
-                "name" in name_lower
-                and not any(
-                    k in name_lower for k in ["father", "mother", "guardian", "school"]
-                )
-            ):
-                matched_fact = (
-                    fact_dict.get("student_name")
-                    or fact_dict.get("applicant_name")
-                    or fact_dict.get("full_name")
-                    or fact_dict.get("name")
-                )
-            elif "birth" in name_lower or "dob" in name_lower:
-                matched_fact = fact_dict.get("dob") or fact_dict.get("date_of_birth")
-            elif "gender" in name_lower or "sex" in name_lower:
-                matched_fact = fact_dict.get("gender")
-            elif (
-                "grade" in name_lower
-                or "class" in name_lower
-                or "standard" in name_lower
-            ):
-                matched_fact = fact_dict.get("grade") or fact_dict.get("applying_grade")
-            elif "email" in name_lower:
-                matched_fact = fact_dict.get("email") or fact_dict.get("parent_email")
-            elif (
-                "phone" in name_lower
-                or "mobile" in name_lower
-                or "tel" in name_lower
-                or "contact" in name_lower
-            ):
-                if (
-                    len(phone_facts) > 1
-                    and "alternate" not in name_lower
-                    and "emergency" not in name_lower
+            candidate_evals = []
+
+            for cat in category_specs:
+                if is_consent and cat["id"] != "consent":
+                    continue
+                if not is_consent and cat["id"] == "consent" and field_type != "checkbox":
+                    continue
+
+                conf = 0.0
+                signal_rank = 99
+
+                # (a) Autocomplete tokens
+                if cat["autocomplete_tokens"] and (cat["autocomplete_tokens"] & auto_tokens):
+                    conf = 0.9
+                    signal_rank = 1
+                # (c) Exact / whole-phrase match
+                elif any(
+                    phrase == clean_label or phrase == clean_label.replace("/", " ")
+                    for phrase in cat["exact_phrases"]
                 ):
-                    matched_fact = phone_facts[0]
-                    is_ambiguous = True
-                    question = (
-                        f"Multiple phone options available "
-                        f"({', '.join(f.label for f in phone_facts)}). "
-                        f"Which phone should be used for {field.label}?"
-                    )
-                    options = [f.label for f in phone_facts]
-                elif "alternate" in name_lower or "emergency" in name_lower:
-                    matched_fact = fact_dict.get("alternate_phone") or (
-                        phone_facts[1] if len(phone_facts) > 1 else None
-                    )
+                    conf = 0.9
+                    signal_rank = 2
+                # (b) Input type match
+                elif field_type in cat["input_types"] and field_type not in ["text", "textarea"]:
+                    conf = 0.7
+                    signal_rank = 3
+                # (c) Whole-word match
+                elif any(w in word_tokens for w in cat["whole_words"]):
+                    # Avoid false match of "student" on "Student Email Address" or "name" on "Father's Name"
+                    if cat["id"] == "student_name":
+                        if "email" in word_tokens or "phone" in word_tokens or "father" in word_tokens or "mother" in word_tokens:
+                            conf = 0.4
+                            signal_rank = 5
+                        else:
+                            conf = 0.7
+                            signal_rank = 4
+                    else:
+                        conf = 0.7
+                        signal_rank = 4
                 else:
-                    matched_fact = fact_dict.get("phone") or (
-                        phone_facts[0] if phone_facts else None
-                    )
-            elif "address" in name_lower:
-                matched_fact = fact_dict.get("address") or fact_dict.get(
-                    "residential_address"
-                )
-            elif "city" in name_lower:
-                matched_fact = fact_dict.get("city")
-            elif "state" in name_lower:
-                matched_fact = fact_dict.get("state")
-            elif (
-                "zip" in name_lower
-                or "postal" in name_lower
-                or "pincode" in name_lower
-                or "pin" in name_lower
-            ):
-                matched_fact = (
-                    fact_dict.get("postal_code")
-                    or fact_dict.get("zip_code")
-                    or fact_dict.get("zip")
-                    or fact_dict.get("pincode")
-                )
-            elif "blood" in name_lower:
-                matched_fact = fact_dict.get("blood_group") or fact_dict.get("blood")
-            elif "school" in name_lower:
-                matched_fact = fact_dict.get("previous_school")
+                    # Partial match
+                    for w in cat["whole_words"]:
+                        if any(len(wt) >= 4 and (w in wt or wt in w) for wt in word_tokens):
+                            conf = 0.4
+                            signal_rank = 5
+                            break
 
-            # Fallback containment matching across all facts
-            if not matched_fact:
-                for k, fact in fact_dict.items():
-                    if k in name_lower:
-                        matched_fact = fact
-                        break
+                if conf >= 0.6:
+                    candidate_evals.append({
+                        "cat": cat,
+                        "confidence": conf,
+                        "signal_rank": signal_rank,
+                        "specificity": cat["specificity"],
+                    })
 
-            if matched_fact:
-                clarification_id = f"clarify_{field.ref}" if is_ambiguous else None
-
-                if is_ambiguous:
+            if not candidate_evals:
+                unmapped.append(field.ref)
+                if field.required and not is_consent:
+                    clarification_id = f"clarify_{field.ref}"
                     clarifications.append(
                         ClarificationRequest(
                             clarification_id=clarification_id,
                             field_ref=field.ref,
                             field_label=field.label,
-                            question=question or f"Clarify selection for {field.label}",
-                            options=options,
+                            question=f"Please provide value for '{field.label}':",
+                            options=field.options or [],
                             selected_value=None,
                         )
                     )
-                mappings.append(
-                    FieldMapping(
-                        field_ref=field.ref,
-                        field_label=field.label,
-                        fact_key=matched_fact.key,
-                        fact_value=None,
-                        confidence=0.85 if is_ambiguous else 0.95,
-                        status="CLARIFICATION_REQUIRED" if is_ambiguous else "PENDING",
-                        clarification_id=clarification_id,
+                    mappings.append(
+                        FieldMapping(
+                            field_ref=field.ref,
+                            field_label=field.label,
+                            fact_key=None,
+                            fact_value=None,
+                            confidence=0.0,
+                            status="CLARIFICATION_REQUIRED",
+                            clarification_id=clarification_id,
+                        )
+                    )
+                continue
+
+            # Pick winner: highest confidence, then highest signal rank (lowest int), then highest specificity
+            candidate_evals.sort(
+                key=lambda x: (x["confidence"], -x["signal_rank"], x["specificity"]),
+                reverse=True,
+            )
+            winner = candidate_evals[0]
+            winning_cat = winner["cat"]
+
+            # Locate matching fact in facts descriptor list
+            matched_fact = None
+            for cand_key in winning_cat["keys"]:
+                if cand_key in fact_dict:
+                    matched_fact = fact_dict[cand_key]
+                    break
+            if not matched_fact:
+                for f in facts:
+                    if winning_cat["id"] in f.key.lower():
+                        matched_fact = f
+                        break
+
+            # Handle consent checkbox when facts has consent or terms
+            if is_consent and not matched_fact:
+                # If facts has consent or terms
+                matched_fact = fact_dict.get("consent") or fact_dict.get("terms")
+                if not matched_fact:
+                    # Fabricate a descriptor reference so consent key is recorded
+                    matched_fact = FactDescriptor(key="consent", label="Consent")
+
+            if not matched_fact:
+                unmapped.append(field.ref)
+                if field.required and not is_consent:
+                    clarification_id = f"clarify_{field.ref}"
+                    clarifications.append(
+                        ClarificationRequest(
+                            clarification_id=clarification_id,
+                            field_ref=field.ref,
+                            field_label=field.label,
+                            question=f"Please provide value for '{field.label}':",
+                            options=field.options or [],
+                            selected_value=None,
+                        )
+                    )
+                    mappings.append(
+                        FieldMapping(
+                            field_ref=field.ref,
+                            field_label=field.label,
+                            fact_key=None,
+                            fact_value=None,
+                            confidence=0.0,
+                            status="CLARIFICATION_REQUIRED",
+                            clarification_id=clarification_id,
+                        )
+                    )
+                continue
+
+            # Ambiguity handling for phone
+            is_ambiguous = False
+            question = None
+            options = []
+            if winning_cat["id"] == "phone":
+                if len(phone_facts) > 1 and "alternate" not in clean_label and "emergency" not in clean_label:
+                    matched_fact = phone_facts[0]
+                    is_ambiguous = True
+                    question = (
+                        f"Multiple phone options available ({', '.join(f.label for f in phone_facts)}). "
+                        f"Which phone should be used for {field.label}?"
+                    )
+                    options = [f.label for f in phone_facts]
+                elif "alternate" in clean_label or "emergency" in clean_label:
+                    matched_fact = fact_dict.get("alternate_phone") or (
+                        phone_facts[1] if len(phone_facts) > 1 else phone_facts[0]
+                    )
+                else:
+                    matched_fact = fact_dict.get("phone") or (phone_facts[0] if phone_facts else None)
+
+            raw_matches.append({
+                "field": field,
+                "matched_fact": matched_fact,
+                "confidence": winner["confidence"],
+                "specificity": winning_cat["specificity"],
+                "is_ambiguous": is_ambiguous,
+                "question": question,
+                "options": options,
+            })
+
+        # ONE FACT, ONE FIELD:
+        # Group matches by fact key. Keep higher score, leave other unmapped (clarify)
+        # unless their labels are near-identical.
+        fact_grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for item in raw_matches:
+            fkey = item["matched_fact"].key.lower()
+            fact_grouped.setdefault(fkey, []).append(item)
+
+        accepted_items: List[Dict[str, Any]] = []
+
+        for fkey, group in fact_grouped.items():
+            if len(group) == 1:
+                accepted_items.append(group[0])
+            else:
+                first_label = group[0]["field"].label or ""
+                all_near_identical = all(
+                    labels_are_near_identical(first_label, item["field"].label or "")
+                    for item in group
+                )
+                if all_near_identical:
+                    accepted_items.extend(group)
+                else:
+                    group.sort(key=lambda x: (x["confidence"], x["specificity"]), reverse=True)
+                    accepted_items.append(group[0])
+                    for other in group[1:]:
+                        f_other = other["field"]
+                        unmapped.append(f_other.ref)
+                        c_id = f"clarify_{f_other.ref}"
+                        clarifications.append(
+                            ClarificationRequest(
+                                clarification_id=c_id,
+                                field_ref=f_other.ref,
+                                field_label=f_other.label,
+                                question=f"Please clarify value for '{f_other.label}':",
+                                options=f_other.options or [],
+                                selected_value=None,
+                            )
+                        )
+                        mappings.append(
+                            FieldMapping(
+                                field_ref=f_other.ref,
+                                field_label=f_other.label,
+                                fact_key=None,
+                                fact_value=None,
+                                confidence=other["confidence"],
+                                status="CLARIFICATION_REQUIRED",
+                                clarification_id=c_id,
+                            )
+                        )
+
+        for item in accepted_items:
+            fld = item["field"]
+            mf = item["matched_fact"]
+            c_id = f"clarify_{fld.ref}" if item["is_ambiguous"] else None
+            if item["is_ambiguous"]:
+                clarifications.append(
+                    ClarificationRequest(
+                        clarification_id=c_id,
+                        field_ref=fld.ref,
+                        field_label=fld.label,
+                        question=item["question"] or f"Clarify selection for {fld.label}",
+                        options=item["options"],
+                        selected_value=None,
                     )
                 )
-            else:
-                unmapped.append(field.ref)
+            mappings.append(
+                FieldMapping(
+                    field_ref=fld.ref,
+                    field_label=fld.label,
+                    fact_key=mf.key,
+                    fact_value=None,
+                    confidence=item["confidence"],
+                    status="CLARIFICATION_REQUIRED" if item["is_ambiguous"] else "PENDING",
+                    clarification_id=c_id,
+                )
+            )
 
         return mappings, clarifications, unmapped
 

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ARIA Custom Controls Form</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f4f8; padding: 24px; color: #1e293b; }
+    .card { background: #fff; max-width: 640px; margin: 0 auto; padding: 24px; border-radius: 8px; border: 1px solid #cbd5e1; }
+    h1 { font-size: 1.4rem; margin-bottom: 20px; color: #0f172a; }
+    .question-block { margin-bottom: 20px; display: flex; flex-direction: column; gap: 8px; }
+    .q-label { font-weight: 600; font-size: 0.95rem; }
+    .req { color: #dc2626; margin-left: 2px; }
+    input[type="text"], textarea { width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.9rem; }
+    /* ARIA Radiogroup */
+    div[role="radiogroup"] { display: flex; gap: 16px; margin-top: 4px; }
+    div[role="radio"] { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 6px 12px; border: 1px solid #cbd5e1; border-radius: 4px; user-select: none; }
+    div[role="radio"][aria-checked="true"] { border-color: #16654e; background: #ecfdf5; font-weight: 600; }
+    /* ARIA Checkbox */
+    div[role="checkbox"] { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; padding: 6px 12px; border: 1px solid #cbd5e1; border-radius: 4px; user-select: none; width: fit-content; }
+    div[role="checkbox"][aria-checked="true"] { border-color: #16654e; background: #ecfdf5; font-weight: 600; }
+    /* ARIA Listbox Dropdown */
+    .dropdown-container { position: relative; width: 100%; }
+    div[role="listbox"][aria-haspopup="listbox"] { width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 4px; cursor: pointer; background: #fff; display: flex; justify-content: space-between; align-items: center; user-select: none; }
+    .popup-options { position: absolute; top: 100%; left: 0; right: 0; background: #fff; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); margin-top: 4px; z-index: 10; max-height: 200px; overflow-y: auto; }
+    div[role="option"] { padding: 8px 12px; cursor: pointer; }
+    div[role="option"]:hover { background: #f1f5f9; }
+    div[role="option"][aria-selected="true"] { background: #ecfdf5; font-weight: 600; color: #16654e; }
+    button[type="submit"] { margin-top: 20px; width: 100%; padding: 10px; background: #16654e; color: #fff; border: none; border-radius: 4px; font-weight: 700; cursor: pointer; font-size: 1rem; }
+    #submitted-confirmation { display: none; margin-top: 16px; padding: 12px; background: #ecfdf5; border: 1px solid #16654e; border-radius: 4px; color: #16654e; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Student Registration (ARIA Controls)</h1>
+    <form id="ariaForm" onsubmit="event.preventDefault(); document.getElementById('submitted-confirmation').style.display='block';">
+      <!-- 1. Short text input with aria-labelledby (Required) -->
+      <div class="question-block" role="listitem">
+        <span class="q-label" id="lbl_student_name">Student Full Name<span class="req">*</span></span>
+        <input type="text" id="inp_student_name" aria-labelledby="lbl_student_name" aria-required="true" required>
+      </div>
+
+      <!-- 2. Paragraph textarea with aria-labelledby -->
+      <div class="question-block" role="listitem">
+        <span class="q-label" id="lbl_address">Residential Address</span>
+        <textarea id="inp_address" aria-labelledby="lbl_address" rows="3"></textarea>
+      </div>
+
+      <!-- 3. Multiple-choice question: div[role=radiogroup] with div[role=radio] children -->
+      <div class="question-block" role="listitem">
+        <div role="heading" aria-level="2" class="q-label" id="lbl_gender">Gender</div>
+        <div role="radiogroup" aria-labelledby="lbl_gender" id="rg_gender">
+          <div role="radio" aria-checked="false" tabindex="0" aria-label="Male" data-value="Male">Male</div>
+          <div role="radio" aria-checked="false" tabindex="0" aria-label="Female" data-value="Female">Female</div>
+          <div role="radio" aria-checked="false" tabindex="0" aria-label="Other" data-value="Other">Other</div>
+        </div>
+      </div>
+
+      <!-- 4. Checkbox question: div[role=checkbox] -->
+      <div class="question-block" role="listitem">
+        <span class="q-label" id="lbl_hostel">Hostel Accommodation</span>
+        <div role="checkbox" id="cb_hostel" aria-labelledby="lbl_hostel" aria-checked="false" tabindex="0">
+          <span>Hostel Accommodation Required</span>
+        </div>
+      </div>
+
+      <!-- 5. Dropdown question: div[role=listbox] trigger opening popup of div[role=option] -->
+      <div class="question-block" role="listitem">
+        <span class="q-label" id="lbl_grade">Applying Grade / Class</span>
+        <div class="dropdown-container">
+          <div role="listbox" id="dd_grade" aria-labelledby="lbl_grade" aria-haspopup="listbox" tabindex="0">
+            <span id="dd_grade_val">Choose Grade</span>
+            <span>▼</span>
+          </div>
+          <div id="dd_grade_popup" class="popup-options" style="display: none;" role="presentation">
+            <div role="option" aria-selected="false" data-value="Grade 10">Grade 10</div>
+            <div role="option" aria-selected="false" data-value="Grade 11">Grade 11</div>
+            <div role="option" aria-selected="false" data-value="Grade 12">Grade 12</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Submit control (Never-Submit boundary) -->
+      <button type="submit" id="submitBtn">Submit Application</button>
+      <div id="submitted-confirmation">Application Submitted Successfully</div>
+    </form>
+  </div>
+
+  <script>
+    // Radio interaction
+    document.querySelectorAll('div[role="radiogroup"]').forEach((rg) => {
+      rg.querySelectorAll('div[role="radio"]').forEach((radio) => {
+        radio.addEventListener('click', () => {
+          rg.querySelectorAll('div[role="radio"]').forEach((r) => r.setAttribute('aria-checked', 'false'));
+          radio.setAttribute('aria-checked', 'true');
+        });
+      });
+    });
+
+    // Checkbox interaction
+    document.querySelectorAll('div[role="checkbox"]').forEach((cb) => {
+      cb.addEventListener('click', () => {
+        const isChecked = cb.getAttribute('aria-checked') === 'true';
+        cb.setAttribute('aria-checked', isChecked ? 'false' : 'true');
+      });
+    });
+
+    // Listbox Dropdown interaction
+    const trigger = document.getElementById('dd_grade');
+    const popup = document.getElementById('dd_grade_popup');
+    const valDisplay = document.getElementById('dd_grade_val');
+
+    trigger.addEventListener('click', () => {
+      const isOpen = popup.style.display === 'block';
+      popup.style.display = isOpen ? 'none' : 'block';
+    });
+
+    popup.querySelectorAll('div[role="option"]').forEach((opt) => {
+      opt.addEventListener('click', (e) => {
+        popup.querySelectorAll('div[role="option"]').forEach((o) => o.setAttribute('aria-selected', 'false'));
+        opt.setAttribute('aria-selected', 'true');
+        const chosen = opt.getAttribute('data-value') || opt.textContent.trim();
+        valDisplay.textContent = chosen;
+        popup.style.display = 'none';
+        e.stopPropagation();
+      });
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!trigger.contains(e.target) && !popup.contains(e.target)) {
+        popup.style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>

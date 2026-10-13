@@ -38,7 +38,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   const totalFields = sessions.reduce((acc, s) => acc + (s.fieldsFilled || 0), 0);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '1040px', margin: '0 auto' }}>
       {/* First-Run / No Details Card */}
       <div
         style={{

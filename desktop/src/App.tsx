@@ -188,10 +188,10 @@ export const App: React.FC = () => {
     <div
       style={{
         display: 'flex',
-        minHeight: '100vh',
+        height: '100vh',
         background: 'var(--bg-app)',
         fontFamily: 'var(--font-sans)',
-        overflowX: 'hidden',
+        overflow: 'hidden',
       }}
     >
       {/* 1. Left Dark Sidebar */}
@@ -353,7 +353,9 @@ export const App: React.FC = () => {
           display: 'flex',
           flexDirection: 'column',
           minWidth: 0,
-          overflowX: 'hidden',
+          minHeight: 0,
+          height: '100vh',
+          overflow: 'hidden',
         }}
       >
         {/* Top Header */}
@@ -547,6 +549,7 @@ export const App: React.FC = () => {
             padding: '28px 32px',
             overflowY: 'auto',
             minWidth: 0,
+            minHeight: 0,
           }}
         >
           {activeNav === 'Home' && (

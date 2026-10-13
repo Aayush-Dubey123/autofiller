@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   Sun,
   Trash2,
+  Settings,
 } from 'lucide-react';
 import { bridge } from '../lib/bridge';
 import type { VaultStatus } from '../types/autofiller';
@@ -242,11 +243,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const isExtraProtectionOn = Boolean(vaultStatus.hasPassphraseSlot);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '28px', maxWidth: '840px', margin: '0 auto' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '1040px', margin: '0 auto' }}>
+      {/* Canonical Header */}
       <div>
-        <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0F2E23' }}>Settings</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Settings size={22} color="#16654E" />
+          <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0F2E23' }}>Settings</h1>
+        </div>
         <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-          Manage your privacy protection, app settings, and stored data.
+          Manage your privacy protection, app preferences, and stored data.
         </p>
       </div>
 
@@ -266,270 +271,295 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       )}
 
-      {/* 1. Privacy & Security */}
-      <div
-        style={{
-          background: 'var(--bg-card)',
-          borderRadius: 'var(--radius-lg)',
-          border: '1px solid var(--border-subtle)',
-          padding: '24px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '20px',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div
-              style={{
-                width: '38px',
-                height: '38px',
-                borderRadius: '10px',
-                background: isExtraProtectionOn ? '#D1FAE5' : '#E2E8F0',
-                color: isExtraProtectionOn ? '#065F46' : '#334155',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              {isExtraProtectionOn ? <ShieldCheck size={20} /> : <Lock size={20} />}
-            </div>
-            <div>
-              <h2 style={{ fontSize: '1.125rem', fontWeight: 800, color: '#0F2E23' }}>Privacy & Security</h2>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                Local AES-256-GCM Vault Encryption
-              </div>
-            </div>
-          </div>
-
-          <span
-            style={{
-              padding: '6px 14px',
-              borderRadius: '20px',
-              fontSize: '0.8125rem',
-              fontWeight: 700,
-              background: isExtraProtectionOn ? '#10B981' : '#64748B',
-              color: '#FFFFFF',
-            }}
-          >
-            {isExtraProtectionOn ? 'Extra protection on' : 'Standard protection'}
-          </span>
-        </div>
-
-        {/* Explanation text */}
+      {/* 2-Column Responsive Layout */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 0.85fr', gap: '20px' }}>
+        {/* Left Column: Privacy & Security Primary Card */}
         <div
           style={{
-            background: 'var(--bg-app)',
-            borderRadius: 'var(--radius-md)',
-            padding: '16px',
+            background: 'var(--bg-card)',
+            borderRadius: 'var(--radius-lg)',
             border: '1px solid var(--border-subtle)',
-            fontSize: '0.84375rem',
-            lineHeight: 1.5,
-            color: 'var(--text-secondary)',
+            padding: '22px',
+            boxShadow: 'var(--shadow-card)',
             display: 'flex',
             flexDirection: 'column',
-            gap: '8px',
+            gap: '18px',
           }}
         >
-          {isExtraProtectionOn ? (
-            <div>
-              <strong>Extra Protection Mode:</strong> Your details are encrypted with your private passphrase. Passphrase is required whenever the app launches or locks.
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div
+                style={{
+                  width: '38px',
+                  height: '38px',
+                  borderRadius: '10px',
+                  background: isExtraProtectionOn ? '#D1FAE5' : '#E2E8F0',
+                  color: isExtraProtectionOn ? '#065F46' : '#334155',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                {isExtraProtectionOn ? <ShieldCheck size={20} /> : <Lock size={20} />}
+              </div>
+              <div>
+                <h2 style={{ fontSize: '1.125rem', fontWeight: 800, color: '#0F2E23' }}>Privacy & Security</h2>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  Local AES-256-GCM Vault Encryption
+                </div>
+              </div>
             </div>
-          ) : (
-            <div>
-              <strong>Standard Protection Mode:</strong> Details are encrypted locally using your Windows account security. Anyone signed in to this Windows account can open the app in Standard mode.
-            </div>
-          )}
 
-          <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '8px', fontSize: '0.78125rem', color: 'var(--text-muted)' }}>
-            Field labels are sent to AI for matching; your values stay on this device; uploaded documents are processed by Gemini.
+            <span
+              style={{
+                padding: '4px 12px',
+                borderRadius: 'var(--radius-full)',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                background: isExtraProtectionOn ? '#10B981' : '#64748B',
+                color: '#FFFFFF',
+              }}
+            >
+              {isExtraProtectionOn ? 'Extra protection on' : 'Standard protection'}
+            </span>
+          </div>
+
+          {/* Mode explanation */}
+          <div
+            style={{
+              background: '#F9F8F5',
+              borderRadius: 'var(--radius-md)',
+              padding: '14px 16px',
+              border: '1px solid var(--border-subtle)',
+              fontSize: '0.8125rem',
+              lineHeight: 1.5,
+              color: 'var(--text-secondary)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '8px',
+            }}
+          >
+            {isExtraProtectionOn ? (
+              <div>
+                <strong style={{ color: '#0F2E23' }}>Extra Protection Active:</strong> Your details are encrypted with your master passphrase. The passphrase is required each time AutoFiller launches or auto-locks.
+              </div>
+            ) : (
+              <div>
+                <strong style={{ color: '#0F2E23' }}>Standard Protection:</strong> Details are encrypted locally using Windows DPAPI user security. Anyone signed into this Windows account can open the app.
+              </div>
+            )}
+
+            <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '8px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              Field labels are sent to AI for matching; your values stay on this device; uploaded documents are processed by Gemini.
+            </div>
+          </div>
+
+          {/* Action Controls */}
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: 'auto' }}>
+            {!isExtraProtectionOn ? (
+              <button
+                onClick={handleStartWizard}
+                style={{
+                  padding: '10px 18px',
+                  borderRadius: 'var(--radius-md)',
+                  background: '#16654E',
+                  color: '#FFFFFF',
+                  border: 'none',
+                  fontWeight: 700,
+                  fontSize: '0.84375rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  boxShadow: '0 2px 8px rgba(22, 101, 78, 0.2)',
+                }}
+              >
+                <Key size={16} />
+                <span>Turn on Extra Protection</span>
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => setShowChangeModal(true)}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--bg-app)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-primary)',
+                    fontWeight: 600,
+                    fontSize: '0.8125rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Change Privacy Key
+                </button>
+
+                <button
+                  onClick={() => setShowDisableModal(true)}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--bg-app)',
+                    border: '1px solid var(--border-subtle)',
+                    color: '#DC2626',
+                    fontWeight: 600,
+                    fontSize: '0.8125rem',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Turn off Extra Protection
+                </button>
+
+                {onLockVault && (
+                  <button
+                    onClick={handleLockNow}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 'var(--radius-md)',
+                      background: '#0F2E23',
+                      color: '#FFFFFF',
+                      border: 'none',
+                      fontWeight: 700,
+                      fontSize: '0.8125rem',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                    }}
+                  >
+                    <Lock size={15} />
+                    <span>Lock Now</span>
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </div>
 
-        {/* Action Controls */}
-        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-          {!isExtraProtectionOn ? (
+        {/* Right Column: Stack of Compact Secondary Panels */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* Appearance Panel */}
+          <div
+            style={{
+              background: 'var(--bg-card)',
+              borderRadius: 'var(--radius-lg)',
+              border: '1px solid var(--border-subtle)',
+              padding: '18px 20px',
+              boxShadow: 'var(--shadow-card)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
+            <div>
+              <h2 style={{ fontSize: '0.9375rem', fontWeight: 800, color: '#0F2E23' }}>App Appearance</h2>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                Toggle Light or Dark desktop theme
+              </div>
+            </div>
+
             <button
-              onClick={handleStartWizard}
+              onClick={onToggleTheme}
               style={{
-                padding: '10px 20px',
+                padding: '8px 14px',
                 borderRadius: 'var(--radius-md)',
-                background: '#16654E',
-                color: '#FFFFFF',
-                border: 'none',
+                background: '#F9F8F5',
+                border: '1px solid var(--border-subtle)',
+                color: '#0F2E23',
                 fontWeight: 700,
-                fontSize: '0.875rem',
+                fontSize: '0.8125rem',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
               }}
             >
-              <Key size={16} />
-              <span>Turn on Extra Protection</span>
+              {theme === 'light' ? <Sun size={16} color="#16654E" /> : <Moon size={16} color="#16654E" />}
+              <span>{theme === 'light' ? 'Light Theme' : 'Dark Theme'}</span>
             </button>
-          ) : (
-            <>
-              <button
-                onClick={() => setShowChangeModal(true)}
-                style={{
-                  padding: '10px 18px',
-                  borderRadius: 'var(--radius-md)',
-                  background: 'var(--bg-app)',
-                  border: '1px solid var(--border-subtle)',
-                  color: 'var(--text-primary)',
-                  fontWeight: 600,
-                  fontSize: '0.875rem',
-                  cursor: 'pointer',
-                }}
-              >
-                Change Privacy Key
-              </button>
+          </div>
 
-              <button
-                onClick={() => setShowDisableModal(true)}
-                style={{
-                  padding: '10px 18px',
-                  borderRadius: 'var(--radius-md)',
-                  background: 'var(--bg-app)',
-                  border: '1px solid var(--border-subtle)',
-                  color: '#DC2626',
-                  fontWeight: 600,
-                  fontSize: '0.875rem',
-                  cursor: 'pointer',
-                }}
-              >
-                Turn off Extra Protection
-              </button>
-
-              {onLockVault && (
-                <button
-                  onClick={handleLockNow}
-                  style={{
-                    padding: '10px 18px',
-                    borderRadius: 'var(--radius-md)',
-                    background: '#0F2E23',
-                    color: '#FFFFFF',
-                    border: 'none',
-                    fontWeight: 700,
-                    fontSize: '0.875rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                  }}
-                >
-                  <Lock size={16} />
-                  <span>Lock Now</span>
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* 2. Your Data */}
-      <div
-        style={{
-          background: 'var(--bg-card)',
-          borderRadius: 'var(--radius-lg)',
-          border: '1px solid var(--border-subtle)',
-          padding: '24px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '16px',
-        }}
-      >
-        <h2 style={{ fontSize: '1.125rem', fontWeight: 800, color: '#0F2E23' }}>Your Data</h2>
-        <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-          Clear all profiles, history records, logs, and backend session data from this device.
-        </p>
-
-        <div>
-          <button
-            onClick={() => setShowEraseModal(true)}
+          {/* Your Data Panel */}
+          <div
             style={{
-              padding: '10px 18px',
-              borderRadius: 'var(--radius-md)',
-              background: '#FEF2F2',
-              border: '1px solid #FCA5A5',
-              color: '#DC2626',
-              fontWeight: 700,
-              fontSize: '0.875rem',
-              cursor: 'pointer',
+              background: 'var(--bg-card)',
+              borderRadius: 'var(--radius-lg)',
+              border: '1px solid var(--border-subtle)',
+              padding: '18px 20px',
+              boxShadow: 'var(--shadow-card)',
               display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
+              flexDirection: 'column',
+              gap: '12px',
             }}
           >
-            <Trash2 size={16} />
-            <span>Erase All My Data</span>
-          </button>
-        </div>
-      </div>
+            <div>
+              <h2 style={{ fontSize: '0.9375rem', fontWeight: 800, color: '#0F2E23' }}>Your Data & Storage</h2>
+              <p style={{ fontSize: '0.78125rem', color: 'var(--text-secondary)', marginTop: '2px', lineHeight: 1.4 }}>
+                Purge all local profiles, session histories, traces, and backend session data from this computer.
+              </p>
+            </div>
 
-      {/* 3. Appearance */}
-      <div
-        style={{
-          background: 'var(--bg-card)',
-          borderRadius: 'var(--radius-lg)',
-          border: '1px solid var(--border-subtle)',
-          padding: '24px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '16px',
-        }}
-      >
-        <h2 style={{ fontSize: '1.125rem', fontWeight: 800, color: '#0F2E23' }}>Appearance</h2>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <div style={{ fontSize: '0.9375rem', fontWeight: 600, color: 'var(--text-primary)' }}>App Theme</div>
-            <div style={{ fontSize: '0.78125rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-              Switch between Light and Dark mode
+            <div>
+              <button
+                onClick={() => setShowEraseModal(true)}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 'var(--radius-md)',
+                  background: '#FEF2F2',
+                  border: '1px solid #FCA5A5',
+                  color: '#DC2626',
+                  fontWeight: 700,
+                  fontSize: '0.8125rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <Trash2 size={14} />
+                <span>Erase All My Data</span>
+              </button>
             </div>
           </div>
 
-          <button
-            onClick={onToggleTheme}
+          {/* About AutoFiller AI Panel */}
+          <div
             style={{
-              padding: '8px 16px',
-              borderRadius: 'var(--radius-md)',
-              background: 'var(--bg-app)',
+              background: 'var(--bg-card)',
+              borderRadius: 'var(--radius-lg)',
               border: '1px solid var(--border-subtle)',
-              color: 'var(--text-primary)',
-              fontWeight: 700,
-              fontSize: '0.875rem',
-              cursor: 'pointer',
+              padding: '18px 20px',
+              boxShadow: 'var(--shadow-card)',
               display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
+              flexDirection: 'column',
+              gap: '6px',
             }}
           >
-            {theme === 'light' ? <Sun size={16} /> : <Moon size={16} />}
-            <span>{theme === 'light' ? 'Light Mode' : 'Dark Mode'}</span>
-          </button>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <h2 style={{ fontSize: '0.9375rem', fontWeight: 800, color: '#0F2E23' }}>About AutoFiller AI</h2>
+              <span
+                style={{
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  padding: '2px 8px',
+                  borderRadius: 'var(--radius-full)',
+                  background: '#D9EFE0',
+                  color: '#0F4C3A',
+                }}
+              >
+                {version}
+              </span>
+            </div>
+            <p style={{ fontSize: '0.78125rem', color: 'var(--text-secondary)' }}>
+              Intelligent Electron desktop application for automated document extraction and form-filling.
+            </p>
+            <div style={{ fontSize: '0.75rem', color: '#16654E', fontWeight: 700, marginTop: '2px' }}>
+              Safety Policy: Form submission is strictly user-controlled.
+            </div>
+          </div>
         </div>
-      </div>
-
-      {/* 4. About */}
-      <div
-        style={{
-          background: 'var(--bg-card)',
-          borderRadius: 'var(--radius-lg)',
-          border: '1px solid var(--border-subtle)',
-          padding: '24px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '8px',
-        }}
-      >
-        <h2 style={{ fontSize: '1.125rem', fontWeight: 800, color: '#0F2E23' }}>About AutoFiller AI</h2>
-        <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-          Version: <strong>{version}</strong>
-        </div>
-        <p style={{ fontSize: '0.8125rem', color: '#16654E', fontWeight: 700, marginTop: '4px' }}>
-          AutoFiller never submits forms. You review and submit.
-        </p>
       </div>
 
       {/* WIZARD MODAL: 3-Step Turn On Extra Protection */}

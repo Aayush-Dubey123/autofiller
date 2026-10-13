@@ -409,7 +409,7 @@ export const MyDetailsView: React.FC<MyDetailsViewProps> = ({ onProfileSaved }) 
   const activeProfile = profiles.find((p) => p.id === activeProfileId) || profiles[0];
 
   return (
-    <div style={{ maxWidth: '960px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <div style={{ maxWidth: '1040px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {/* Intro Header & Banner */}
       <div
         style={{
@@ -423,9 +423,10 @@ export const MyDetailsView: React.FC<MyDetailsViewProps> = ({ onProfileSaved }) 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <h2 style={{ fontSize: '1.375rem', fontWeight: 800, color: '#0F2E23' }}>
+              <User size={22} color="#16654E" />
+              <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0F2E23' }}>
                 My Details
-              </h2>
+              </h1>
               {/* Autosave status indicator */}
               <div
                 style={{

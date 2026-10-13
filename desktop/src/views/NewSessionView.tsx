@@ -358,7 +358,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', maxWidth: '1000px', margin: '0 auto' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '1040px', margin: '0 auto' }}>
       {/* Page Header */}
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -641,396 +641,444 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
         );
       })()}
 
-      {/* Launcher Configuration Card */}
-      <div
-        style={{
-          background: 'var(--bg-card)',
-          borderRadius: 'var(--radius-lg)',
-          border: '1px solid var(--border-subtle)',
-          padding: '28px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '24px',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.02)',
-        }}
-      >
-        {/* Step 1: Data Source Selection */}
-        <div>
-          <label style={{ fontSize: '0.875rem', fontWeight: 700, color: '#0F2E23', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Layers size={18} color="#16654E" />
-            <span>1. Select Data Source</span>
-          </label>
-          <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-            Choose whether to use saved profile facts, an uploaded document, or combine both.
-          </p>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginTop: '14px' }}>
-            {[
-              { mode: 'profile' as DataSourceMode, title: 'Saved Profile', desc: 'Use facts from your Encrypted Vault profile', icon: <User size={20} /> },
-              { mode: 'document' as DataSourceMode, title: 'Upload Document', desc: 'Extract facts directly from a PDF or image', icon: <UploadCloud size={20} /> },
-              { mode: 'both' as DataSourceMode, title: 'Both (Merged)', desc: 'Combine Vault profile + Document with conflict resolution', icon: <Layers size={20} /> },
-            ].map((option) => {
-              const isSelected = dataSourceMode === option.mode;
-              return (
-                <div
-                  key={option.mode}
-                  onClick={() => setDataSourceMode(option.mode)}
-                  style={{
-                    padding: '16px',
-                    borderRadius: 'var(--radius-md)',
-                    border: `2px solid ${isSelected ? '#16654E' : 'var(--border-subtle)'}`,
-                    background: isSelected ? 'rgba(22, 101, 78, 0.05)' : 'var(--bg-app)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '8px',
-                    transition: 'all 0.2s ease',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: isSelected ? '#16654E' : '#475569' }}>
-                    {option.icon}
-                    {isSelected && <CheckCircle2 size={18} color="#16654E" />}
-                  </div>
-                  <div style={{ fontWeight: 700, fontSize: '0.9375rem', color: isSelected ? '#0F2E23' : 'var(--text-primary)' }}>
-                    {option.title}
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-                    {option.desc}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Data Source Configuration Details */}
-        {(dataSourceMode === 'profile' || dataSourceMode === 'both') && (
-          <div style={{ padding: '16px', background: 'var(--bg-app)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-            <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
-              Select Active Vault Profile
+      {/* 2-Column Responsive Workspace Grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.08fr 0.92fr', gap: '20px' }}>
+        {/* Left Column: Data Source Configuration (Step 1) */}
+        <div
+          style={{
+            background: 'var(--bg-card)',
+            borderRadius: 'var(--radius-lg)',
+            border: '1px solid var(--border-subtle)',
+            padding: '22px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px',
+            boxShadow: 'var(--shadow-card)',
+          }}
+        >
+          {/* Step 1: Data Source Selection */}
+          <div>
+            <label style={{ fontSize: '0.875rem', fontWeight: 700, color: '#0F2E23', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Layers size={18} color="#16654E" />
+              <span>1. Select Data Source</span>
             </label>
-            <select
-              value={selectedProfileId}
-              onChange={(e) => setSelectedProfileId(e.target.value)}
-              style={{
-                width: '100%',
-                marginTop: '6px',
-                padding: '10px 14px',
-                borderRadius: 'var(--radius-md)',
-                border: '1px solid var(--border-subtle)',
-                background: 'var(--bg-card)',
-                fontSize: '0.875rem',
-                fontWeight: 600,
-              }}
-            >
-              {profiles.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} ({p.sections.reduce((acc, s) => acc + s.fields.filter((f) => Boolean(f.value)).length, 0)} fields)
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {(dataSourceMode === 'document' || dataSourceMode === 'both') && (
-          <div style={{ padding: '16px', background: 'var(--bg-app)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div>
-                <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
-                  Uploaded Document
-                </div>
-                <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>
-                  {uploadedDocName ? `${uploadedDocName} (${(uploadedDocSize / 1024).toFixed(0)} KB)` : 'No document selected'}
-                </div>
-              </div>
-              <button
-                onClick={handleSelectDocFile}
-                disabled={isExtractingDoc}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid #16654E',
-                  background: '#16654E',
-                  color: '#FFFFFF',
-                  fontSize: '0.8125rem',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                }}
-              >
-                {isExtractingDoc ? <RotateCw size={14} className="animate-spin" /> : <UploadCloud size={14} />}
-                <span>{uploadedDocName ? 'Change Document' : 'Choose Document'}</span>
-              </button>
-            </div>
-
-            {/* Document Extraction Progress States */}
-            {extractionStage !== 'idle' && (
-              <div
-                style={{
-                  marginTop: '14px',
-                  padding: '14px 16px',
-                  borderRadius: 'var(--radius-md)',
-                  background: extractionStage === 'error' ? '#FEF2F2' : '#F0FDF4',
-                  border: `1px solid ${extractionStage === 'error' ? '#FCA5A5' : '#86EFAC'}`,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '12px',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    {extractionStage === 'completed' && <CheckCircle2 size={18} color="#16654E" />}
-                    {extractionStage === 'error' && <AlertTriangle size={18} color="#DC2626" />}
-                    {extractionStage !== 'completed' && extractionStage !== 'error' && (
-                      <RotateCw size={18} color="#16654E" className="animate-spin" />
-                    )}
-                    <span
-                      style={{
-                        fontWeight: 700,
-                        fontSize: '0.875rem',
-                        color: extractionStage === 'error' ? '#991B1B' : '#0F2E23',
-                      }}
-                    >
-                      {extractionStageMessage}
-                    </span>
-                  </div>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
-                    {extractionStage === 'uploading' && '1/4 Uploading'}
-                    {extractionStage === 'reading_document' && '2/4 Reading'}
-                    {extractionStage === 'extracting_information' && '3/4 Extracting'}
-                    {extractionStage === 'organizing_facts' && '4/4 Organizing'}
-                    {extractionStage === 'completed' && 'Completed'}
-                    {extractionStage === 'error' && 'Error'}
-                  </span>
-                </div>
-
-                {/* Progressive Stage Steps */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
-                  {[
-                    { id: 'uploading', label: '1. Uploading' },
-                    { id: 'reading_document', label: '2. Reading Document' },
-                    { id: 'extracting_information', label: '3. Extracting Facts' },
-                    { id: 'organizing_facts', label: '4. Organizing' },
-                  ].map((step, idx) => {
-                    const order = ['uploading', 'reading_document', 'extracting_information', 'organizing_facts'];
-                    const currentIdx = order.indexOf(extractionStage);
-                    const isDone = extractionStage === 'completed' || (currentIdx > idx);
-                    const isActive = extractionStage === step.id;
-                    const isFailed = extractionStage === 'error' && (currentIdx === idx || (currentIdx === -1 && idx === 0));
-
-                    let pillBg = 'rgba(0, 0, 0, 0.04)';
-                    let pillColor = 'var(--text-muted)';
-                    let pillBorder = 'transparent';
-
-                    if (isDone) {
-                      pillBg = '#DCFCE7';
-                      pillColor = '#16654E';
-                      pillBorder = '#86EFAC';
-                    } else if (isActive) {
-                      pillBg = '#E0F2FE';
-                      pillColor = '#0369A1';
-                      pillBorder = '#7DD3FC';
-                    } else if (isFailed) {
-                      pillBg = '#FEE2E2';
-                      pillColor = '#991B1B';
-                      pillBorder = '#FCA5A5';
-                    }
-
-                    return (
-                      <div
-                        key={step.id}
-                        style={{
-                          padding: '6px 8px',
-                          borderRadius: 'var(--radius-sm)',
-                          background: pillBg,
-                          color: pillColor,
-                          border: `1px solid ${pillBorder}`,
-                          fontSize: '0.75rem',
-                          fontWeight: 700,
-                          textAlign: 'center',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: '4px',
-                        }}
-                      >
-                        {isDone && <CheckCircle2 size={12} />}
-                        {isActive && <RotateCw size={12} className="animate-spin" />}
-                        <span>{step.label}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Conflicts resolution card (Both mode only) */}
-        {dataSourceMode === 'both' && conflicts.length > 0 && (
-          <div
-            style={{
-              padding: '16px',
-              background: '#FFFBEB',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid #FCD34D',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '12px',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#B45309' }}>
-              <AlertTriangle size={18} />
-              <span style={{ fontWeight: 700, fontSize: '0.875rem' }}>
-                {conflicts.length} Fact Conflict(s) Detected
-              </span>
-            </div>
-            <p style={{ fontSize: '0.8125rem', color: '#92400E' }}>
-              The profile and document contain different values for the following fields. Choose which value to use:
+            <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+              Choose whether to use saved profile facts, an uploaded document, or combine both.
             </p>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {conflicts.map((c) => {
-                const choice = conflictChoices[c.key] || 'document';
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginTop: '12px' }}>
+              {[
+                { mode: 'profile' as DataSourceMode, title: 'Saved Profile', desc: 'Encrypted Vault profile', icon: <User size={18} /> },
+                { mode: 'document' as DataSourceMode, title: 'Document', desc: 'PDF or image facts', icon: <UploadCloud size={18} /> },
+                { mode: 'both' as DataSourceMode, title: 'Merged', desc: 'Profile + Document', icon: <Layers size={18} /> },
+              ].map((option) => {
+                const isSelected = dataSourceMode === option.mode;
                 return (
                   <div
-                    key={c.key}
+                    key={option.mode}
+                    onClick={() => setDataSourceMode(option.mode)}
                     style={{
-                      padding: '10px 12px',
-                      background: '#FFFFFF',
-                      borderRadius: 'var(--radius-sm)',
-                      border: '1px solid #FDE68A',
+                      padding: '12px 10px',
+                      borderRadius: 'var(--radius-md)',
+                      border: `2px solid ${isSelected ? '#16654E' : 'var(--border-subtle)'}`,
+                      background: isSelected ? 'rgba(22, 101, 78, 0.05)' : '#F9F8F5',
+                      cursor: 'pointer',
                       display: 'flex',
+                      flexDirection: 'column',
+                      gap: '4px',
+                      transition: 'all 0.2s ease',
+                      textAlign: 'center',
                       alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: '12px',
                     }}
                   >
-                    <span style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#0F2E23' }}>
-                      {c.label} ({c.key}):
-                    </span>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <button
-                        type="button"
-                        onClick={() => setConflictChoices((prev) => ({ ...prev, [c.key]: 'profile' }))}
-                        style={{
-                          padding: '4px 10px',
-                          borderRadius: 'var(--radius-sm)',
-                          border: `1px solid ${choice === 'profile' ? '#16654E' : '#CBD5E1'}`,
-                          background: choice === 'profile' ? '#F0FDF4' : '#FFFFFF',
-                          color: choice === 'profile' ? '#16654E' : '#475569',
-                          fontSize: '0.75rem',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Profile: "{c.profileVal}"
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setConflictChoices((prev) => ({ ...prev, [c.key]: 'document' }))}
-                        style={{
-                          padding: '4px 10px',
-                          borderRadius: 'var(--radius-sm)',
-                          border: `1px solid ${choice === 'document' ? '#16654E' : '#CBD5E1'}`,
-                          background: choice === 'document' ? '#F0FDF4' : '#FFFFFF',
-                          color: choice === 'document' ? '#16654E' : '#475569',
-                          fontSize: '0.75rem',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Doc: "{c.docVal}"
-                      </button>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: isSelected ? '#16654E' : '#475569' }}>
+                      {option.icon}
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: '0.8125rem', color: isSelected ? '#0F2E23' : 'var(--text-primary)' }}>
+                      {option.title}
+                    </div>
+                    <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', lineHeight: 1.2 }}>
+                      {option.desc}
                     </div>
                   </div>
                 );
               })}
             </div>
           </div>
-        )}
 
-        {/* Step 2: Target Web Form Link */}
-        <div>
-          <label style={{ fontSize: '0.875rem', fontWeight: 700, color: '#0F2E23', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Globe size={18} color="#16654E" />
-            <span>2. Target Web Form URL</span>
-          </label>
-          <input
-            type="url"
-            value={targetUrl}
-            onChange={(e) => onSetTargetUrl(e.target.value)}
-            placeholder="https://example.com/admission-form"
-            style={{
-              width: '100%',
-              marginTop: '8px',
-              padding: '12px 14px',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-subtle)',
-              background: 'var(--bg-app)',
-              fontSize: '0.9375rem',
-              fontWeight: 600,
-            }}
-          />
+          {/* Data Source Configuration Details */}
+          {(dataSourceMode === 'profile' || dataSourceMode === 'both') && (
+            <div style={{ padding: '14px', background: '#F9F8F5', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+              <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                Active Vault Profile
+              </label>
+              <select
+                value={selectedProfileId}
+                onChange={(e) => setSelectedProfileId(e.target.value)}
+                style={{
+                  width: '100%',
+                  marginTop: '6px',
+                  padding: '9px 12px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-card)',
+                  fontSize: '0.84375rem',
+                  fontWeight: 600,
+                  color: '#0F2E23',
+                }}
+              >
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.sections.reduce((acc, s) => acc + s.fields.filter((f) => Boolean(f.value)).length, 0)} fields)
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {(dataSourceMode === 'document' || dataSourceMode === 'both') && (
+            <div style={{ padding: '14px', background: '#F9F8F5', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                    Uploaded Document
+                  </div>
+                  <div style={{ fontSize: '0.84375rem', fontWeight: 600, color: 'var(--text-primary)', marginTop: '2px' }}>
+                    {uploadedDocName ? `${uploadedDocName} (${(uploadedDocSize / 1024).toFixed(0)} KB)` : 'No document selected'}
+                  </div>
+                </div>
+                <button
+                  onClick={handleSelectDocFile}
+                  disabled={isExtractingDoc}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid #16654E',
+                    background: '#16654E',
+                    color: '#FFFFFF',
+                    fontSize: '0.8125rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  {isExtractingDoc ? <RotateCw size={14} className="animate-spin" /> : <UploadCloud size={14} />}
+                  <span>{uploadedDocName ? 'Change' : 'Choose File'}</span>
+                </button>
+              </div>
+
+              {/* Document Extraction Progress States */}
+              {extractionStage !== 'idle' && (
+                <div
+                  style={{
+                    marginTop: '12px',
+                    padding: '12px 14px',
+                    borderRadius: 'var(--radius-md)',
+                    background: extractionStage === 'error' ? '#FEF2F2' : '#F0FDF4',
+                    border: `1px solid ${extractionStage === 'error' ? '#FCA5A5' : '#86EFAC'}`,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {extractionStage === 'completed' && <CheckCircle2 size={16} color="#16654E" />}
+                      {extractionStage === 'error' && <AlertTriangle size={16} color="#DC2626" />}
+                      {extractionStage !== 'completed' && extractionStage !== 'error' && (
+                        <RotateCw size={16} color="#16654E" className="animate-spin" />
+                      )}
+                      <span
+                        style={{
+                          fontWeight: 700,
+                          fontSize: '0.8125rem',
+                          color: extractionStage === 'error' ? '#991B1B' : '#0F2E23',
+                        }}
+                      >
+                        {extractionStageMessage}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                      {extractionStage === 'uploading' && '1/4 Uploading'}
+                      {extractionStage === 'reading_document' && '2/4 Reading'}
+                      {extractionStage === 'extracting_information' && '3/4 Extracting'}
+                      {extractionStage === 'organizing_facts' && '4/4 Organizing'}
+                      {extractionStage === 'completed' && 'Completed'}
+                      {extractionStage === 'error' && 'Error'}
+                    </span>
+                  </div>
+
+                  {/* Progressive Stage Steps */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px' }}>
+                    {[
+                      { id: 'uploading', label: '1. Upload' },
+                      { id: 'reading_document', label: '2. Read' },
+                      { id: 'extracting_information', label: '3. Extract' },
+                      { id: 'organizing_facts', label: '4. Organize' },
+                    ].map((step, idx) => {
+                      const order = ['uploading', 'reading_document', 'extracting_information', 'organizing_facts'];
+                      const currentIdx = order.indexOf(extractionStage);
+                      const isDone = extractionStage === 'completed' || currentIdx > idx;
+                      const isActive = extractionStage === step.id;
+                      const isFailed = extractionStage === 'error' && (currentIdx === idx || (currentIdx === -1 && idx === 0));
+
+                      let pillBg = 'rgba(0, 0, 0, 0.04)';
+                      let pillColor = 'var(--text-muted)';
+                      let pillBorder = 'transparent';
+
+                      if (isDone) {
+                        pillBg = '#DCFCE7';
+                        pillColor = '#16654E';
+                        pillBorder = '#86EFAC';
+                      } else if (isActive) {
+                        pillBg = '#E0F2FE';
+                        pillColor = '#0369A1';
+                        pillBorder = '#7DD3FC';
+                      } else if (isFailed) {
+                        pillBg = '#FEE2E2';
+                        pillColor = '#991B1B';
+                        pillBorder = '#FCA5A5';
+                      }
+
+                      return (
+                        <div
+                          key={step.id}
+                          style={{
+                            padding: '4px 6px',
+                            borderRadius: 'var(--radius-sm)',
+                            background: pillBg,
+                            color: pillColor,
+                            border: `1px solid ${pillBorder}`,
+                            fontSize: '0.6875rem',
+                            fontWeight: 700,
+                            textAlign: 'center',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '4px',
+                          }}
+                        >
+                          {isDone && <CheckCircle2 size={11} />}
+                          {isActive && <RotateCw size={11} className="animate-spin" />}
+                          <span>{step.label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Conflicts resolution card (Both mode only) */}
+          {dataSourceMode === 'both' && conflicts.length > 0 && (
+            <div
+              style={{
+                padding: '14px',
+                background: '#FFFBEB',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid #FCD34D',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#B45309' }}>
+                <AlertTriangle size={16} />
+                <span style={{ fontWeight: 700, fontSize: '0.8125rem' }}>
+                  {conflicts.length} Fact Conflict(s) Detected
+                </span>
+              </div>
+              <p style={{ fontSize: '0.75rem', color: '#92400E' }}>
+                Choose which value to use for each conflicting field:
+              </p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {conflicts.map((c) => {
+                  const choice = conflictChoices[c.key] || 'document';
+                  return (
+                    <div
+                      key={c.key}
+                      style={{
+                        padding: '8px 10px',
+                        background: '#FFFFFF',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid #FDE68A',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                      }}
+                    >
+                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#0F2E23' }}>
+                        {c.label}:
+                      </span>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setConflictChoices((prev) => ({ ...prev, [c.key]: 'profile' }))}
+                          style={{
+                            padding: '3px 8px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: `1px solid ${choice === 'profile' ? '#16654E' : '#CBD5E1'}`,
+                            background: choice === 'profile' ? '#F0FDF4' : '#FFFFFF',
+                            color: choice === 'profile' ? '#16654E' : '#475569',
+                            fontSize: '0.6875rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Profile: "{c.profileVal}"
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConflictChoices((prev) => ({ ...prev, [c.key]: 'document' }))}
+                          style={{
+                            padding: '3px 8px',
+                            borderRadius: 'var(--radius-sm)',
+                            border: `1px solid ${choice === 'document' ? '#16654E' : '#CBD5E1'}`,
+                            background: choice === 'document' ? '#F0FDF4' : '#FFFFFF',
+                            color: choice === 'document' ? '#16654E' : '#475569',
+                            fontSize: '0.6875rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Doc: "{c.docVal}"
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Step 3: Runtime ID Fields Permission Checkbox */}
+        {/* Right Column: Form Target & Launch Execution (Steps 2 & 3) */}
         <div
           style={{
-            padding: '14px 16px',
-            background: 'var(--bg-app)',
-            borderRadius: 'var(--radius-md)',
+            background: 'var(--bg-card)',
+            borderRadius: 'var(--radius-lg)',
             border: '1px solid var(--border-subtle)',
+            padding: '22px',
             display: 'flex',
-            alignItems: 'center',
-            gap: '12px',
+            flexDirection: 'column',
+            gap: '16px',
+            boxShadow: 'var(--shadow-card)',
           }}
         >
-          <input
-            type="checkbox"
-            id="fill_id_permission"
-            checked={fillIdFields}
-            onChange={(e) => setFillIdFields(e.target.checked)}
-            style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-          />
+          {/* Step 2: Target Web Form Link */}
           <div>
-            <label htmlFor="fill_id_permission" style={{ fontSize: '0.875rem', fontWeight: 700, color: '#0F2E23', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Shield size={16} color="#16654E" />
-              <span>Fill these ID fields?</span>
+            <label style={{ fontSize: '0.875rem', fontWeight: 700, color: '#0F2E23', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Globe size={18} color="#16654E" />
+              <span>2. Target Web Form URL</span>
             </label>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-              Explicitly allow the agent to populate SSN, Aadhaar, Passport, or Tax ID numbers on this form.
+            <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+              Paste the public application or registration form URL.
             </p>
+            <input
+              type="url"
+              value={targetUrl}
+              onChange={(e) => onSetTargetUrl(e.target.value)}
+              placeholder="https://example.com/admission-form"
+              style={{
+                width: '100%',
+                marginTop: '8px',
+                padding: '10px 12px',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--border-subtle)',
+                background: '#F9F8F5',
+                fontSize: '0.875rem',
+                fontWeight: 600,
+                color: '#0F2E23',
+              }}
+            />
           </div>
-        </div>
 
-        {/* Facts Summary & Action Footer */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid var(--border-subtle)', paddingTop: '20px' }}>
-          <div>
-            <div style={{ fontSize: '0.875rem', fontWeight: 700, color: '#0F2E23' }}>
-              Ready to Fill: {finalFacts.length} Facts
+          {/* Step 3: Runtime ID Fields Permission Checkbox */}
+          <div
+            style={{
+              padding: '12px 14px',
+              background: '#F9F8F5',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-subtle)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+            }}
+          >
+            <input
+              type="checkbox"
+              id="fill_id_permission"
+              checked={fillIdFields}
+              onChange={(e) => setFillIdFields(e.target.checked)}
+              style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+            />
+            <div>
+              <label htmlFor="fill_id_permission" style={{ fontSize: '0.84375rem', fontWeight: 700, color: '#0F2E23', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Shield size={15} color="#16654E" />
+                <span>Fill ID & sensitive numbers?</span>
+              </label>
+              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '1px' }}>
+                Explicitly permit agent to fill SSN, Aadhaar, Passport, or Tax ID numbers.
+              </p>
             </div>
+          </div>
+
+          {/* Pre-flight Ready Facts Summary Panel */}
+          <div
+            style={{
+              marginTop: 'auto',
+              padding: '14px 16px',
+              borderRadius: 'var(--radius-md)',
+              background: '#F9F8F5',
+              border: '1px solid var(--border-subtle)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                Preflight Facts Check
+              </span>
+              <span
+                style={{
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  padding: '2px 8px',
+                  borderRadius: 'var(--radius-full)',
+                  background: finalFacts.length > 0 ? '#D9EFE0' : '#FEF3C7',
+                  color: finalFacts.length > 0 ? '#0F4C3A' : '#92400E',
+                }}
+              >
+                {finalFacts.length} Facts Ready
+              </span>
+            </div>
+
             {!canStart && (
-              <div style={{ fontSize: '0.75rem', color: '#DC2626', fontWeight: 600, marginTop: '2px' }}>
-                Reason: {disabledReason}
+              <div style={{ fontSize: '0.75rem', color: '#DC2626', fontWeight: 600 }}>
+                {disabledReason}
               </div>
             )}
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {/* Launch Action Controls */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingTop: '4px' }}>
             {(isRunning || state === 'REVIEW_READY' || state === 'PAUSED' || state === 'USER_TAKEOVER') && onStopSession && (
               <button
                 onClick={onStopSession}
                 style={{
-                  padding: '12px 20px',
+                  padding: '11px 18px',
                   borderRadius: 'var(--radius-md)',
                   border: '1px solid #DC2626',
                   background: '#FEF2F2',
                   color: '#DC2626',
                   fontWeight: 700,
-                  fontSize: '0.875rem',
+                  fontSize: '0.84375rem',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
@@ -1045,33 +1093,36 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
               onClick={handleStart}
               disabled={!canStart || isRunning}
               style={{
-                padding: '12px 28px',
+                flex: 1,
+                padding: '11px 22px',
                 borderRadius: 'var(--radius-md)',
                 border: 'none',
                 background: canStart && !isRunning ? '#16654E' : '#94A3B8',
                 color: '#FFFFFF',
                 fontWeight: 800,
-                fontSize: '0.9375rem',
+                fontSize: '0.90625rem',
                 cursor: canStart && !isRunning ? 'pointer' : 'not-allowed',
                 display: 'flex',
                 alignItems: 'center',
+                justifyContent: 'center',
                 gap: '8px',
-                boxShadow: canStart ? '0 4px 14px rgba(22, 101, 78, 0.3)' : 'none',
+                boxShadow: canStart ? '0 4px 14px rgba(22, 101, 78, 0.25)' : 'none',
+                transition: 'all 0.2s ease',
               }}
             >
               {isRunning ? (
                 <>
-                  <RotateCw size={18} className="animate-spin" />
+                  <RotateCw size={17} className="animate-spin" />
                   <span>Session Active...</span>
                 </>
               ) : state === 'COMPLETED' ? (
                 <>
-                  <CheckCircle2 size={18} />
+                  <CheckCircle2 size={17} />
                   <span>Submitted</span>
                 </>
               ) : (
                 <>
-                  <Play size={18} />
+                  <Play size={17} />
                   <span>Start Automation</span>
                 </>
               )}

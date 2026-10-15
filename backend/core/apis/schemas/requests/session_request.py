@@ -1,5 +1,5 @@
 """
-Request schemas for FormPilot API endpoints.
+Request schemas for AutoFiller AI API endpoints.
 
 Defines wire input contracts for document ingestion, form mapping, and user clarification.
 """
@@ -89,7 +89,7 @@ class ClarificationAnswerRequest(BaseModel):
 
 
 class CreateSessionRequest(BaseModel):
-    """Initialization payload for a new FormPilot session."""
+    """Initialization payload for a new AutoFiller AI session."""
 
     document_name: str = Field(description="Name of source document")
     target_url: str = Field(description="Target web form URL")

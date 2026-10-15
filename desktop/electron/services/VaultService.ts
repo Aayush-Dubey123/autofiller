@@ -14,8 +14,8 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { safeStorage } from 'electron';
-import { ProfileRecord, VaultStatus } from '../shared/types';
+import { app, safeStorage } from 'electron';
+import { AgentEventPayload, ProfileRecord, SessionRecord, VaultStatus, WorkflowState } from '../shared/types';
 
 const SCRYPT_N_V2 = 131072; // N = 2^17
 const IDLE_TIMEOUT_MS = 15 * 60 * 1000;
@@ -833,3 +833,285 @@ export class VaultService {
     }
   }
 }
+
+/** File name holding the encrypted internal operator token. */
+const TOKEN_FILE = 'operator-token.bin';
+
+export class SecretStore {
+  private tokenPath: string;
+
+  constructor() {
+    this.tokenPath = path.join(app.getPath('userData'), TOKEN_FILE);
+  }
+
+  public isEncryptionAvailable(): boolean {
+    try {
+      return safeStorage.isEncryptionAvailable();
+    } catch {
+      return false;
+    }
+  }
+
+  public saveToken(token: string): void {
+    if (!this.isEncryptionAvailable()) {
+      throw new Error(
+        'OS credential encryption is unavailable; refusing to store the token in plaintext.'
+      );
+    }
+    const encrypted = safeStorage.encryptString(token);
+    fs.writeFileSync(this.tokenPath, encrypted, { mode: 0o600 });
+  }
+
+  public loadToken(): string | null {
+    try {
+      if (!fs.existsSync(this.tokenPath)) {
+        return null;
+      }
+      const encrypted = fs.readFileSync(this.tokenPath);
+      if (!this.isEncryptionAvailable()) {
+        return null;
+      }
+      return safeStorage.decryptString(encrypted);
+    } catch (error) {
+      console.error('Could not read stored operator token:', error);
+      return null;
+    }
+  }
+
+  public clearToken(): void {
+    try {
+      if (fs.existsSync(this.tokenPath)) {
+        fs.unlinkSync(this.tokenPath);
+      }
+    } catch (error) {
+      console.error('Could not clear stored operator token:', error);
+    }
+  }
+}
+
+const STORE_FILE = 'autofiller-history.json';
+const MAX_SESSIONS = 200;
+
+const ACTIVE_STATES = new Set<string>([
+  'EXTRACTING_DOC',
+  'SCANNING_FORM',
+  'MAPPING_FIELDS',
+  'CLARIFICATION_REQUIRED',
+  'FILLING_FORM',
+  'VERIFYING',
+  'PAUSED',
+  'USER_TAKEOVER',
+]);
+
+const FINISHED_STATES = new Set<string>(['REVIEW_READY', 'COMPLETED', 'ERROR', 'IDLE']);
+const FILL_TOOLS = new Set<string>(['fill_text', 'select_option', 'select_radio', 'set_checkbox']);
+
+export function cleanHostAndPath(urlStr: string): string {
+  if (!urlStr) return 'unknown';
+  try {
+    const parsed = new URL(urlStr.trim());
+    return `${parsed.host}${parsed.pathname}`;
+  } catch {
+    return urlStr.split('?')[0].split('#')[0].replace(/^https?:\/\//i, '');
+  }
+}
+
+interface StoreData {
+  sessions: SessionRecord[];
+}
+
+export class HistoryStore {
+  private readonly filePath: string;
+  private data: StoreData = { sessions: [] };
+  private activeId: string | null = null;
+  private lastFailure = '';
+
+  constructor(baseDir: string) {
+    this.filePath = path.join(baseDir, STORE_FILE);
+    this.load();
+  }
+
+  public listSessions(): SessionRecord[] {
+    return [...this.data.sessions].reverse();
+  }
+
+  public beginSession(info: {
+    targetUrl: string;
+    profileName?: string;
+    dataSource?: string;
+    totalFields?: number;
+  }): SessionRecord {
+    const record: SessionRecord = {
+      id: `run_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
+      date: new Date().toISOString(),
+      hostAndPath: cleanHostAndPath(info.targetUrl),
+      status: 'EXTRACTING_DOC',
+      fieldsFilled: 0,
+      totalFields: info.totalFields || 0,
+      profileName: info.profileName || 'Default Profile',
+      dataSource: info.dataSource || 'profile',
+    };
+    this.data.sessions.push(record);
+    this.data.sessions = this.data.sessions.slice(-MAX_SESSIONS);
+    this.activeId = record.id;
+    this.lastFailure = '';
+    this.save();
+    return record;
+  }
+
+  public noteState(state: WorkflowState): void {
+    const record = this.active();
+    if (!record) return;
+
+    if (state === 'IDLE') {
+      if (record.status === 'COMPLETED' || record.status === 'REVIEW_READY') {
+        this.activeId = null;
+        return;
+      }
+      if (ACTIVE_STATES.has(record.status)) {
+        record.status = 'INTERRUPTED';
+      }
+      this.activeId = null;
+      this.save();
+      return;
+    }
+
+    record.status = state;
+    if (FINISHED_STATES.has(state)) {
+      if (state === 'ERROR') record.error = this.lastFailure || 'Session failed.';
+      if (state === 'COMPLETED' || state === 'REVIEW_READY') {
+        const currentTotal = record.totalFields ?? 0;
+        if (currentTotal > 0 && record.fieldsFilled > currentTotal) {
+          record.totalFields = record.fieldsFilled;
+        }
+      }
+    }
+    this.save();
+  }
+
+  public noteEvent(event: AgentEventPayload): void {
+    const record = this.active();
+    if (!record) return;
+
+    if (typeof event.metadata?.totalFields === 'number' && event.metadata.totalFields > 0) {
+      record.totalFields = Math.max(event.metadata.totalFields, record.fieldsFilled);
+      this.save();
+    }
+
+    if (typeof event.metadata?.verifiedCount === 'number' && event.metadata.verifiedCount >= 0) {
+      record.fieldsFilled = event.metadata.verifiedCount;
+      const currentTotal = record.totalFields ?? 0;
+      if (currentTotal < record.fieldsFilled) {
+        record.totalFields = record.fieldsFilled;
+      }
+      this.save();
+    }
+
+    if (event.type === 'TOOL_COMPLETED' && event.success === true && FILL_TOOLS.has(event.tool ?? '')) {
+      record.fieldsFilled += 1;
+      const currentTotal = record.totalFields ?? 0;
+      if (currentTotal < record.fieldsFilled) {
+        record.totalFields = record.fieldsFilled;
+      }
+      this.save();
+    } else if (event.type === 'TOOL_FAILED') {
+      this.lastFailure = String(event.description || 'Step failed').slice(0, 300);
+      if (record.status === 'ERROR') {
+        record.error = this.lastFailure;
+        this.save();
+      }
+    }
+  }
+
+  public completeSession(): void {
+    const record = this.active();
+    if (record) {
+      record.status = 'COMPLETED';
+      const currentTotal = record.totalFields ?? 0;
+      if (currentTotal > 0 && record.fieldsFilled > currentTotal) {
+        record.totalFields = record.fieldsFilled;
+      }
+      this.save();
+    }
+    this.activeId = null;
+  }
+
+  public deleteSession(id: string): void {
+    this.data.sessions = this.data.sessions.filter((s) => s.id !== id);
+    this.save();
+  }
+
+  public deleteSessions(ids: string[]): void {
+    const set = new Set(ids);
+    this.data.sessions = this.data.sessions.filter((s) => !set.has(s.id));
+    this.save();
+  }
+
+  public clearAllSessions(): void {
+    this.data.sessions = [];
+    this.save();
+  }
+
+  private active(): SessionRecord | undefined {
+    return this.data.sessions.find((session) => session.id === this.activeId);
+  }
+
+  private load(): void {
+    try {
+      if (!fs.existsSync(this.filePath)) return;
+      const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
+      const sessions: SessionRecord[] = (Array.isArray(raw?.sessions) ? raw.sessions : []).map(
+        (entry: any) => {
+          const rawStatus = String(entry.status || '');
+          let resolvedStatus: SessionRecord['status'];
+          if (rawStatus === 'COMPLETED' || rawStatus === 'REVIEW_READY' || rawStatus === 'ERROR' || rawStatus === 'INTERRUPTED') {
+            resolvedStatus = rawStatus as SessionRecord['status'];
+          } else {
+            resolvedStatus = 'INTERRUPTED';
+          }
+
+          const fieldsFilled = Number(entry.fieldsFilled) || 0;
+          let totalFields = Number(entry.totalFields) || 0;
+          if (totalFields > 0 && fieldsFilled > totalFields) {
+            totalFields = fieldsFilled;
+          }
+
+          return {
+            id: String(entry.id || ''),
+            date: String(entry.date || entry.startedAt || new Date().toISOString()),
+            hostAndPath: String(entry.hostAndPath || cleanHostAndPath(entry.targetUrl || '')),
+            status: resolvedStatus,
+            fieldsFilled,
+            totalFields,
+            profileName: entry.profileName ? String(entry.profileName) : undefined,
+            dataSource: entry.dataSource ? String(entry.dataSource) : undefined,
+            error: entry.error ? String(entry.error).slice(0, 300) : undefined,
+          };
+        }
+      );
+      this.data = { sessions };
+    } catch (error) {
+      console.error('Could not read history store; starting empty:', error);
+      this.data = { sessions: [] };
+    }
+  }
+
+  private save(): void {
+    try {
+      const serialized = JSON.stringify(this.data, null, 2);
+      const temp = `${this.filePath}.${Date.now()}.${Math.random().toString(36).slice(2, 6)}.tmp`;
+      try {
+        fs.writeFileSync(temp, serialized, { mode: 0o600 });
+        fs.renameSync(temp, this.filePath);
+      } catch {
+        fs.writeFileSync(this.filePath, serialized, { mode: 0o600 });
+        try {
+          if (fs.existsSync(temp)) fs.unlinkSync(temp);
+        } catch {}
+      }
+    } catch (error) {
+      console.error('Could not persist history store:', error);
+    }
+  }
+}
+

@@ -1,5 +1,5 @@
 """
-Document extraction service for FormPilot backend.
+Document extraction service for AutoFiller AI backend.
 
 Extracts structured domain facts from PDF documents and text files using PyMuPDF and
 NLP heuristics, with strict path containment and size limits.

@@ -76,12 +76,6 @@ export function useFormSession() {
         setDocumentName(result.fileName || 'selected_document.pdf');
         setDocumentSize(result.fileSize || 0);
         setIsExtracting(true);
-        setExtractionStage('uploading');
-
-        await new Promise((r) => setTimeout(r, 200));
-        setExtractionStage('reading_document');
-
-        await new Promise((r) => setTimeout(r, 200));
         setExtractionStage('extracting_information');
 
         const { facts: extracted, error } = await extractDocumentFacts({
@@ -94,8 +88,6 @@ export function useFormSession() {
           setInlineError(error);
           setFacts([]);
         } else {
-          setExtractionStage('organizing_facts');
-          await new Promise((r) => setTimeout(r, 200));
           setFacts(extracted || []);
           setExtractionStage('completed');
         }

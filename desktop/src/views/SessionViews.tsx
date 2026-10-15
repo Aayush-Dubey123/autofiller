@@ -1,33 +1,369 @@
-import React, { useEffect, useState } from 'react';
+/**
+ * SessionViews: Core automation session & history views for AutoFiller AI.
+ *
+ * Consolidates HomeView, NewSessionView, and HistoryView into a unified session view module.
+ */
+
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
-  ArrowRight,
+  Calendar,
   Check,
+  CheckCircle,
   CheckCircle2,
-  CircleDot,
+  CheckSquare,
+  Clock,
   FileText,
   Globe,
-  Lock,
+  History,
+  Layers,
   Play,
+  RefreshCw,
   RotateCw,
   Shield,
+  Square,
+  Trash2,
   UploadCloud,
   User,
   UserCheck,
-  Square,
-  Layers,
-  History,
+  XCircle,
 } from 'lucide-react';
 import { bridge, hasElectronBridge } from '../lib/bridge';
 import { deriveFacts } from '../../electron/shared/profileSchema';
 import type {
   AgentEventPayload,
   DocumentExtractionStage,
+  DocumentRecord,
   ExtractedFact,
   ProfileRecord,
+  SessionRecord,
   WorkflowState,
 } from '../types/autofiller';
+
+/* ========================================================================= */
+/* 1. HomeView Component                                                     */
+/* ========================================================================= */
+
+interface HomeViewProps {
+  onNewSession: () => void;
+  onOpenDocuments: () => void;
+  onOpenHistory: () => void;
+  onUseDocument: (doc: DocumentRecord) => void;
+}
+
+export const HomeView: React.FC<HomeViewProps> = ({
+  onNewSession,
+  onOpenDocuments,
+  onOpenHistory,
+  onUseDocument,
+}) => {
+  const [sessions, setSessions] = useState<SessionRecord[]>([]);
+  const [documents, setDocuments] = useState<DocumentRecord[]>([]);
+
+  useEffect(() => {
+    bridge.listSessions().then(setSessions).catch(() => []);
+    bridge.listDocuments().then(setDocuments).catch(() => []);
+  }, []);
+
+  const completedCount = sessions.filter((s) => s.status === 'REVIEW_READY' || s.status === 'COMPLETED').length;
+  const totalFields = sessions.reduce((acc, s) => acc + (s.fieldsFilled || 0), 0);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '1040px', margin: '0 auto' }}>
+      {/* First-Run / No Details Card */}
+      <div
+        style={{
+          background: 'var(--bg-card)',
+          borderRadius: 'var(--radius-lg)',
+          border: '1.5px solid var(--border-focus)',
+          padding: '24px 28px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '16px',
+          boxShadow: '0 4px 16px rgba(22, 101, 78, 0.08)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div
+            style={{
+              width: '44px',
+              height: '44px',
+              borderRadius: '12px',
+              background: 'var(--badge-green-bg)',
+              color: 'var(--text-brand)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <User size={24} />
+          </div>
+          <div>
+            <h2 style={{ fontSize: '1.125rem', fontWeight: 800, color: 'var(--text-title)' }}>
+              Add your details once, reuse them on any form
+            </h2>
+            <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+              Save your personal information, address, and contact details encrypted on this device. Field labels are sent to AI for matching; your values stay on this device; uploaded documents are processed by Gemini.
+            </p>
+          </div>
+        </div>
+
+        <button
+          onClick={onOpenDocuments}
+          style={{
+            background: 'var(--status-success)',
+            color: '#FFFFFF',
+            border: 'none',
+            borderRadius: 'var(--radius-md)',
+            padding: '10px 20px',
+            fontSize: '0.875rem',
+            fontWeight: 700,
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Add Your Details
+        </button>
+      </div>
+
+      {/* 2-Column Split: Recent Documents & Recent History */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+        {/* Recent Documents Card */}
+        <div
+          style={{
+            background: 'var(--bg-card)',
+            borderRadius: 'var(--radius-lg)',
+            padding: '20px',
+            border: '1px solid var(--border-subtle)',
+            boxShadow: 'var(--shadow-card)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '16px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <FileText size={18} color="var(--text-brand)" />
+              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-title)' }}>
+                Processed Documents
+              </h3>
+            </div>
+            <button
+              onClick={onOpenDocuments}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-brand)',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              View All ({documents.length})
+            </button>
+          </div>
+
+          {documents.length === 0 ? (
+            <div
+              style={{
+                textAlign: 'center',
+                padding: '32px 16px',
+                color: 'var(--text-muted)',
+                fontSize: '0.875rem',
+                background: 'var(--bg-surface-subtle)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px dashed var(--border-subtle)',
+              }}
+            >
+              <FileText size={32} style={{ margin: '0 auto 8px auto', opacity: 0.4 }} />
+              <div>No documents processed yet.</div>
+              <div style={{ fontSize: '0.75rem', marginTop: '4px' }}>
+                Upload a document in a new session to save it here.
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {documents.slice(0, 4).map((doc) => (
+                <div
+                  key={doc.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '12px',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--bg-surface-subtle)',
+                    border: '1px solid var(--border-subtle)',
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-title)' }}>
+                      {doc.name}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                      {doc.facts.length} facts • {(doc.size / 1024).toFixed(0)} KB
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => onUseDocument(doc)}
+                    style={{
+                      background: 'var(--badge-green-bg)',
+                      color: 'var(--text-brand)',
+                      border: '1px solid var(--badge-green-border)',
+                      borderRadius: 'var(--radius-sm)',
+                      padding: '6px 12px',
+                      fontSize: '0.75rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Use Document
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Recent Session History Card */}
+        <div
+          style={{
+            background: 'var(--bg-card)',
+            borderRadius: 'var(--radius-lg)',
+            padding: '20px',
+            border: '1px solid var(--border-subtle)',
+            boxShadow: 'var(--shadow-card)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '16px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <History size={18} color="var(--text-brand)" />
+              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-title)' }}>
+                Recent History
+              </h3>
+            </div>
+            <button
+              onClick={onOpenHistory}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-brand)',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              View All ({sessions.length})
+            </button>
+          </div>
+
+          {sessions.length === 0 ? (
+            <div
+              style={{
+                textAlign: 'center',
+                padding: '32px 16px',
+                color: 'var(--text-muted)',
+                fontSize: '0.875rem',
+                background: 'var(--bg-surface-subtle)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px dashed var(--border-subtle)',
+              }}
+            >
+              <History size={32} style={{ margin: '0 auto 8px auto', opacity: 0.4 }} />
+              <div>No past sessions recorded yet.</div>
+              <div style={{ fontSize: '0.75rem', marginTop: '4px' }}>
+                Completed form fills will automatically appear here.
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {sessions.slice(0, 4).map((session) => (
+                <div
+                  key={session.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '12px',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--bg-surface-subtle)',
+                    border: '1px solid var(--border-subtle)',
+                  }}
+                >
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <div style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-title)' }}>
+                      {session.hostAndPath}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: '0.75rem',
+                        color: 'var(--text-muted)',
+                        marginTop: '2px',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        maxWidth: '240px',
+                      }}
+                    >
+                      {session.profileName ? `Profile: ${session.profileName}` : new Date(session.date).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <span
+                    style={{
+                      fontSize: '0.75rem',
+                      fontWeight: 700,
+                      padding: '4px 10px',
+                      borderRadius: 'var(--radius-full)',
+                      background:
+                        session.status === 'REVIEW_READY' || session.status === 'COMPLETED'
+                          ? 'var(--badge-green-bg)'
+                          : session.status === 'ERROR'
+                          ? 'var(--badge-red-bg)'
+                          : 'var(--badge-amber-bg)',
+                      color:
+                        session.status === 'REVIEW_READY' || session.status === 'COMPLETED'
+                          ? 'var(--badge-green-text)'
+                          : session.status === 'ERROR'
+                          ? 'var(--badge-red-text)'
+                          : 'var(--badge-amber-text)',
+                    }}
+                  >
+                    {session.status === 'COMPLETED'
+                      ? 'Submitted'
+                      : session.status === 'REVIEW_READY'
+                      ? 'Review Ready'
+                      : session.status === 'IDLE' || session.status === 'INTERRUPTED'
+                      ? 'Interrupted'
+                      : session.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ========================================================================= */
+/* 2. NewSessionView Component                                              */
+/* ========================================================================= */
 
 type DataSourceMode = 'profile' | 'document' | 'both';
 
@@ -125,11 +461,18 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
     loadVaultProfiles();
   }, []);
 
+  const lastLoadedDocRef = useRef<string>('');
+
   useEffect(() => {
-    if (propFacts && propFacts.length > 0 && docFacts.length === 0) {
-      setDocFacts(propFacts);
-      if (propDocumentName && !uploadedDocName) setUploadedDocName(propDocumentName);
-      if (propDocumentSize && !uploadedDocSize) setUploadedDocSize(propDocumentSize);
+    if (propFacts && propFacts.length > 0) {
+      const docIdentifier = `${propDocumentName || 'doc'}_${propFacts.length}`;
+      if (docIdentifier !== lastLoadedDocRef.current || docFacts.length === 0) {
+        lastLoadedDocRef.current = docIdentifier;
+        setDocFacts(propFacts);
+        if (propDocumentName) setUploadedDocName(propDocumentName);
+        if (propDocumentSize) setUploadedDocSize(propDocumentSize);
+        setDataSourceMode('document');
+      }
     }
   }, [propFacts, propDocumentName, propDocumentSize]);
 
@@ -254,16 +597,8 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
       setUploadedDocSize(sel.fileSize || 0);
 
       setIsExtractingDoc(true);
-      setExtractionStage('uploading');
-      setExtractionStageMessage('Uploading and staging document securely...');
-
-      await new Promise((r) => setTimeout(r, 200));
-      setExtractionStage('reading_document');
-      setExtractionStageMessage('Reading document structure and content...');
-
-      await new Promise((r) => setTimeout(r, 200));
       setExtractionStage('extracting_information');
-      setExtractionStageMessage('Extracting document facts...');
+      setExtractionStageMessage('Reading document and extracting facts with AI...');
 
       const res = await bridge.extractDocument({
         filePath: sel.filePath,
@@ -277,10 +612,6 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
         setDocFacts([]);
         onSetFacts([]);
       } else {
-        setExtractionStage('organizing_facts');
-        setExtractionStageMessage('Organizing and verifying extracted facts...');
-        await new Promise((r) => setTimeout(r, 200));
-
         const extracted = res.facts || [];
         setDocFacts(extracted);
         onSetFacts(extracted);
@@ -362,8 +693,8 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
       {/* Page Header */}
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Play size={22} color="#16654E" />
-          <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0F2E23' }}>New Automation Session</h1>
+          <Play size={22} color="var(--text-brand)" />
+          <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-title)' }}>New Automation Session</h1>
         </div>
         <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
           Configure your data source and target web form URL to launch AI form filling under your review.
@@ -411,7 +742,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                 height: '44px',
                 borderRadius: '50%',
                 background: '#DCFCE7',
-                color: '#16654E',
+                color: 'var(--text-brand)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -421,10 +752,10 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
               <CheckCircle2 size={24} />
             </div>
             <div>
-              <h3 style={{ fontSize: '1.125rem', fontWeight: 800, color: '#0F2E23' }}>
+              <h3 style={{ fontSize: '1.125rem', fontWeight: 800, color: 'var(--text-title)' }}>
                 Application Submitted Successfully!
               </h3>
-              <p style={{ fontSize: '0.875rem', color: '#16654E', marginTop: '2px' }}>
+              <p style={{ fontSize: '0.875rem', color: 'var(--text-brand)', marginTop: '2px' }}>
                 {completionStats
                   ? `All ${completionStats.verifiedCount} of ${completionStats.totalFields} form fields were verified and submitted. AutoFiller has saved the metadata record to history.`
                   : 'The web form was reviewed and manually submitted by the operator. AutoFiller has finalized the session and safely saved the metadata record.'}
@@ -441,7 +772,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                   padding: '10px 20px',
                   borderRadius: 'var(--radius-md)',
                   border: 'none',
-                  background: '#16654E',
+                  background: 'var(--status-success)',
                   color: '#FFFFFF',
                   fontWeight: 700,
                   fontSize: '0.875rem',
@@ -464,7 +795,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                   borderRadius: 'var(--radius-md)',
                   border: '1px solid #A5DCB4',
                   background: '#FFFFFF',
-                  color: '#0F2E23',
+                  color: 'var(--text-title)',
                   fontWeight: 700,
                   fontSize: '0.875rem',
                   cursor: 'pointer',
@@ -658,8 +989,8 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
         >
           {/* Step 1: Data Source Selection */}
           <div>
-            <label style={{ fontSize: '0.875rem', fontWeight: 700, color: '#0F2E23', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Layers size={18} color="#16654E" />
+            <label style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-title)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Layers size={18} color="var(--text-brand)" />
               <span>1. Select Data Source</span>
             </label>
             <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
@@ -680,8 +1011,8 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                     style={{
                       padding: '12px 10px',
                       borderRadius: 'var(--radius-md)',
-                      border: `2px solid ${isSelected ? '#16654E' : 'var(--border-subtle)'}`,
-                      background: isSelected ? 'rgba(22, 101, 78, 0.05)' : '#F9F8F5',
+                      border: `2px solid ${isSelected ? 'var(--badge-green-text)' : 'var(--border-subtle)'}`,
+                      background: isSelected ? 'var(--badge-green-bg)' : 'var(--bg-surface-subtle)',
                       cursor: 'pointer',
                       display: 'flex',
                       flexDirection: 'column',
@@ -691,10 +1022,10 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                       alignItems: 'center',
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: isSelected ? '#16654E' : '#475569' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: isSelected ? 'var(--text-brand)' : 'var(--text-secondary)' }}>
                       {option.icon}
                     </div>
-                    <div style={{ fontWeight: 700, fontSize: '0.8125rem', color: isSelected ? '#0F2E23' : 'var(--text-primary)' }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.8125rem', color: isSelected ? 'var(--text-title)' : 'var(--text-primary)' }}>
                       {option.title}
                     </div>
                     <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', lineHeight: 1.2 }}>
@@ -708,7 +1039,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
 
           {/* Data Source Configuration Details */}
           {(dataSourceMode === 'profile' || dataSourceMode === 'both') && (
-            <div style={{ padding: '14px', background: '#F9F8F5', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+            <div style={{ padding: '14px', background: 'var(--bg-surface-subtle)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
               <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
                 Active Vault Profile
               </label>
@@ -724,7 +1055,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                   background: 'var(--bg-card)',
                   fontSize: '0.84375rem',
                   fontWeight: 600,
-                  color: '#0F2E23',
+                  color: 'var(--text-title)',
                 }}
               >
                 {profiles.map((p) => (
@@ -737,7 +1068,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
           )}
 
           {(dataSourceMode === 'document' || dataSourceMode === 'both') && (
-            <div style={{ padding: '14px', background: '#F9F8F5', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+            <div style={{ padding: '14px', background: 'var(--bg-surface-subtle)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
                   <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
@@ -753,8 +1084,8 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                   style={{
                     padding: '8px 14px',
                     borderRadius: 'var(--radius-md)',
-                    border: '1px solid #16654E',
-                    background: '#16654E',
+                    border: '1px solid var(--border-focus)',
+                    background: 'var(--status-success)',
                     color: '#FFFFFF',
                     fontSize: '0.8125rem',
                     fontWeight: 700,
@@ -785,16 +1116,16 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      {extractionStage === 'completed' && <CheckCircle2 size={16} color="#16654E" />}
+                      {extractionStage === 'completed' && <CheckCircle2 size={16} color="var(--text-brand)" />}
                       {extractionStage === 'error' && <AlertTriangle size={16} color="#DC2626" />}
                       {extractionStage !== 'completed' && extractionStage !== 'error' && (
-                        <RotateCw size={16} color="#16654E" className="animate-spin" />
+                        <RotateCw size={16} color="var(--text-brand)" className="animate-spin" />
                       )}
                       <span
                         style={{
                           fontWeight: 700,
                           fontSize: '0.8125rem',
-                          color: extractionStage === 'error' ? '#991B1B' : '#0F2E23',
+                          color: extractionStage === 'error' ? 'var(--status-danger)' : 'var(--text-title)',
                         }}
                       >
                         {extractionStageMessage}
@@ -830,7 +1161,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
 
                       if (isDone) {
                         pillBg = '#DCFCE7';
-                        pillColor = '#16654E';
+                        pillColor = 'var(--text-brand)';
                         pillBorder = '#86EFAC';
                       } else if (isActive) {
                         pillBg = '#E0F2FE';
@@ -912,7 +1243,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                         gap: '8px',
                       }}
                     >
-                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#0F2E23' }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-title)' }}>
                         {c.label}:
                       </span>
                       <div style={{ display: 'flex', gap: '6px' }}>
@@ -922,9 +1253,9 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                           style={{
                             padding: '3px 8px',
                             borderRadius: 'var(--radius-sm)',
-                            border: `1px solid ${choice === 'profile' ? '#16654E' : '#CBD5E1'}`,
+                            border: `1px solid ${choice === 'profile' ? 'var(--border-focus)' : 'var(--border-subtle)'}`,
                             background: choice === 'profile' ? '#F0FDF4' : '#FFFFFF',
-                            color: choice === 'profile' ? '#16654E' : '#475569',
+                            color: choice === 'profile' ? 'var(--text-brand)' : 'var(--text-secondary)',
                             fontSize: '0.6875rem',
                             fontWeight: 700,
                             cursor: 'pointer',
@@ -938,9 +1269,9 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                           style={{
                             padding: '3px 8px',
                             borderRadius: 'var(--radius-sm)',
-                            border: `1px solid ${choice === 'document' ? '#16654E' : '#CBD5E1'}`,
+                            border: `1px solid ${choice === 'document' ? 'var(--border-focus)' : 'var(--border-subtle)'}`,
                             background: choice === 'document' ? '#F0FDF4' : '#FFFFFF',
-                            color: choice === 'document' ? '#16654E' : '#475569',
+                            color: choice === 'document' ? 'var(--text-brand)' : 'var(--text-secondary)',
                             fontSize: '0.6875rem',
                             fontWeight: 700,
                             cursor: 'pointer',
@@ -972,8 +1303,8 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
         >
           {/* Step 2: Target Web Form Link */}
           <div>
-            <label style={{ fontSize: '0.875rem', fontWeight: 700, color: '#0F2E23', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Globe size={18} color="#16654E" />
+            <label style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-title)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Globe size={18} color="var(--text-brand)" />
               <span>2. Target Web Form URL</span>
             </label>
             <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
@@ -990,10 +1321,10 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                 padding: '10px 12px',
                 borderRadius: 'var(--radius-md)',
                 border: '1px solid var(--border-subtle)',
-                background: '#F9F8F5',
+                background: 'var(--bg-surface-subtle)',
                 fontSize: '0.875rem',
                 fontWeight: 600,
-                color: '#0F2E23',
+                color: 'var(--text-title)',
               }}
             />
           </div>
@@ -1002,7 +1333,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
           <div
             style={{
               padding: '12px 14px',
-              background: '#F9F8F5',
+              background: 'var(--bg-surface-subtle)',
               borderRadius: 'var(--radius-md)',
               border: '1px solid var(--border-subtle)',
               display: 'flex',
@@ -1018,8 +1349,8 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
               style={{ width: '18px', height: '18px', cursor: 'pointer' }}
             />
             <div>
-              <label htmlFor="fill_id_permission" style={{ fontSize: '0.84375rem', fontWeight: 700, color: '#0F2E23', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Shield size={15} color="#16654E" />
+              <label htmlFor="fill_id_permission" style={{ fontSize: '0.84375rem', fontWeight: 700, color: 'var(--text-title)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Shield size={15} color="var(--text-brand)" />
                 <span>Fill ID & sensitive numbers?</span>
               </label>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '1px' }}>
@@ -1034,7 +1365,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
               marginTop: 'auto',
               padding: '14px 16px',
               borderRadius: 'var(--radius-md)',
-              background: '#F9F8F5',
+              background: 'var(--bg-surface-subtle)',
               border: '1px solid var(--border-subtle)',
               display: 'flex',
               flexDirection: 'column',
@@ -1051,8 +1382,8 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                   fontWeight: 700,
                   padding: '2px 8px',
                   borderRadius: 'var(--radius-full)',
-                  background: finalFacts.length > 0 ? '#D9EFE0' : '#FEF3C7',
-                  color: finalFacts.length > 0 ? '#0F4C3A' : '#92400E',
+                  background: finalFacts.length > 0 ? 'var(--badge-green-bg)' : 'var(--badge-amber-bg)',
+                  color: finalFacts.length > 0 ? 'var(--badge-green-text)' : 'var(--badge-amber-text)',
                 }}
               >
                 {finalFacts.length} Facts Ready
@@ -1097,7 +1428,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                 padding: '11px 22px',
                 borderRadius: 'var(--radius-md)',
                 border: 'none',
-                background: canStart && !isRunning ? '#16654E' : '#94A3B8',
+                background: canStart && !isRunning ? 'var(--accent-primary)' : 'var(--text-muted)',
                 color: '#FFFFFF',
                 fontWeight: 800,
                 fontSize: '0.90625rem',
@@ -1130,6 +1461,392 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
           </div>
         </div>
       </div>
+    </div>
+  );
+};
+
+/* ========================================================================= */
+/* 3. HistoryView Component                                                 */
+/* ========================================================================= */
+
+export const HistoryView: React.FC = () => {
+  const [sessions, setSessions] = useState<SessionRecord[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
+
+  const loadHistory = async () => {
+    setLoading(true);
+    try {
+      const list = await bridge.listSessions();
+      setSessions(list);
+      setSelectedIds(new Set());
+    } catch {
+      setSessions([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadHistory();
+  }, []);
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === sessions.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(sessions.map((s) => s.id)));
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    const next = new Set(selectedIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    setSelectedIds(next);
+  };
+
+  const handleDeleteOne = async (id: string) => {
+    await bridge.deleteHistorySession(id);
+    await loadHistory();
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedIds.size === 0) return;
+    await bridge.deleteHistorySessions(Array.from(selectedIds));
+    await loadHistory();
+  };
+
+  const handleClearAll = async () => {
+    await bridge.clearAllHistory();
+    setShowClearConfirm(false);
+    await loadHistory();
+  };
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'COMPLETED':
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#F0FDF4', color: 'var(--text-brand)', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 700, border: '1px solid var(--badge-green-border)' }}>
+            <CheckCircle size={12} />
+            <span>Submitted</span>
+          </span>
+        );
+      case 'REVIEW_READY':
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#ECFDF5', color: '#047857', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 700, border: '1px solid var(--badge-green-border)' }}>
+            <CheckCircle size={12} />
+            <span>Review Ready</span>
+          </span>
+        );
+      case 'ERROR':
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#FEF2F2', color: '#991B1B', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 700, border: '1px solid #FCA5A5' }}>
+            <XCircle size={12} />
+            <span>Error</span>
+          </span>
+        );
+      case 'INTERRUPTED':
+      case 'IDLE':
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#FFFBEB', color: '#B45309', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 700, border: '1px solid #FCD34D' }}>
+            <Clock size={12} />
+            <span>Interrupted</span>
+          </span>
+        );
+      default:
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#F1F5F9', color: '#475569', padding: '4px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 700, border: '1px solid #CBD5E1' }}>
+            <span>{status}</span>
+          </span>
+        );
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '1040px', margin: '0 auto' }}>
+      {/* Header & Global Actions */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <History size={22} color="var(--text-brand)" />
+            <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-title)' }}>Session History</h1>
+          </div>
+          <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+            Metadata records of past automation runs (strictly value-free).
+          </p>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {selectedIds.size > 0 && (
+            <button
+              onClick={handleDeleteSelected}
+              style={{
+                background: '#FEF2F2',
+                color: '#DC2626',
+                border: '1px solid #FCA5A5',
+                borderRadius: 'var(--radius-md)',
+                padding: '8px 14px',
+                fontSize: '0.8125rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <Trash2 size={14} />
+              <span>Delete Selected ({selectedIds.size})</span>
+            </button>
+          )}
+
+          {sessions.length > 0 && (
+            <button
+              onClick={() => setShowClearConfirm(true)}
+              style={{
+                background: 'var(--bg-card)',
+                color: '#DC2626',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-md)',
+                padding: '8px 14px',
+                fontSize: '0.8125rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <Trash2 size={14} />
+              <span>Clear All</span>
+            </button>
+          )}
+
+          <button
+            onClick={loadHistory}
+            style={{
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--radius-md)',
+              padding: '8px 14px',
+              fontSize: '0.8125rem',
+              fontWeight: 600,
+              color: 'var(--text-title)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+            }}
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            <span>Refresh</span>
+          </button>
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ padding: '60px', textAlign: 'center', color: 'var(--text-muted)' }}>
+          Loading metadata records...
+        </div>
+      ) : sessions.length === 0 ? (
+        <div
+          style={{
+            background: 'var(--bg-card)',
+            borderRadius: 'var(--radius-lg)',
+            padding: '48px 24px',
+            textAlign: 'center',
+            border: '1px solid var(--border-subtle)',
+            boxShadow: 'var(--shadow-card)',
+          }}
+        >
+          <History size={48} color="var(--text-brand)" style={{ margin: '0 auto 12px auto', opacity: 0.4 }} />
+          <h3 style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--text-title)' }}>No Session History Found</h3>
+          <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+            Start an automation session to view run metadata here.
+          </p>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {/* Select All Bar */}
+          <div
+            style={{
+              padding: '10px 16px',
+              background: 'var(--bg-card)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-subtle)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              fontSize: '0.8125rem',
+              fontWeight: 600,
+              color: 'var(--text-secondary)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }} onClick={toggleSelectAll}>
+              {selectedIds.size === sessions.length ? <CheckSquare size={16} color="var(--text-brand)" /> : <Square size={16} color="#94A3B8" />}
+              <span>Select All ({sessions.length} sessions)</span>
+            </div>
+            <span>Showing Metadata Only (Privacy Safe)</span>
+          </div>
+
+          {/* Session Record List */}
+          {sessions.map((session) => {
+            const isSelected = selectedIds.has(session.id);
+            return (
+              <div
+                key={session.id}
+                style={{
+                  background: 'var(--bg-card)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '16px 20px',
+                  border: `1px solid ${isSelected ? '#86EFAC' : 'var(--border-subtle)'}`,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.02)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '16px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}>
+                  <div onClick={() => toggleSelect(session.id)} style={{ cursor: 'pointer', flexShrink: 0 }}>
+                    {isSelected ? <CheckSquare size={18} color="var(--text-brand)" /> : <Square size={18} color="#94A3B8" />}
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 800, fontSize: '0.9375rem', color: 'var(--text-title)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Globe size={15} color="var(--text-brand)" />
+                        {session.hostAndPath}
+                      </span>
+                      {getStatusBadge(session.status)}
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '0.75rem', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Calendar size={13} />
+                        {new Date(session.date).toLocaleString()}
+                      </span>
+                      {session.profileName && (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <User size={13} />
+                          Profile: {session.profileName}
+                        </span>
+                      )}
+                      {session.dataSource && (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Layers size={13} />
+                          Source: {session.dataSource}
+                        </span>
+                      )}
+                    </div>
+
+                    {session.error && (
+                      <div style={{ fontSize: '0.75rem', color: '#991B1B', marginTop: '2px' }}>
+                        Reason: {session.error}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexShrink: 0 }}>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '0.9375rem', fontWeight: 800, color: 'var(--text-brand)' }}>
+                      {session.fieldsFilled} {session.totalFields ? `/ ${session.totalFields}` : ''}
+                    </div>
+                    <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>Fields Filled</div>
+                  </div>
+
+                  <button
+                    onClick={() => handleDeleteOne(session.id)}
+                    title="Delete session metadata"
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#DC2626',
+                      cursor: 'pointer',
+                      padding: '6px',
+                    }}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Clear All Confirmation Modal */}
+      {showClearConfirm && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.5)',
+            backdropFilter: 'blur(4px)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+          }}
+        >
+          <div
+            style={{
+              maxWidth: '420px',
+              width: '100%',
+              background: 'var(--bg-card)',
+              borderRadius: 'var(--radius-lg)',
+              border: '1px solid var(--border-subtle)',
+              padding: '24px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '16px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#DC2626' }}>
+              <AlertTriangle size={24} />
+              <h3 style={{ fontSize: '1.125rem', fontWeight: 800, color: 'var(--text-title)' }}>Clear All History?</h3>
+            </div>
+            <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              This will permanently delete all metadata session records. This action cannot be undone.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '8px' }}>
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-subtle)',
+                  background: 'transparent',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleClearAll}
+                style={{
+                  padding: '8px 20px',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'none',
+                  background: '#DC2626',
+                  color: '#FFFFFF',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Yes, Clear All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

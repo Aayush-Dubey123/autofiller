@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, HelpCircle, Send, X } from 'lucide-react';
+import { HelpCircle, Send, X } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 
 export interface ClarificationPrompt {

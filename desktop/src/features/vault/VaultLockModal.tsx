@@ -112,8 +112,8 @@ export const VaultLockModal: React.FC<VaultLockModalProps> = ({
               width: '42px',
               height: '42px',
               borderRadius: '12px',
-              background: '#D9EFE0',
-              color: '#16654E',
+              background: 'var(--badge-green-bg)',
+              color: 'var(--text-brand)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -122,7 +122,7 @@ export const VaultLockModal: React.FC<VaultLockModalProps> = ({
             <Lock size={22} />
           </div>
           <div>
-            <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0F2E23' }}>
+            <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-title)' }}>
               {mustSetNewKey ? 'Set New Privacy Key' : 'Unlock AutoFiller Vault'}
             </h2>
             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
@@ -153,7 +153,7 @@ export const VaultLockModal: React.FC<VaultLockModalProps> = ({
           {mustSetNewKey ? (
             <>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#0F2E23' }}>
+                <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-title)' }}>
                   New Privacy Key (min 10 characters)
                 </label>
                 <input
@@ -173,7 +173,7 @@ export const VaultLockModal: React.FC<VaultLockModalProps> = ({
                 />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#0F2E23' }}>
+                <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-title)' }}>
                   Confirm New Privacy Key
                 </label>
                 <input
@@ -194,7 +194,7 @@ export const VaultLockModal: React.FC<VaultLockModalProps> = ({
             </>
           ) : !useRecoveryMode ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#0F2E23' }}>
+              <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-title)' }}>
                 Privacy Key
               </label>
               <div style={{ position: 'relative' }}>
@@ -233,7 +233,7 @@ export const VaultLockModal: React.FC<VaultLockModalProps> = ({
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: '#0F2E23' }}>
+              <label style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-title)' }}>
                 Emergency Recovery Code
               </label>
               <input
@@ -262,7 +262,7 @@ export const VaultLockModal: React.FC<VaultLockModalProps> = ({
               style={{
                 background: 'none',
                 border: 'none',
-                color: '#16654E',
+                color: 'var(--text-brand)',
                 fontSize: '0.75rem',
                 fontWeight: 600,
                 cursor: 'pointer',
@@ -300,7 +300,7 @@ export const VaultLockModal: React.FC<VaultLockModalProps> = ({
               width: '100%',
               padding: '12px',
               borderRadius: 'var(--radius-md)',
-              background: '#16654E',
+              background: 'var(--status-success)',
               color: '#FFFFFF',
               border: 'none',
               fontWeight: 700,

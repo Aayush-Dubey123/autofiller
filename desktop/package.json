@@ -40,6 +40,10 @@
       "dist-electron/**/*",
       "public/**/*"
     ],
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/playwright/**"
+    ],
     "win": {
       "target": [
         "nsis",

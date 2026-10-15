@@ -12,8 +12,7 @@ import fs from 'fs';
 import { AgentController } from './agent/AgentController';
 import { registerIpcHandlers } from './ipc/ipcHandlers';
 import { BackendClient } from './services/BackendClient';
-import { HistoryStore } from './services/HistoryStore';
-import { SecretStore } from './services/SecretStore';
+import { HistoryStore, SecretStore } from './services/VaultService';
 
 /** Base URL of the local Python backend. */
 const BACKEND_BASE_URL = process.env.AUTOFILLER_BACKEND_URL || process.env.FORMPILOT_BACKEND_URL || 'http://127.0.0.1:8000';
@@ -133,7 +132,10 @@ function logEngineError(detail: string): void {
 function spawnBackend(): void {
   const isPackaged = app.isPackaged;
   const candidatePaths = isPackaged
-    ? [path.join(process.resourcesPath, 'backend', 'formpilot-backend.exe')]
+    ? [
+        path.join(process.resourcesPath, 'backend', 'autofiller-backend.exe'),
+        path.join(process.resourcesPath, 'backend', 'formpilot-backend.exe'),
+      ]
     : [path.join(__dirname, '../../venv/Scripts/python.exe'), path.join(__dirname, '../../venv/bin/python')];
 
   const executable = candidatePaths.find((candidate) => candidate && fs.existsSync(candidate));

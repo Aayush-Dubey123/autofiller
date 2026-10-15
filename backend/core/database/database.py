@@ -17,7 +17,9 @@ _mongo_client = None
 _db_instance = None
 
 # Timeout for the initial server selection handshake.
-MONGO_SELECTION_TIMEOUT_MS = 5000
+# In local desktop mode, 500ms prevents startup stalls when MongoDB is absent.
+_default_timeout = 500 if "localhost" in os.getenv("MONGO_URI", "mongodb://localhost:27017") else 2000
+MONGO_SELECTION_TIMEOUT_MS = int(os.getenv("MONGO_SELECTION_TIMEOUT_MS", str(_default_timeout)))
 
 
 async def init_database() -> None:

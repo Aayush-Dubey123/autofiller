@@ -1,5 +1,5 @@
 """
-Session and document router for FormPilot API.
+Session and document router for AutoFiller AI API.
 
 Provides authenticated HTTP endpoints for document ingestion, form mapping, and human clarification.
 """
@@ -36,7 +36,7 @@ async def create_session(
     user: dict = Depends(require_operator),
 ):
     """
-    Initialize a new FormPilot workflow session.
+    Initialize a new AutoFiller AI workflow session.
 
     Creates an active session record in persistent storage for document processing
     and form automation, scoped to the authenticated operator.

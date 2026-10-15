@@ -59,8 +59,6 @@ def _allowed_origins() -> list[str]:
     return [origin.strip() for origin in configured.split(",") if origin.strip()]
 
 
-import sys
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -79,8 +77,10 @@ async def lifespan(app: FastAPI):
     logging.info("Executing application startup lifespan")
     validate_startup_security()
     if not is_gemini_configured():
-        logging.error("GEMINI_API_KEY is missing from backend/.env. Exiting.")
-        sys.exit(1)
+        logging.warning(
+            "GEMINI_API_KEY is not configured in backend/.env. "
+            "Operating in offline heuristic or fallback provider mode until key is supplied."
+        )
     await init_database()
     yield
     logging.info("Executing application shutdown lifespan")
@@ -158,33 +158,34 @@ def create_app() -> FastAPI:
             "gemini_configured": is_gemini_configured(),
         }
 
-    @app.get("/mock_school_form.html", include_in_schema=False)
-    async def get_mock_school_form():
-        """
-        Serve the bundled mock school admission form.
+    if os.getenv("ENV", "development").lower() != "production":
+        @app.get("/mock_school_form.html", include_in_schema=False)
+        async def get_mock_school_form():
+            """
+            Serve the bundled mock school admission form in development and testing.
 
-        Allows the browser automation engine and desktop operator to access the demo form
-        directly over HTTP without requiring an active frontend dev server.
+            Allows the browser automation engine and desktop operator to access the demo form
+            directly over HTTP without requiring an active frontend dev server.
 
-        Args:
-            None
+            Args:
+                None
 
-        Returns:
-            FileResponse: HTML content of the mock school form.
-        """
-        from pathlib import Path
-        from fastapi.responses import FileResponse, Response
+            Returns:
+                FileResponse: HTML content of the mock school form.
+            """
+            from pathlib import Path
+            from fastapi.responses import FileResponse, Response
 
-        repo_root = Path(__file__).resolve().parents[3]
-        candidate_paths = [
-            repo_root / "test-fixtures" / "mock_school_form.html",
-            repo_root / "desktop" / "public" / "mock_school_form.html",
-            repo_root / "desktop" / "dist" / "mock_school_form.html",
-        ]
-        for form_path in candidate_paths:
-            if form_path.is_file():
-                return FileResponse(str(form_path), media_type="text/html")
-        return Response(content="Mock school form not found", status_code=404)
+            repo_root = Path(__file__).resolve().parents[3]
+            candidate_paths = [
+                repo_root / "test-fixtures" / "mock_school_form.html",
+                repo_root / "desktop" / "public" / "mock_school_form.html",
+                repo_root / "desktop" / "dist" / "mock_school_form.html",
+            ]
+            for form_path in candidate_paths:
+                if form_path.is_file():
+                    return FileResponse(str(form_path), media_type="text/html")
+            return Response(content="Mock school form not found", status_code=404)
 
     return app
 

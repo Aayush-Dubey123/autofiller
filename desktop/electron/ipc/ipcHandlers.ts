@@ -13,9 +13,11 @@ import path from 'path';
 
 import { AgentController } from '../agent/AgentController';
 import { BackendClient } from '../services/BackendClient';
-import { HistoryStore } from '../services/HistoryStore';
-import { VaultService } from '../services/VaultService';
-import { DocumentSelection, EngineStatus, ProfileRecord, StartSessionOptions, VaultStatus } from '../shared/types';
+import { HistoryStore, VaultService } from '../services/VaultService';
+import { DocumentRecord, DocumentSelection, EngineStatus, ProfileRecord, StartSessionOptions, VaultStatus } from '../shared/types';
+
+/** In-memory remembered documents cache for active session reuse (Fixes M-04). */
+const rememberedDocuments: DocumentRecord[] = [];
 
 /** Return an error message when the URL is not a usable http(s) URL, otherwise null. */
 function validateTargetUrl(value: unknown): string | null {
@@ -229,7 +231,7 @@ export function registerIpcHandlers(
   });
 
   // Extract document facts on behalf of the renderer so no direct backend access is needed.
-  // Successful file extractions are remembered so they can be reused from the Documents view.
+  // Successful file extractions are remembered so they can be reused from the Documents view (Fixes M-04).
   ipcMain.handle('autofiller:extract-document', async (_event, payload) => {
     try {
       const result = await backendClient.extractDocument({
@@ -237,6 +239,24 @@ export function registerIpcHandlers(
         rawText: payload?.rawText,
         documentName: payload?.documentName,
       });
+      if (result && !('error' in result) && result.facts) {
+        const docName = result.document_name || payload?.documentName || 'Document';
+        const existingIdx = rememberedDocuments.findIndex((d) => d.name === docName);
+        const record: DocumentRecord = {
+          id: `doc_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`,
+          name: docName,
+          size: payload?.fileSize || 0,
+          path: payload?.filePath || '',
+          extractedAt: new Date().toISOString(),
+          facts: result.facts,
+        };
+        if (existingIdx >= 0) {
+          rememberedDocuments[existingIdx] = record;
+        } else {
+          rememberedDocuments.unshift(record);
+          if (rememberedDocuments.length > 20) rememberedDocuments.pop();
+        }
+      }
       return result;
     } catch (error: any) {
       return { error: error?.message || 'Failed to extract document facts.' };
@@ -245,7 +265,7 @@ export function registerIpcHandlers(
 
   // History & document store handlers
   ipcMain.handle('autofiller:history-list', async () => historyStore.listSessions());
-  ipcMain.handle('autofiller:documents-list', async () => []);
+  ipcMain.handle('autofiller:documents-list', async () => [...rememberedDocuments]);
   ipcMain.handle('autofiller:backend-health', async () => backendClient.healthStatus());
   ipcMain.handle('autofiller:get-engine-status', async () => getEngineStatus());
   ipcMain.handle('autofiller:history-delete', async (_event, id: string) => {
@@ -266,6 +286,7 @@ export function registerIpcHandlers(
     try {
       vaultService.eraseAll();
       historyStore.clearAllSessions();
+      rememberedDocuments.length = 0;
       clearUploadDir();
       activeSessionUploadPath = null;
       const logsDir = path.join(app.getPath('userData'), 'logs');

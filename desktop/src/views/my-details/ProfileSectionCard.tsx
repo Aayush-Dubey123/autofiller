@@ -217,9 +217,9 @@ export const ProfileSectionCard: React.FC<ProfileSectionCardProps> = ({
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          {isCollapsed ? <ChevronRight size={18} color="#16654E" /> : <ChevronDown size={18} color="#16654E" />}
+          {isCollapsed ? <ChevronRight size={18} color="var(--text-brand)" /> : <ChevronDown size={18} color="var(--text-brand)" />}
           <div>
-            <h3 style={{ fontSize: '0.9375rem', fontWeight: 800, color: '#0F2E23' }}>
+            <h3 style={{ fontSize: '0.9375rem', fontWeight: 800, color: 'var(--text-title)' }}>
               {sectionDef.title}
             </h3>
             {sectionDef.description && (
@@ -235,7 +235,7 @@ export const ProfileSectionCard: React.FC<ProfileSectionCardProps> = ({
             style={{
               fontSize: '0.75rem',
               background: filledCount === totalCount && totalCount > 0 ? '#DCFCE7' : '#F1F5F9',
-              color: filledCount === totalCount && totalCount > 0 ? '#16654E' : '#475569',
+              color: filledCount === totalCount && totalCount > 0 ? 'var(--text-brand)' : 'var(--text-secondary)',
               padding: '3px 10px',
               borderRadius: '12px',
               fontWeight: 700,
@@ -270,11 +270,11 @@ export const ProfileSectionCard: React.FC<ProfileSectionCardProps> = ({
                   background: 'rgba(22, 101, 78, 0.05)',
                   border: '1px dashed #A7F3D0',
                   fontSize: '0.8125rem',
-                  color: '#0F2E23',
+                  color: 'var(--text-title)',
                 }}
               >
                 <strong>Full Name:</strong>{' '}
-                <span style={{ color: fullName ? '#16654E' : '#94A3B8', fontWeight: 600 }}>
+                <span style={{ color: fullName ? 'var(--accent-primary)' : 'var(--text-muted)', fontWeight: 600 }}>
                   {fullName || 'Auto-derived when names are entered'}
                 </span>
               </div>
@@ -297,11 +297,11 @@ export const ProfileSectionCard: React.FC<ProfileSectionCardProps> = ({
                   background: 'rgba(22, 101, 78, 0.05)',
                   border: '1px dashed #A7F3D0',
                   fontSize: '0.8125rem',
-                  color: '#0F2E23',
+                  color: 'var(--text-title)',
                 }}
               >
                 <strong>Age:</strong>{' '}
-                <span style={{ color: age ? '#16654E' : '#94A3B8', fontWeight: 600 }}>
+                <span style={{ color: age ? 'var(--accent-primary)' : 'var(--text-muted)', fontWeight: 600 }}>
                   {age ? `${age} years old (as of today)` : 'Auto-calculated from date of birth'}
                 </span>
               </div>
@@ -321,7 +321,7 @@ export const ProfileSectionCard: React.FC<ProfileSectionCardProps> = ({
           {/* ADDRESS SECTION SPECIAL DISPLAY */}
           {sectionDef.id === 'address' && (
             <>
-              <h4 style={{ fontSize: '0.8125rem', fontWeight: 800, color: '#16654E', textTransform: 'uppercase' }}>
+              <h4 style={{ fontSize: '0.8125rem', fontWeight: 800, color: 'var(--text-brand)', textTransform: 'uppercase' }}>
                 Current Residence
               </h4>
               <div
@@ -360,12 +360,12 @@ export const ProfileSectionCard: React.FC<ProfileSectionCardProps> = ({
                   }
                   style={{ cursor: 'pointer' }}
                 />
-                <span style={{ fontSize: '0.875rem', fontWeight: 700, color: '#0F2E23' }}>
+                <span style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-title)' }}>
                   Permanent address is same as current address
                 </span>
               </div>
 
-              <h4 style={{ fontSize: '0.8125rem', fontWeight: 800, color: '#16654E', textTransform: 'uppercase', marginTop: '6px' }}>
+              <h4 style={{ fontSize: '0.8125rem', fontWeight: 800, color: 'var(--text-brand)', textTransform: 'uppercase', marginTop: '6px' }}>
                 Permanent Residence
               </h4>
               <div
@@ -421,7 +421,7 @@ export const ProfileSectionCard: React.FC<ProfileSectionCardProps> = ({
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           {isSubCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-                          <span style={{ fontSize: '0.875rem', fontWeight: 700, color: '#0F2E23' }}>
+                          <span style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-title)' }}>
                             {lvl.title}
                           </span>
                         </div>
@@ -565,9 +565,9 @@ export const ProfileSectionCard: React.FC<ProfileSectionCardProps> = ({
                     alignSelf: 'flex-start',
                     padding: '8px 16px',
                     borderRadius: 'var(--radius-md)',
-                    border: '1px dashed #16654E',
+                    border: '1px dashed var(--border-focus)',
                     background: 'rgba(22, 101, 78, 0.04)',
-                    color: '#16654E',
+                    color: 'var(--text-brand)',
                     fontSize: '0.8125rem',
                     fontWeight: 700,
                     cursor: 'pointer',

@@ -1,5 +1,5 @@
 /**
- * AgentController orchestrating the end-to-end FormPilot workflow.
+ * AgentController orchestrating the end-to-end AutoFiller AI workflow.
  *
  * Implements:
  * - A bounded, single-flight agent loop with cooperative cancellation.
@@ -12,13 +12,19 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { StateMachine } from './StateMachine';
-import { ToolContext, ToolExecutionError, ToolRegistry } from './ToolRegistry';
+import {
+  ToolContext,
+  ToolExecutionError,
+  ToolRegistry,
+  matchOption,
+  checkFieldCompatibility,
+  isConsentCheckbox,
+  lookupKnownFormSchema,
+} from './ToolRegistry';
 import { BrowserManager, OperationCancelledError } from '../browser/BrowserManager';
 import { BlockerDetectionResult, FormReadinessState } from '../browser/FormScanner';
 import { PolicyEngine, SubmissionControl } from '../policy/PolicyEngine';
 import { BackendClient, coerceClarificationValue } from '../services/BackendClient';
-import { matchOption, checkFieldCompatibility, isConsentCheckbox } from './OptionMatcher';
 import {
   AgentEventPayload,
   ClarificationPromptPayload,
@@ -33,37 +39,64 @@ import {
   ScanTraceRecord,
   RunTrace,
   PageCensusRecord,
+  WorkflowState,
 } from '../shared/types';
 import { deriveFacts } from '../shared/profileSchema';
+
+export { WorkflowState };
+
+/**
+ * StateMachine governing AutoFiller AI workflow lifecycle and allowable transitions.
+ */
+export class StateMachine {
+  private currentState: WorkflowState = 'IDLE';
+  private previousState: WorkflowState = 'IDLE';
+  private listeners: Array<(state: WorkflowState, prevState: WorkflowState) => void> = [];
+
+  constructor(initialState: WorkflowState = 'IDLE') {
+    this.currentState = initialState;
+  }
+
+  public getState(): WorkflowState {
+    return this.currentState;
+  }
+
+  public transition(nextState: WorkflowState): void {
+    if (this.currentState === nextState) return;
+
+    this.previousState = this.currentState;
+    this.currentState = nextState;
+
+    this.listeners.forEach((listener) => {
+      try {
+        listener(this.currentState, this.previousState);
+      } catch (err) {
+        console.error('Error in state machine listener:', err);
+      }
+    });
+  }
+
+  public onTransition(listener: (state: WorkflowState, prevState: WorkflowState) => void): () => void {
+    this.listeners.push(listener);
+    return () => {
+      this.listeners = this.listeners.filter((l) => l !== listener);
+    };
+  }
+
+  public isTerminal(): boolean {
+    return this.currentState === 'REVIEW_READY' || this.currentState === 'COMPLETED' || this.currentState === 'ERROR';
+  }
+
+  public reset(): void {
+    this.transition('IDLE');
+  }
+}
 
 /** Maximum number of field operations before the loop abandons the session. */
 const MAX_STEPS = 50;
 
 /** How long the agent waits for a human clarification answer before giving up. */
-/** How long the agent waits for a human clarification answer before giving up. */
 const CLARIFICATION_TIMEOUT_MS = 10 * 60 * 1000;
-
-/** Known form fixture schemas for deterministic information preflight requirements. */
-const KNOWN_FIXTURE_SCHEMAS: Record<string, FormFieldSnapshot[]> = {
-  'mock_school_form.html': [
-    { ref: 'field_001', label: 'Student Full Name', type: 'text', required: true, disabled: false, visible: true },
-    { ref: 'field_002', label: 'Date of Birth', type: 'date', required: true, disabled: false, visible: true },
-    { ref: 'field_003', label: 'Gender', type: 'select', required: true, disabled: false, visible: true, options: ['Male', 'Female', 'Other'] },
-    { ref: 'field_004', label: 'Student Email Address', type: 'email', required: true, disabled: false, visible: false },
-    { ref: 'field_005', label: 'Contact Phone Number', type: 'text', required: true, disabled: false, visible: false },
-    { ref: 'field_006', label: 'Residential Address', type: 'textarea', required: true, disabled: false, visible: false },
-    { ref: 'field_007', label: 'City', type: 'text', required: true, disabled: false, visible: false },
-    { ref: 'field_008', label: 'State', type: 'text', required: true, disabled: false, visible: false },
-    { ref: 'field_009', label: 'Pincode / Zip Code', type: 'text', required: true, disabled: false, visible: false },
-    { ref: 'field_010', label: "Father's Name", type: 'text', required: true, disabled: false, visible: false },
-    { ref: 'field_011', label: "Mother's Name", type: 'text', required: true, disabled: false, visible: false },
-    { ref: 'field_012', label: 'Previous School Attended', type: 'text', required: false, disabled: false, visible: false },
-    { ref: 'field_013', label: 'Applying Grade / Class', type: 'select', required: true, disabled: false, visible: false, options: ['Grade 1', 'Grade 5', 'Grade 10'] },
-    { ref: 'field_014', label: 'Does student have allergies?', type: 'radio', required: false, disabled: false, visible: false, options: ['Yes', 'No'] },
-    { ref: 'field_015', label: 'Does student require transport?', type: 'radio', required: false, disabled: false, visible: false, options: ['Yes', 'No'] },
-    { ref: 'field_016', label: 'I agree to the school admission terms and conditions', type: 'checkbox', required: true, disabled: false, visible: false },
-  ],
-};
 
 export class AgentController {
   private stateMachine: StateMachine;
@@ -1316,7 +1349,7 @@ export class AgentController {
   }
 
   /**
-   * Run the complete FormPilot automation loop for one session.
+   * Run the complete AutoFiller AI automation loop for one session.
    *
    * @param options Session configuration supplied by the renderer.
    * @throws Error when a second session is started while one is already running.
@@ -1459,36 +1492,14 @@ export class AgentController {
       let preflightMappings: FieldMapping[] = [];
       let probeSnapshot: FormSnapshot | null = null;
 
-      const matchedFixtureKey = Object.keys(KNOWN_FIXTURE_SCHEMAS).find((key) =>
-        options.targetUrl.toLowerCase().includes(key.toLowerCase())
-      );
-      if (matchedFixtureKey) {
-        probeSnapshot = {
-          url: options.targetUrl,
-          title: 'Greenwood Academy - Mock School Admission Form',
-          fields: KNOWN_FIXTURE_SCHEMAS[matchedFixtureKey].map((f) => ({ ...f })),
-        };
-      } else {
-        try {
-          const probeBrowser = new BrowserManager();
-          await probeBrowser.launch(true);
-          try {
-            await probeBrowser.navigateTo(options.targetUrl, this.abortController?.signal);
-            const probeBlocker = await probeBrowser.detectBlocker(1000);
-            if (probeBlocker.type === 'none') {
-              probeSnapshot = await probeBrowser.scanActiveForm();
-            }
-          } finally {
-            await probeBrowser.close();
-          }
-        } catch (probeErr: any) {
-          this.emitEvent(
-            this.buildEvent(
-              'STATE_CHANGED',
-              `Headless form schema probe unavailable (${probeErr?.message || 'probe failed'}). Conditional and section requirements will be evaluated dynamically during section navigation.`
-            )
-          );
-        }
+      probeSnapshot = lookupKnownFormSchema(options.targetUrl);
+      if (!probeSnapshot) {
+        this.emitEvent(
+          this.buildEvent(
+            'STATE_CHANGED',
+            'Dynamic form target detected. Preflight requirements and conditional fields will be evaluated progressively in the active browser session.'
+          )
+        );
       }
 
       if (probeSnapshot && probeSnapshot.fields.length > 0) {

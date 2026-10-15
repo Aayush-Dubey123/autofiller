@@ -1,5 +1,5 @@
 """
-Data models for FormPilot sessions, observations, mappings, and events.
+Data models for AutoFiller AI sessions, observations, mappings, and events.
 
 Defines domain entities, enums, and structured state shapes.
 """
@@ -145,7 +145,7 @@ class AgentEvent(BaseModel):
 
 
 class SessionModel(BaseModel):
-    """Persistent state record for a FormPilot automation session."""
+    """Persistent state record for an AutoFiller AI automation session."""
     id: str = Field(description="Unique session ID")
     status: SessionStatus = Field(default=SessionStatus.IDLE, description="Current workflow state")
     document_name: Optional[str] = Field(default=None, description="Source document filename")

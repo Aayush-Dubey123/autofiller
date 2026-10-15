@@ -1,5 +1,5 @@
 """
-CRUD persistence layer for FormPilot sessions, audit records, and field mappings.
+CRUD persistence layer for AutoFiller AI sessions, audit records, and field mappings.
 
 Interacts with the configured database collection without leaking connection details
 to controllers.

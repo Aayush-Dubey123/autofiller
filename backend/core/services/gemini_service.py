@@ -1,5 +1,5 @@
 """
-Gemini reasoning and semantic field mapping service for FormPilot backend.
+Gemini reasoning and semantic field mapping service for AutoFiller AI backend.
 
 Synthesizes correspondences between FormSnapshot fields and ExtractedFacts using the
 Google GenAI SDK through non-blocking async execution.

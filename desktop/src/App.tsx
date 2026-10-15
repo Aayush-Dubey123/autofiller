@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
-  ChevronRight,
   HelpCircle,
   History,
   Home,
+  Lock,
   Moon,
   Play,
   Settings,
@@ -19,17 +19,24 @@ import { VaultLockModal } from './features/vault/VaultLockModal';
 import { useFormSession } from './hooks/useFormSession';
 import { bridge } from './lib/bridge';
 import type { DocumentRecord, VaultStatus } from './types/autofiller';
-import { HelpView } from './views/HelpView';
-import { HistoryView } from './views/HistoryView';
-import { HomeView } from './views/HomeView';
-import { MyDetailsView } from './views/MyDetailsView';
-import { NewSessionView } from './views/NewSessionView';
-import { SettingsView } from './views/SettingsView';
+import { HomeView, NewSessionView, HistoryView } from './views/SessionViews';
+import { MyDetailsView, SettingsView, HelpView } from './views/ManagementViews';
 
 export const App: React.FC = () => {
   const [activeNav, setActiveNav] = useState<string>('Home');
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    return (localStorage.getItem('autofiller_theme') as 'light' | 'dark') || 'light';
+    const saved = (localStorage.getItem('autofiller_theme') as 'light' | 'dark') || 'light';
+    if (typeof document !== 'undefined') {
+      document.documentElement.setAttribute('data-theme', saved);
+      if (saved === 'dark') {
+        document.documentElement.classList.add('dark');
+        document.body.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+        document.body.classList.remove('dark');
+      }
+    }
+    return saved;
   });
   const [engineError, setEngineError] = useState<{ show: boolean; detail: string }>({
     show: false,
@@ -59,13 +66,29 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     localStorage.setItem('autofiller_theme', theme);
+    document.documentElement.setAttribute('data-theme', theme);
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+      document.body.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      document.body.classList.remove('dark');
+    }
   }, [theme]);
 
-  // Check vault status periodically to detect auto-lock
+  // Check vault status on mount, window focus, and relaxed idle heartbeat (Fixes H-06)
   useEffect(() => {
     checkVaultStatus();
-    const interval = setInterval(checkVaultStatus, 5000);
-    return () => clearInterval(interval);
+    const handleFocus = () => {
+      checkVaultStatus();
+    };
+    window.addEventListener('focus', handleFocus);
+    // Relaxed heartbeat to detect 15-minute auto-lock without aggressive 5s polling
+    const interval = setInterval(checkVaultStatus, 60000);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(interval);
+    };
   }, []);
 
   const checkVaultStatus = async () => {
@@ -166,6 +189,15 @@ export const App: React.FC = () => {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   };
 
+  const handleLockVault = async () => {
+    try {
+      await bridge.vaultLock();
+      await checkVaultStatus();
+    } catch (err) {
+      console.error('Error locking vault', err);
+    }
+  };
+
   const handleVaultUnlocked = () => {
     setShowVaultModal(false);
     checkVaultStatus();
@@ -229,7 +261,7 @@ export const App: React.FC = () => {
                 justifyContent: 'center',
               }}
             >
-              <Sprout size={22} color="#0F2E23" />
+              <Sprout size={22} color="var(--text-title)" />
             </div>
             <div>
               <div
@@ -324,7 +356,7 @@ export const App: React.FC = () => {
                 height: '32px',
                 borderRadius: '50%',
                 background: '#A5DCB4',
-                color: '#0F2E23',
+                color: 'var(--text-title)',
                 fontWeight: 700,
                 fontSize: '0.75rem',
                 display: 'flex',
@@ -376,73 +408,123 @@ export const App: React.FC = () => {
             onClick={() => handleNavigate('Home')}
             style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', minWidth: 0 }}
           >
-            <Sprout size={22} color="#0F4C3A" />
-            <span style={{ fontWeight: 800, fontSize: '1.25rem', color: '#0F2E23' }}>
-              AutoFiller <span style={{ color: '#16654E' }}>AI</span>
+            <Sprout size={22} color="var(--accent-primary)" />
+            <span style={{ fontWeight: 800, fontSize: '1.25rem', color: 'var(--text-primary)' }}>
+              AutoFiller <span style={{ color: 'var(--accent-primary)' }}>AI</span>
             </span>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
               From Documents to Opportunities
             </span>
           </div>
 
-          {/* Right Header Options */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexShrink: 0 }}>
+          {/* Right Header Controls */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+            {/* Vault Protection Status Pill */}
+            <div
+              onClick={() => {
+                if (vaultState.hasPassphraseSlot && vaultState.unlocked) {
+                  void handleLockVault();
+                } else if (!vaultState.hasPassphraseSlot) {
+                  handleNavigate('Settings');
+                }
+              }}
+              title={
+                vaultState.hasPassphraseSlot
+                  ? vaultState.unlocked
+                    ? 'Extra Protection Active — Click to lock vault'
+                    : 'Vault Locked'
+                  : 'OS Keychain Protected — Click to configure extra protection'
+              }
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '6px 12px',
+                borderRadius: 'var(--radius-full)',
+                background: vaultState.unlocked ? 'var(--accent-green-bg)' : 'rgba(239, 68, 68, 0.15)',
+                border: `1px solid ${vaultState.unlocked ? 'rgba(16, 185, 129, 0.25)' : 'rgba(239, 68, 68, 0.4)'}`,
+                color: vaultState.unlocked ? 'var(--accent-green-text)' : '#EF4444',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                userSelect: 'none',
+              }}
+            >
+              <ShieldCheck size={14} />
+              <span>
+                {vaultState.hasPassphraseSlot
+                  ? vaultState.unlocked
+                    ? 'Vault Unlocked'
+                    : 'Vault Locked'
+                  : 'Vault Protected'}
+              </span>
+              {vaultState.hasPassphraseSlot && vaultState.unlocked && (
+                <Lock size={12} style={{ opacity: 0.75, marginLeft: '2px' }} />
+              )}
+            </div>
+
+            {/* Dark / Light Mode Toggle Pill */}
             <button
               onClick={toggleTheme}
-              title={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
+              title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}
+              aria-label={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}
               style={{
-                display: 'flex',
+                display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
-                background: 'transparent',
-                border: 'none',
-                color: 'var(--text-secondary)',
-                fontSize: '0.875rem',
+                padding: '6px 12px',
+                borderRadius: 'var(--radius-full)',
+                border: '1px solid var(--border-subtle)',
+                background: 'var(--bg-app)',
+                color: 'var(--text-primary)',
+                fontSize: '0.75rem',
                 fontWeight: 600,
                 cursor: 'pointer',
-                padding: '6px',
-                borderRadius: 'var(--radius-sm)',
+                transition: 'all 0.2s ease',
               }}
             >
-              {theme === 'light' ? <Sun size={18} /> : <Moon size={18} />}
+              {theme === 'light' ? (
+                <>
+                  <Moon size={14} style={{ color: 'var(--text-secondary)' }} />
+                  <span>Dark</span>
+                </>
+              ) : (
+                <>
+                  <Sun size={14} style={{ color: '#F59E0B' }} />
+                  <span>Light</span>
+                </>
+              )}
             </button>
 
+            {/* Quick Action: New Session */}
             <button
-              onClick={() => handleNavigate('Settings')}
-              title="Settings"
+              onClick={() => handleNavigate('New Session')}
+              title="Start New Form Filling Session"
               style={{
-                display: 'flex',
+                display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
-                background: 'transparent',
+                padding: '7px 14px',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--accent-primary)',
+                color: '#FFFFFF',
                 border: 'none',
-                color: activeNav === 'Settings' ? '#16654E' : 'var(--text-secondary)',
-                fontSize: '0.875rem',
-                fontWeight: 600,
+                fontSize: '0.8125rem',
+                fontWeight: 700,
                 cursor: 'pointer',
+                boxShadow: '0 2px 6px rgba(16, 185, 129, 0.25)',
+                transition: 'all 0.2s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'var(--accent-primary-hover)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'var(--accent-primary)';
               }}
             >
-              <Settings size={18} />
-              <span>Settings</span>
-            </button>
-
-            <button
-              onClick={() => handleNavigate('Help')}
-              title="Help"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                background: 'transparent',
-                border: 'none',
-                color: activeNav === 'Help' ? '#16654E' : 'var(--text-secondary)',
-                fontSize: '0.875rem',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              <HelpCircle size={18} />
-              <span>Help</span>
+              <Play size={13} fill="#FFFFFF" />
+              <span>New Session</span>
             </button>
           </div>
         </header>
@@ -469,7 +551,7 @@ export const App: React.FC = () => {
               <AlertTriangle size={20} color="#DC2626" />
               <span>AutoFiller couldn't start its AI engine. Restart the app.</span>
               {copiedDetails ? (
-                <span style={{ fontSize: '0.75rem', color: '#16654E', marginLeft: '8px' }}>Copied!</span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-brand)', marginLeft: '8px' }}>Copied!</span>
               ) : (
                 <button
                   onClick={handleCopyErrorDetails}
@@ -504,12 +586,12 @@ export const App: React.FC = () => {
               margin: '16px 32px 0 32px',
               padding: '12px 20px',
               background: '#F0FDF4',
-              border: '1px solid #86EFAC',
+              border: '1px solid var(--badge-green-border)',
               borderRadius: 'var(--radius-md)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              color: '#16654E',
+              color: 'var(--text-brand)',
               fontSize: '0.84375rem',
             }}
           >
@@ -523,7 +605,7 @@ export const App: React.FC = () => {
                 style={{
                   background: 'none',
                   border: 'none',
-                  color: '#0F2E23',
+                  color: 'var(--text-title)',
                   fontWeight: 700,
                   textDecoration: 'underline',
                   cursor: 'pointer',
@@ -535,7 +617,7 @@ export const App: React.FC = () => {
             </div>
             <button
               onClick={handleDismissTip}
-              style={{ background: 'transparent', border: 'none', color: '#16654E', cursor: 'pointer' }}
+              style={{ background: 'transparent', border: 'none', color: 'var(--text-brand)', cursor: 'pointer' }}
             >
               <X size={16} />
             </button>
@@ -618,16 +700,16 @@ export const App: React.FC = () => {
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#16654E' }} />
-              <span style={{ fontWeight: 600, color: '#0F2E23' }}>Backend Operational</span>
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--status-success)' }} />
+              <span style={{ fontWeight: 600, color: 'var(--text-title)' }}>Backend Operational</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#16654E' }} />
-              <span style={{ fontWeight: 600, color: '#0F2E23' }}>Playwright Ready</span>
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--status-success)' }} />
+              <span style={{ fontWeight: 600, color: 'var(--text-title)' }}>Playwright Ready</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#16654E' }} />
-              <span style={{ fontWeight: 600, color: '#0F2E23' }}>Never-Submit Policy Guard</span>
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--status-success)' }} />
+              <span style={{ fontWeight: 600, color: 'var(--text-title)' }}>Never-Submit Policy Guard</span>
             </div>
           </div>
 
@@ -640,7 +722,7 @@ export const App: React.FC = () => {
             <span>|</span>
             <span>Reliable</span>
             <span>|</span>
-            <span style={{ color: '#16654E', fontWeight: 600 }}>Built for Education 🌿</span>
+            <span style={{ color: 'var(--text-brand)', fontWeight: 600 }}>Built for Education 🌿</span>
           </div>
         </footer>
       </div>
@@ -712,7 +794,7 @@ export const App: React.FC = () => {
                 <AlertTriangle size={22} />
               </div>
               <div>
-                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: '#0F2E23' }}>
+                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: 'var(--text-title)' }}>
                   Automation is still in progress. Leaving will stop this session.
                 </h3>
                 <p style={{ margin: '6px 0 0 0', fontSize: '0.875rem', color: '#64748B', lineHeight: '1.4' }}>

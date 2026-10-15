@@ -147,9 +147,9 @@ export interface BackendHealth {
 export interface VaultStatus {
   exists: boolean;
   unlocked: boolean;
-  hasOsSlot: boolean;
-  hasPassphraseSlot: boolean;
-  hasRecoverySlot: boolean;
+  hasOsSlot?: boolean;
+  hasPassphraseSlot?: boolean;
+  hasRecoverySlot?: boolean;
   recoveryAvailable: boolean;
 }
 
@@ -204,6 +204,16 @@ export interface DocumentSelection {
   fileSize?: number;
   error?: string;
 }
+
+/** User-visible progress states during document processing. */
+export type DocumentExtractionStage =
+  | 'idle'
+  | 'uploading'
+  | 'reading_document'
+  | 'extracting_information'
+  | 'organizing_facts'
+  | 'completed'
+  | 'error';
 
 /** A past automation session metadata persisted in the userData JSON store (no values). */
 export interface SessionRecord {

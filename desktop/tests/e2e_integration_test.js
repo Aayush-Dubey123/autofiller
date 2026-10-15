@@ -22,7 +22,7 @@ const DIST = path.resolve(__dirname, '../dist-electron');
 const { AgentController } = require(path.join(DIST, 'agent/AgentController'));
 const { BrowserManager } = require(path.join(DIST, 'browser/BrowserManager'));
 const { PolicyEngine } = require(path.join(DIST, 'policy/PolicyEngine'));
-const { HistoryStore } = require(path.join(DIST, 'services/HistoryStore'));
+const { HistoryStore } = require(path.join(DIST, 'services/VaultService'));
 
 const fs = require('fs');
 

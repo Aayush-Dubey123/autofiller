@@ -1,5 +1,5 @@
 """
-Session controller for FormPilot backend.
+Session controller for AutoFiller AI backend.
 
 Orchestrates document extraction, semantic field mapping, human clarification, and
 audit event persistence.
@@ -37,7 +37,7 @@ MAX_FIELDS_PER_REQUEST = 200
 
 
 class SessionController:
-    """Controller handling business logic and orchestration of FormPilot workflows."""
+    """Controller handling business logic and orchestration of AutoFiller AI workflows."""
 
     def __init__(self) -> None:
         """
@@ -54,7 +54,7 @@ class SessionController:
         self, *, document_name: str, target_url: str
     ) -> Dict[str, Any]:
         """
-        Create a new FormPilot workflow session.
+        Create a new AutoFiller AI workflow session.
 
         Initializes a session record in persistent storage with the IDLE state.
 

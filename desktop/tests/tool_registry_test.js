@@ -10,15 +10,16 @@ const assert = require('assert');
 const path = require('path');
 const DIST = path.resolve(__dirname, '../dist-electron');
 
-const { ToolRegistry, ToolExecutionError } = require(path.join(DIST, 'agent/ToolRegistry'));
-const { PolicyEngine } = require(path.join(DIST, 'policy/PolicyEngine'));
 const {
+  ToolRegistry,
+  ToolExecutionError,
   matchOption,
   OPTION_CONFIDENCE_THRESHOLD,
   isConsentCheckbox,
   checkFieldCompatibility,
   mapHeuristicFallback,
-} = require(path.join(DIST, 'agent/OptionMatcher'));
+} = require(path.join(DIST, 'agent/ToolRegistry'));
+const { PolicyEngine } = require(path.join(DIST, 'policy/PolicyEngine'));
 
 let passed = 0;
 

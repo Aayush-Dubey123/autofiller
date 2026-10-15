@@ -16,5 +16,5 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "electron/shared/profileSchema.ts"]
+  "include": ["src", "electron/shared/**/*"]
 }

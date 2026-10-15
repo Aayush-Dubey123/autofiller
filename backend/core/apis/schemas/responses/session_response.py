@@ -1,5 +1,5 @@
 """
-Response schemas for FormPilot API endpoints.
+Response schemas for AutoFiller AI API endpoints.
 
 Defines wire output contracts for extraction, mapping, session queries, and verification.
 """

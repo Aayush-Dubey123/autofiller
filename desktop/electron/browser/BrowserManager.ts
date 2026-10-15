@@ -14,7 +14,7 @@ import { chromium, Browser, BrowserContext, Page, Locator } from 'playwright';
 import { FormScanner, FormSnapshot, BlockerDetectionResult, FormReadinessState } from './FormScanner';
 import { PolicyEngine, SubmissionControl } from '../policy/PolicyEngine';
 import { PageCensusRecord, FrameCensus } from '../shared/types';
-import { matchOption } from '../agent/OptionMatcher';
+import { matchOption } from '../agent/ToolRegistry';
 
 /** Error raised when the operator cancels an in-flight browser operation. */
 export class OperationCancelledError extends Error {

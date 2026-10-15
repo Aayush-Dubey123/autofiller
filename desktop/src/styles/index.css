@@ -25,6 +25,31 @@
   --text-secondary: #475569;
   --text-muted: #64748B;
 
+  /* Semantic Tokens - Surfaces & Backgrounds */
+  --bg-surface-subtle: #F9F8F5;
+  --bg-surface-hover: #F1EDE4;
+
+  /* Semantic Tokens - Text & Typography */
+  --text-title: #0F2E23;
+  --text-brand: #16654E;
+  --text-brand-hover: #0F4C3A;
+
+  /* Semantic Tokens - Status & Alerts */
+  --status-success: #16654E;
+  --status-warning: #D97706;
+  --status-danger: #DC2626;
+
+  /* Semantic Tokens - Badges & Pills */
+  --badge-green-bg: #D9EFE0;
+  --badge-green-text: #0F4C3A;
+  --badge-green-border: #B7E3C4;
+  --badge-amber-bg: #FEF3C7;
+  --badge-amber-text: #92400E;
+  --badge-amber-border: #FDE68A;
+  --badge-red-bg: #FEE2E2;
+  --badge-red-text: #991B1B;
+  --badge-red-border: #FECACA;
+
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
@@ -32,6 +57,166 @@
   --radius-full: 9999px;
 
   --shadow-card: 0 4px 16px -2px rgba(15, 46, 35, 0.05);
+
+  /* Glassmorphism & Overlay Tokens (Fixes M-02) */
+  --bg-glass: rgba(255, 255, 255, 0.88);
+  --bg-glass-card: rgba(255, 255, 255, 0.94);
+  --bg-modal-overlay: rgba(15, 46, 35, 0.45);
+}
+
+:root[data-theme="dark"],
+body.dark {
+  /* Theme Palette - Dark (Forest Night) */
+  --bg-app: #0C1513;
+  --bg-card: #14231E;
+  --bg-sidebar: #08120F;
+  --bg-sidebar-hover: #0F261F;
+  --bg-sidebar-active: #1D5E46;
+  --text-sidebar-active: #A5DCB4;
+
+  --border-subtle: #20352E;
+  --border-focus: #34D399;
+
+  --accent-primary: #10B981;
+  --accent-primary-hover: #059669;
+  --accent-green-bg: #123326;
+  --accent-green-text: #6EE7B7;
+  --accent-tan-bg: #1A2B25;
+
+  --text-primary: #F1F5F9;
+  --text-secondary: #CBD5E1;
+  --text-muted: #94A3B8;
+
+  /* Semantic Tokens - Surfaces & Backgrounds */
+  --bg-surface-subtle: #192D26;
+  --bg-surface-hover: #213B32;
+
+  /* Semantic Tokens - Text & Typography */
+  --text-title: #F0FDF4;
+  --text-brand: #34D399;
+  --text-brand-hover: #6EE7B7;
+
+  /* Semantic Tokens - Status & Alerts */
+  --status-success: #34D399;
+  --status-warning: #FBBF24;
+  --status-danger: #F87171;
+
+  /* Semantic Tokens - Badges & Pills */
+  --badge-green-bg: #13382B;
+  --badge-green-text: #6EE7B7;
+  --badge-green-border: #1F5240;
+  --badge-amber-bg: #362407;
+  --badge-amber-text: #FCD34D;
+  --badge-amber-border: #78350F;
+  --badge-red-bg: #381313;
+  --badge-red-text: #FCA5A5;
+  --badge-red-border: #7F1D1D;
+
+  --shadow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.5);
+
+  --bg-glass: rgba(20, 35, 30, 0.88);
+  --bg-glass-card: rgba(20, 35, 30, 0.94);
+  --bg-modal-overlay: rgba(0, 0, 0, 0.75);
+}
+
+/* Universal Dark Mode Adaptors */
+[data-theme="dark"],
+[data-theme="dark"] body {
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  color-scheme: dark;
+}
+
+[data-theme="dark"] input:not([type="checkbox"]):not([type="radio"]),
+[data-theme="dark"] textarea,
+[data-theme="dark"] select {
+  background-color: var(--bg-card) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-subtle) !important;
+}
+
+[data-theme="dark"] input::placeholder,
+[data-theme="dark"] textarea::placeholder {
+  color: var(--text-muted) !important;
+}
+
+[data-theme="dark"] .glass-panel,
+[data-theme="dark"] .glass-card,
+[data-theme="dark"] .modal-dialog {
+  background: var(--bg-card);
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .modal-footer {
+  background: var(--accent-tan-bg);
+  border-color: var(--border-subtle);
+}
+
+[data-theme="dark"] [style*="color: #0F2E23"],
+[data-theme="dark"] [style*="color:#0F2E23"] {
+  color: #E6F7ED !important;
+}
+
+[data-theme="dark"] [style*="color: #0F4C3A"],
+[data-theme="dark"] [style*="color:#0F4C3A"] {
+  color: #A5DCB4 !important;
+}
+
+[data-theme="dark"] [style*="color: #16654E"],
+[data-theme="dark"] [style*="color:#16654E"] {
+  color: #34D399 !important;
+}
+
+[data-theme="dark"] [style*="color: #1E293B"],
+[data-theme="dark"] [style*="color:#1E293B"],
+[data-theme="dark"] [style*="color: #0F172A"],
+[data-theme="dark"] [style*="color:#0F172A"],
+[data-theme="dark"] [style*="color: #334155"],
+[data-theme="dark"] [style*="color:#334155"] {
+  color: var(--text-primary) !important;
+}
+
+[data-theme="dark"] [style*="color: #475569"],
+[data-theme="dark"] [style*="color:#475569"] {
+  color: var(--text-secondary) !important;
+}
+
+[data-theme="dark"] [style*="background: #F9F8F5"],
+[data-theme="dark"] [style*="background:#F9F8F5"],
+[data-theme="dark"] [style*="background: #F8FAFC"],
+[data-theme="dark"] [style*="background:#F8FAFC"],
+[data-theme="dark"] [style*="background: #F0FDF4"],
+[data-theme="dark"] [style*="background:#F0FDF4"],
+[data-theme="dark"] [style*="background: #F1F5F9"],
+[data-theme="dark"] [style*="background:#F1F5F9"] {
+  background: var(--bg-card) !important;
+  border-color: var(--border-subtle) !important;
+}
+
+[data-theme="dark"] [style*="background: #FFFFFF"],
+[data-theme="dark"] [style*="background:#FFFFFF"],
+[data-theme="dark"] [style*="background: white"],
+[data-theme="dark"] [style*="background:white"] {
+  background: var(--bg-card) !important;
+}
+
+[data-theme="dark"] [style*="border: 1px solid #E2DDD3"],
+[data-theme="dark"] [style*="border:1px solid #E2DDD3"],
+[data-theme="dark"] [style*="border: 1.5px solid #A5DCB4"],
+[data-theme="dark"] [style*="border:1.5px solid #A5DCB4"],
+[data-theme="dark"] [style*="border-bottom: 1px solid #E2DDD3"],
+[data-theme="dark"] [style*="border-bottom:1px solid #E2DDD3"],
+[data-theme="dark"] [style*="border-top: 1px solid #E2DDD3"],
+[data-theme="dark"] [style*="border-top:1px solid #E2DDD3"] {
+  border-color: var(--border-subtle) !important;
+}
+
+[data-theme="dark"] pre,
+[data-theme="dark"] code {
+  background: #08120F !important;
+  color: #6EE7B7 !important;
+  border-color: var(--border-subtle) !important;
 }
 
 * {
@@ -171,7 +356,64 @@ code, pre {
   to { transform: rotate(360deg); }
 }
 
-.spinning {
+.spinning,
+.animate-spin {
   animation: spin 1s linear infinite;
+}
+
+/* Modal Dialog & Overlay Primitives (Fixes M-01) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-modal-overlay);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+
+.modal-dialog {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  max-width: 520px;
+  width: 90%;
+  overflow: hidden;
+  animation: modalIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.modal-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-body {
+  padding: 20px;
+}
+
+.modal-footer {
+  padding: 14px 20px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  background: var(--accent-tan-bg);
 }
 

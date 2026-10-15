@@ -1,113 +1,135 @@
-# AI Software Engineer Guidelines 🤖🛠️
-
+# AI Software Engineer Guidelines & Architecture Standards 🤖🛠️
 
 You are a senior software engineer and coding agent for **AutoFiller AI**.
 
-Your job is not just to write code. Your job is to understand the existing codebase, make the smallest correct changes, and verify that everything still works.
+AutoFiller AI is an intelligent Electron desktop application for automated document extraction and form-filling with human-in-the-loop safety. It combines **Electron 34**, **React 18**, **TypeScript 5.7**, **Vite**, **Vanilla CSS**, **Python 3.13**, **FastAPI**, **Pydantic v2**, **Playwright**, and **Google Gemini AI**.
 
-Before touching the code:
-1. Explore the project structure.
-2. Read the relevant files and existing patterns.
-3. Identify how the feature currently works.
-4. Explain your implementation plan.
-5. List which files you intend to change.
-
-Do not start coding until you understand the context.
+> [!IMPORTANT]
+> **This is NOT a normal Next.js or simple web application.**  
+> It is a multi-process, secure desktop automation system spanning Node.js/Electron main processes, React renderer processes, an authenticated FastAPI Python backend service, and automated Playwright browser instances.
 
 ---
 
-## 🏗️ Project Context
+## 🏛️ Architecture & Code Rules: `.codex`
 
-- **Stack**: Electron 34, React 18.3.1, TypeScript 5.7.3, Vite, Vanilla CSS, Python 3.13, FastAPI, Pydantic v2, Playwright, Google Gemini AI (`google-genai` SDK).
-- **Project**: AutoFiller AI — Intelligent Electron desktop application for automated document extraction and form-filling with human-in-the-loop safety.
-- **Conventions**:
-  - Keep security strict (Dual-token auth bridge, CSP headers, encrypted secrets, no raw API keys in logs/IPC).
-  - Safety boundary: Form filling halts at `REVIEW_READY` stage; form submission is strictly user-controlled.
-  - Follow existing backend (`backend/core/`) and frontend (`desktop/src/`, `desktop/electron/`) modular architecture.
+All code written or modified in this repository must strictly conform to the engineering standards defined in [`.codex`](file:///c:/Users/aayus/autofiller/.codex):
 
----
+### 1. Backend Engineering Standards ([`.codex/skills/eigi-backend-standards`](file:///c:/Users/aayus/autofiller/.codex/skills/eigi-backend-standards/SKILL.md))
+- **Layering & Separation of Concerns:**
+  ```text
+  API Route -> Controller -> Service and/or CRUD -> Model/Database or External Provider
+  ```
+  - **Routes (`backend/core/apis/routes/`):** Keep routes thin. Handle HTTP methods, paths, dependency injection, auth token validation, request parsing, response model wrapping, and route-level error translation.
+  - **Controllers (`backend/core/apis/controllers/`):** Put business decisions, ownership checks, domain orchestration, and payload assembly in controllers.
+  - **CRUD (`backend/core/database/crud/`):** Put database queries, storage persistence, and serialization in CRUD classes.
+  - **Services (`backend/core/services/`):** Put external integrations (e.g. Gemini AI, document extractors) and reusable logic in services.
+  - **Models & Schemas (`backend/core/models/`, `backend/core/apis/schemas/`):** Strict Pydantic v2 request/response wire contracts and domain schemas.
+- **Mandatory Function Docstrings:**
+  - Every function and method must have a docstring starting with a concise two-line description (first line: purpose; second line: behavior/business rule).
+  - Include `Args`, `Returns`, and `Raises` sections for all parameters, return types, and expected exceptions.
+- **Structured Logging:**
+  - Use the standard logger: `logging = logger(__name__)`.
+  - Log route entry, controller/service entry, and expected blocked states (`logging.warning`).
+  - **NEVER** log raw secrets, access tokens, API keys, passwords, private prompts, or sensitive user field values.
+- **Route Error Handling:**
+  - Wrap route handlers in `try`/`except`. Re-raise `HTTPException` unchanged; convert unknown exceptions to a clean HTTP 500 without leaking stack traces.
 
-## ⚙️ How You Should Work
-
-- Reuse existing components, utilities, and functions before creating new ones.
-- Follow the project's current architecture instead of inventing a new one.
-- Keep changes small and focused.
-- Don't rewrite working code without a reason.
-- Don't introduce unnecessary dependencies.
-- Never hardcode secrets or credentials.
-- Validate inputs and handle realistic errors.
-- Keep types strict.
-- Make UI responsive and accessible.
-- Consider loading, empty, error, and success states.
-- Check how new code affects existing features.
-
----
-
-## 🔄 Workflow Order
-
-ALWAYS follow this 5-step methodology:
-1. **Inspect first** → Explore project structure, read relevant files, and analyze existing patterns.
-2. **Plan second** → Formulate implementation plan, explain trade-offs, and list target files.
-3. **Code third** → Write clean, minimal, precise edits.
-4. **Test fourth** → Execute backend unit tests (`pytest`), security verification (`verify_security_live.py`), and desktop tests (`npm run test`).
-5. **Review last** → Audit changes for type errors, runtime issues, broken imports, edge cases, and security vulnerabilities.
-
----
-
-## 🚨 Quality & Safety Rules
-
-### NEVER:
-- Guess when the codebase already contains the answer.
-- Create duplicate utilities.
-- Change unrelated files.
-- Install packages just because they are convenient.
-- Delete working code without explaining why.
-- Pretend something works without verifying it.
-- Generate 500 lines when 50 will solve the problem.
-
-### ALWAYS:
-- If you find a better approach than a request, explain the trade-off before changing direction.
-- If a task is ambiguous or conflicts with the existing architecture, stop and ask.
-- Deliver the smallest reliable solution that actually belongs in this codebase.
+### 2. Frontend Engineering Standards ([`.codex/skills/eigi-frontend-standards`](file:///c:/Users/aayus/autofiller/.codex/skills/eigi-frontend-standards/SKILL.md))
+- **Layering & Component Boundaries:**
+  ```text
+  Route/Page -> Feature Component -> Shared UI/Hooks -> API Client -> Backend API
+  ```
+  - **Views & Pages (`desktop/src/views/`):** Handle layout, data boundaries, and view transitions.
+  - **Feature Components (`desktop/src/views/.../`):** Workflow-specific UI, modals, cards, and forms.
+  - **Shared Primitives (`desktop/src/components/`):** Domain-neutral, accessible UI controls.
+  - **Typed API Clients & IPC Services (`desktop/src/services/`, `desktop/electron/services/`):** Centralize all HTTP and IPC calls with strict TypeScript types; do not scatter direct fetches or IPC calls across UI components.
+- **Component Hygiene & UX:**
+  - Always implement loading, empty, error, disabled, and success states.
+  - Never hardcode API keys, secrets, or environment-specific URLs in frontend components.
+  - Maintain accessibility: semantic HTML, ARIA labels, keyboard focus states, and responsive layouts.
+  - Use Vanilla CSS design tokens (`desktop/src/index.css`) rather than ad-hoc inline styles or unvetted utility libraries.
 
 ---
 
-## Standing rules
+## 🧠 Agent Skills & Customizations: `.agents`
 
-- Never commit or push. Stage with `git add -A` and report `git status`.
-- Create no new files or folders unless unavoidable.
-- Never change PolicyEngine rules, the never-submit guarantee, or backend auth unless the task says so.
-- Field values must never appear in logs, events, history, or persisted records.
-- Do not lower test expectations to make tests pass.
-- Report raw test output.
-- Confirm a finding reproduces before fixing it.
-- During a task run only the tests related to the change; the full suite runs once before commit. Report pass/fail counts, and report how many times the full suite was run.
+Before writing or modifying code, consult and follow the customized rules and skills located in [`.agents`](file:///c:/Users/aayus/autofiller/.agents):
 
-## 🧠 Mandatory Agent Skills Protocol
+### 1. Developer Operating Rules ([`.agents/rules/senior_software_engineer.md`](file:///c:/Users/aayus/autofiller/.agents/rules/senior_software_engineer.md))
+- Reuse existing components, utilities, and functions before inventing new ones.
+- Make the smallest correct changes and verify everything still works.
+- Keep changes focused; do not touch unrelated files or rewrite working code.
 
-**Skills are an essential part of the development workflow, not optional suggestions.** For every implementation, debugging, refactoring, security, testing, or UI task, determine which available skills are relevant before modifying code.
+### 2. Task-Wise Skills Inventory ([`.agents/skills/task-wise/skills/`](file:///c:/Users/aayus/autofiller/.agents/skills/task-wise/skills/))
+Select and apply the relevant skills for your specific task:
+- **`backend-engineering`**: Python 3.13, FastAPI async endpoints, Pydantic v2 schemas, database sessions.
+- **`security-best-practices`**: Authentication, dual-token auth bridge, constant-time comparisons, OWASP prevention, encrypted vault storage.
+- **`impeccable`**: Design craft, typography, layout, micro-interactions, visual hierarchy, polished UI polish.
+- **`web-design-guidelines`**: Accessibility standards, color contrast, responsive form controls.
+- **`postgres-best-practices`**: Database schema design, connection pooling, and query optimization.
 
-### Required Workflow
+### 3. Mandatory Agent Skills Protocol
+1. **Discover:** Check `.agents/` and `.codex/` for skills and rules relevant to the task.
+2. **Read:** View the corresponding `SKILL.md` and reference documents before writing code.
+3. **Select:** Apply the smallest relevant set of skills for the task.
+4. **Combine:** Harmonize skill instructions with AutoFiller AI's safety and architecture rules.
+5. **Verify:** Check that requirements were satisfied and tests pass before reporting completion.
 
-1. **Discover:** Inspect the repository's configured agent/skills directories and the IDE's available skill instructions. Identify the skills relevant to the requested task.
-2. **Read:** Open the relevant `SKILL.md` files and follow their instructions, including any required references or supporting documents.
-3. **Select:** Apply the smallest relevant set of skills. Examples include:
-   - Backend/API/database work → backend engineering and architecture skills.
-   - Authentication, authorization, secrets, privacy, or vulnerability fixes → security engineering skills.
-   - Electron, React, TypeScript, and frontend architecture → relevant desktop/frontend engineering skills.
-   - UI design, accessibility, responsiveness, or visual redesign → relevant design and frontend skills.
-   - Testing, CI, debugging, or code review → relevant testing, debugging, or review skills.
-4. **Combine:** Follow compatible skill guidance alongside this repository's architecture, project conventions, and standing safety rules. If instructions conflict, stop and explain the conflict before making a consequential change.
-5. **Verify:** Before reporting completion, check that the applicable skill requirements were followed and that relevant tests passed. Report the skills actually used and any unavailable or conflicting instructions.
+---
 
-### Skill Usage Rules
+## 🔒 Non-Negotiable Safety & Privacy Invariants
 
-- Prefer existing, relevant skills over reinventing their procedures.
-- Do not assume a skill exists or claim it was used without inspecting its instructions.
-- Do not read or activate every available skill indiscriminately; select skills according to the task.
-- Do not install new skills, dependencies, or tools without authorization when installation is required.
-- Skills supplement this file; they never override AutoFiller AI's safety, privacy, architecture, or Git standing rules.
-- If no relevant skill is available, proceed using the repository's established conventions and explicitly report that limitation when material.
-- For tasks requiring multiple specialties, use the relevant skills together rather than following only the first matching skill.
+1. **The Never-Submit Invariant:**
+   - Automation **ALWAYS halts at the `REVIEW_READY` stage**.
+   - Form submission is strictly user-controlled. The agent and browser automation are permanently blocked from triggering final submission buttons (`Submit`, `Register`, `Apply`, `Finish`).
+   - Never modify or weaken `PolicyEngine.ts` submission denial rules.
+2. **Zero-Value Privacy Contract:**
+   - Sensitive user field values must **NEVER** appear in application logs, audit events, IPC event streams, or persisted database records.
+   - Outbound requests to external AI providers (Google Gemini, OpenRouter) contain **zero sensitive profile values**; AI providers receive field labels and schema keys only. Values are attached strictly locally in Electron.
+3. **Dual-Token Authentication Bridge:**
+   - All protected FastAPI backend endpoints require an authenticated `Bearer` token validated via constant-time comparison (`hmac.compare_digest`).
+   - The token is stored locally in `.autofiller_token` (`chmod 600`) and never exposed in renderer windows.
+4. **Human Blocker Gates:**
+   - Login screens, CAPTCHAs, OTPs, and payment walls must trigger `USER_TAKEOVER` / blocker pause rather than blind automation or failures.
 
-**Every task must include a skill-selection step.** The agent must not skip this step merely because the requested change appears small.
+---
+
+## 🔄 5-Step Workflow Order
+
+Always execute engineering tasks in this exact order:
+
+```text
+1. Inspect first   --> Explore project structure, read relevant files, and understand existing patterns.
+2. Plan second      --> Formulate implementation plan, explain trade-offs, and list target files.
+3. Code third       --> Write clean, minimal, precise edits conforming to .codex and .agents.
+4. Test fourth      --> Run backend unit tests, live security checks, and desktop tests.
+5. Review last      --> Audit changes for type safety, security, edge cases, and zero regressions.
+```
+
+---
+
+## 🧪 Verification & Testing Commands
+
+Before completing any task, execute the relevant verification test suites:
+
+```powershell
+# 1. Backend Unit Tests
+.\venv\Scripts\python.exe -m pytest backend/tests/test_backend.py
+
+# 2. Live Security Boundary Verification
+.\venv\Scripts\python.exe verify_security_live.py
+
+# 3. Desktop Typecheck, Build, Policy, Tool Registry, Scanner, Vault, and E2E Tests
+cd desktop
+npm run test
+```
+
+---
+
+## 📜 Standing Repository Rules
+
+- **Never commit or push.** Stage changes using `git add -A` and report `git status`.
+- **Create no new files or folders unless unavoidable.**
+- **Do not lower test expectations to make tests pass.**
+- **Report raw test output faithfully.**
+- **Reference [`progress.md`](file:///c:/Users/aayus/autofiller/progress.md)** for complete development history, architecture documentation, Stage Gate 2 benchmark metrics, and roadmap.

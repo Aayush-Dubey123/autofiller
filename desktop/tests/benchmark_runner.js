@@ -18,7 +18,7 @@ const { AgentController } = require(path.join(DIST, 'agent/AgentController'));
 
 const FORMS_DIR = path.resolve(__dirname, 'fixtures/forms');
 const SCENARIOS_DIR = path.resolve(__dirname, 'fixtures/scenarios');
-const REPORT_PATH = path.resolve(__dirname, '../../BENCHMARK_V1.md');
+const REPORT_PATH = path.resolve(__dirname, '../../BENCHMARK_V2.md');
 
 /**
  * Start ephemeral local HTTP server to serve test-only fixtures without polluting production.
@@ -410,12 +410,12 @@ function generateMarkdownReport(results) {
       ? `${Math.round((totalHoneypotsSuppressed / totalHoneypotsPresent) * 100)}%`
       : '100%';
 
-  let md = `# AutoFiller AI — Real-Form Benchmark Report (Version 1)
+  let md = `# AutoFiller AI — Real-Form Benchmark Report (Version 2)
 
 > **Generated:** ${timestamp}  
 > **Benchmark Harness:** \`desktop/tests/benchmark_runner.js\`  
 > **Privacy Invariant:** Zero field values, facts, or personal identifiers are contained in this report. Metadata and numerical counts only.  
-> **Baseline Stage:** Stage Gate 1 (Initial Engine Baseline before Gap Remediation).
+> **Baseline Stage:** Stage Gate 2 (Gap Remediation, ARIA Discovery, & Blocker Gates).
 
 ---
 
@@ -480,7 +480,7 @@ The following real-form scenarios could not be executed during this baseline run
    - Modern frameworks rendering \`div[role="combobox"]\` or \`div[role="radio"]\` are skipped by native control queries.
 
 ---
-*Report stored permanently as BENCHMARK_V1.md. Subsequent milestone benchmarks will write to BENCHMARK_V2.md.*
+*Report stored permanently as BENCHMARK_V2.md. Subsequent milestone benchmarks will write to BENCHMARK_V3.md.*
 `;
 
   return md;

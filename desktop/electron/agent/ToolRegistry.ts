@@ -700,6 +700,30 @@ export function mapHeuristicFallback(
       specificity: number;
     }> = [];
 
+    // Direct match against facts keys and labels
+    for (const f of facts) {
+      const fKey = f.key.toLowerCase().trim();
+      const fKeyClean = fKey.replace(/_/g, ' ');
+      const fLabelClean = (f.label || '').toLowerCase().replace(/[*:\s]+$/, '').trim();
+      if (cleanLabel === fKey || cleanLabel === fKeyClean || cleanLabel === fLabelClean) {
+        candidates.push({
+          cat: {
+            id: f.key,
+            specificity: 95,
+            autocompleteTokens: new Set(),
+            inputTypes: new Set(),
+            exactPhrases: [cleanLabel],
+            wholeWords: [],
+            keys: [f.key],
+          },
+          confidence: 0.9,
+          signalRank: 2,
+          specificity: 95,
+        });
+        break;
+      }
+    }
+
     for (const cat of categorySpecs) {
       if (isConsent && cat.id !== 'consent') continue;
       if (!isConsent && cat.id === 'consent' && fieldType !== 'checkbox') continue;

@@ -819,7 +819,9 @@ async function runE2E() {
 
     const controller = new AgentController(backend);
     const events = [];
-    controller.onEvent((e) => events.push(e));
+    controller.onEvent((e) => {
+      events.push(e);
+    });
 
     await controller.startSession({
       documentText: 'Student Name: Aarav Sharma',
@@ -1199,6 +1201,15 @@ async function runE2E() {
   await test('missing required value discovered during automation triggers clarification pause, resumes to fill & verify DOM, and continues automatically until REVIEW_READY', async () => {
     const backend = makeStubBackend(FORM_URL);
     const controller = new AgentController(backend);
+
+    const origExtract = backend.extractDocument.bind(backend);
+    backend.extractDocument = async () => {
+      const res = await origExtract();
+      return {
+        ...res,
+        facts: res.facts.filter((f) => f.key !== 'student_name'),
+      };
+    };
 
     // Provide mappings for all fields EXCEPT student name initially, simulating a missing value discovered during automation
     backend.mapForm = async (sessionId, snapshot) => {
@@ -2141,6 +2152,154 @@ async function runE2E() {
     // 5. Never-submit safety check: submit button was never clicked
     const currentUrl = page.url();
     assert.ok(currentUrl.includes('hidden_twin_rerender.html'), 'Page must remain on fixture URL without form submit');
+
+    await controller.cleanup();
+  });
+
+  await test('regression: existing-fact mapping, profile fact reuse, clarification persistence across rescan, missing clarification, ambiguity guard, and DOM verification', async () => {
+    const fixturePath = path.resolve(__dirname, 'fixtures/forms/sparse_facts.html');
+    assert.ok(fs.existsSync(fixturePath), 'sparse_facts.html fixture must exist');
+    const fixtureUrl = `file://${fixturePath.replace(/\\/g, '/')}`;
+
+    const backend = makeStubBackend(fixtureUrl);
+    // 1. Stub extractDocument to return facts from document:
+    // Full Name, Date of Birth, and two ambiguous emergency phone options
+    backend.extractDocument = async () => ({
+      document_name: 'maya_id_card.pdf',
+      fact_count: 4,
+      facts: [
+        { key: 'student_name', label: 'Full Name', value: 'Maya Patel', confidence: 0.95 },
+        { key: 'dob', label: 'Date of Birth', value: '2008-11-15', confidence: 0.95 },
+        { key: 'emergency_phone_home', label: 'Emergency Contact Home', value: '+91 9820011223', confidence: 0.95 },
+        { key: 'emergency_phone_work', label: 'Emergency Contact Office', value: '+91 9820099887', confidence: 0.95 },
+      ],
+    });
+
+    // Simulate backend mapForm returning partial/failed mappings to test local fallback & reconciliation
+    backend.mapForm = async (sessionId, snapshot) => {
+      // Backend mapping only mapped Full Name and Date of Birth; it failed to map Nationality,
+      // Parent / Guardian Name, City, etc.
+      const name = snapshot.fields.find((f) => /full name/i.test(f.label));
+      const dob = snapshot.fields.find((f) => /date of birth/i.test(f.label));
+      const mappings = [];
+      if (name) mappings.push({ field_ref: name.ref, field_label: name.label, fact_key: 'student_name', confidence: 0.95, status: 'PENDING' });
+      if (dob) mappings.push({ field_ref: dob.ref, field_label: dob.label, fact_key: 'dob', confidence: 0.95, status: 'PENDING' });
+      return {
+        session_id: sessionId,
+        target_url: fixtureUrl,
+        mappings,
+        clarifications_required: [],
+      };
+    };
+
+    const controller = new AgentController(backend);
+    const events = [];
+    const states = [];
+    const clarificationPrompts = [];
+    controller.onEvent((event) => events.push(event));
+    controller.getStateMachine().onTransition((state) => states.push(state));
+
+    controller.onClarificationRequest((prompt) => {
+      clarificationPrompts.push(prompt);
+      setTimeout(() => {
+        const lbl = prompt.fieldLabel.toLowerCase();
+        if (lbl.includes('primary language')) {
+          controller.answerClarification(prompt.clarificationId, 'English');
+        } else if (lbl.includes('phone')) {
+          // If ambiguous, user selects the home number
+          controller.answerClarification(prompt.clarificationId, '+91 9820011223');
+        } else if (lbl.includes('address')) {
+          controller.answerClarification(prompt.clarificationId, '42 Hill View Road');
+        } else if (lbl.includes('city')) {
+          controller.answerClarification(prompt.clarificationId, 'Pune');
+        } else {
+          controller.answerClarification(prompt.clarificationId, 'Default Value');
+        }
+      }, 100);
+    });
+
+    // Provide saved profile facts: Nationality, Parent / Guardian Name
+    const profileFacts = [
+      { key: 'nationality', label: 'Nationality', value: 'Indian', confidence: 0.95 },
+      { key: 'parent_name', label: 'Parent / Guardian Name', value: 'Rakesh Patel', confidence: 0.95 },
+    ];
+
+    await controller.startSession({
+      documentText: 'Student Name: Maya Patel\nDOB: 2008-11-15',
+      documentName: 'maya_id_card.pdf',
+      targetUrl: fixtureUrl,
+      profileFacts,
+    });
+
+    assert.strictEqual(
+      controller.getStateMachine().getState(),
+      'REVIEW_READY',
+      `expected REVIEW_READY, events were: ${events.map((e) => e.description).join(' | ')}`
+    );
+
+    // REGRESSION ASSERTION 1: A fact present in uploaded document is reused without asking again
+    const namePrompts = clarificationPrompts.filter((p) => /full name|student.*name/i.test(p.fieldLabel));
+    assert.strictEqual(namePrompts.length, 0, 'Uploaded document fact (Full Name) must NOT trigger clarification');
+    const dobPrompts = clarificationPrompts.filter((p) => /date of birth|dob/i.test(p.fieldLabel));
+    assert.strictEqual(dobPrompts.length, 0, 'Uploaded document fact (DOB) must NOT trigger clarification');
+
+    // REGRESSION ASSERTION 2: Saved profile value maps to the correct field
+    const natPrompts = clarificationPrompts.filter((p) => /nationality/i.test(p.fieldLabel));
+    assert.strictEqual(natPrompts.length, 0, 'Saved profile fact (Nationality) must NOT trigger clarification');
+    const parentPrompts = clarificationPrompts.filter((p) => /parent/i.test(p.fieldLabel));
+    assert.strictEqual(parentPrompts.length, 0, 'Saved profile fact (Parent Name) must NOT trigger clarification');
+
+    // REGRESSION ASSERTION 3: A previously clarified answer survives form rescan/rerender and is not asked again
+    const langPrompts = clarificationPrompts.filter((p) => /language/i.test(p.fieldLabel));
+    assert.strictEqual(langPrompts.length, 1, 'Previously clarified Primary Language must be asked exactly once (not repeated across sections/rescans)');
+
+    // REGRESSION ASSERTION 4: Genuine missing required value still triggers clarification
+    const addrPrompts = clarificationPrompts.filter((p) => /address/i.test(p.fieldLabel));
+    assert.strictEqual(addrPrompts.length, 1, 'Genuine missing required field (Address) must trigger clarification');
+    const cityPrompts = clarificationPrompts.filter((p) => /city/i.test(p.fieldLabel));
+    assert.strictEqual(cityPrompts.length, 1, 'Genuine missing required field (City) must trigger clarification');
+
+    // REGRESSION ASSERTION 5: Ambiguous values are not guessed (options presented to user)
+    const phonePrompts = clarificationPrompts.filter((p) => /phone/i.test(p.fieldLabel));
+    assert.strictEqual(phonePrompts.length, 1, 'Ambiguous phone facts must trigger clarification without guessing');
+    assert.ok(
+      phonePrompts[0].options && phonePrompts[0].options.length >= 2,
+      'Ambiguity prompt must present choices to the user rather than silently guessing'
+    );
+
+    // REGRESSION ASSERTION 6: Duplicate or stale field references do not generate duplicate questions
+    const promptLabels = clarificationPrompts.map((p) => p.fieldLabel.toLowerCase().trim());
+    const uniquePromptLabels = new Set(promptLabels);
+    assert.strictEqual(promptLabels.length, uniquePromptLabels.size, 'No duplicate clarification prompts for the same field label');
+
+    // REGRESSION ASSERTION 7: Correctly mapped values are independently verified in the DOM
+    const browserMgr = controller.getBrowserManager();
+    const page = browserMgr.page;
+    assert.ok(page, 'Browser page must be active');
+
+    const domName = await page.inputValue('#student_name');
+    assert.strictEqual(domName, 'Maya Patel', 'DOM student_name must match document fact');
+    const domDob = await page.inputValue('#dob');
+    assert.strictEqual(domDob, '2008-11-15', 'DOM dob must match document fact');
+    const domNat = await page.inputValue('#nationality');
+    assert.strictEqual(domNat, 'Indian', 'DOM nationality must match profile fact');
+    const domLang = await page.inputValue('#primary_language');
+    assert.strictEqual(domLang, 'English', 'DOM primary_language must match clarified answer');
+    const domParent = await page.inputValue('#parent_name');
+    assert.strictEqual(domParent, 'Rakesh Patel', 'DOM parent_name must match profile fact');
+    const domPhone = await page.inputValue('#emergency_phone');
+    assert.strictEqual(domPhone, '+91 9820011223', 'DOM emergency_phone must match selected choice');
+    const domAddr = await page.inputValue('#address');
+    assert.strictEqual(domAddr, '42 Hill View Road', 'DOM address must match clarified answer');
+    const domCity = await page.inputValue('#city');
+    assert.strictEqual(domCity, 'Pune', 'DOM city must match profile fact');
+
+    // REGRESSION SAFETY ASSERTION: Submit button was NEVER clicked and page halted at REVIEW_READY
+    const confirmationVisible = await page.evaluate(() => {
+      const el = document.getElementById('confirmation');
+      return el && window.getComputedStyle(el).display !== 'none';
+    });
+    assert.strictEqual(confirmationVisible, false, 'Form submit confirmation must NOT be displayed (Never-Submit safety invariant)');
 
     await controller.cleanup();
   });

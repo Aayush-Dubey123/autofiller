@@ -188,6 +188,8 @@ export interface StartSessionOptions {
   documentName?: string;
   /** Operator-reviewed facts. When present the agent skips re-extraction. */
   facts?: ExtractedFact[];
+  /** Saved profile facts from the vault. */
+  profileFacts?: ExtractedFact[];
   targetUrl: string;
   /** Explicit runtime permission to fill ID-number fields (SSN, Aadhaar, Passport, etc.). */
   fillIdFields?: boolean;

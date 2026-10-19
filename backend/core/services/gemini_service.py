@@ -1384,6 +1384,28 @@ Respond ONLY with valid JSON."""
 
             candidate_evals = []
 
+            # Direct match against facts keys and labels
+            for f in facts:
+                f_key = f.key.lower().strip()
+                f_key_clean = f_key.replace("_", " ")
+                f_label_clean = re.sub(r'[*:\s]+$', '', f.label or '').strip().lower()
+                if clean_label == f_key or clean_label == f_key_clean or clean_label == f_label_clean:
+                    candidate_evals.append({
+                        "cat": {
+                            "id": f.key,
+                            "specificity": 95,
+                            "autocomplete_tokens": set(),
+                            "input_types": set(),
+                            "exact_phrases": [clean_label],
+                            "whole_words": [],
+                            "keys": [f.key],
+                        },
+                        "confidence": 0.9,
+                        "signal_rank": 2,
+                        "specificity": 95,
+                    })
+                    break
+
             for cat in category_specs:
                 if is_consent and cat["id"] != "consent":
                     continue

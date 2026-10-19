@@ -138,6 +138,7 @@ export class AgentController {
   private lastVerifiedCount: number = 0;
   private submissionWatcherActive: boolean = false;
   private customUserDataDir: string | null = null;
+  private vaultService: any = null;
   private currentRunTrace: RunTrace = {
     timestamp: '',
     targetUrl: '',
@@ -161,6 +162,10 @@ export class AgentController {
 
   public setUserDataDir(dir: string): void {
     this.customUserDataDir = dir;
+  }
+
+  public setVaultService(service: any): void {
+    this.vaultService = service;
   }
 
   public getLastRunTrace(): RunTrace {
@@ -1080,7 +1085,8 @@ export class AgentController {
    */
   private async resolveClarifications(
     clarifications: ClarificationRequest[],
-    mappings: FieldMapping[]
+    mappings: FieldMapping[],
+    facts?: ExtractedFact[]
   ): Promise<void> {
     this.stateMachine.transition('CLARIFICATION_REQUIRED');
     for (let i = 0; i < clarifications.length; i++) {
@@ -1111,6 +1117,30 @@ export class AgentController {
 
       const normLabel = this.normalizeLabel(prompt.field_label);
       this.clarifiedAnswers.set(normLabel, answer);
+      if (prompt.field_ref) {
+        this.clarifiedAnswers.set(prompt.field_ref, answer);
+      }
+
+      if (facts) {
+        const cleanKey = (prompt.field_label || prompt.field_ref)
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_')
+          .replace(/^_+|_+$/g, '');
+        const existingFact = facts.find(
+          (f) => f.key === cleanKey || this.labelsMatch(f.label, prompt.field_label)
+        );
+        if (existingFact) {
+          existingFact.value = answer;
+        } else {
+          facts.push({
+            key: cleanKey,
+            label: prompt.field_label,
+            value: answer,
+            confidence: 1.0,
+            source_page: null,
+          });
+        }
+      }
 
       if (!prompt.clarification_id.startsWith('preflight_')) {
         try {
@@ -1128,23 +1158,27 @@ export class AgentController {
         }
       }
 
-      let target = mappings.find(
-        (mapping) =>
+      // Update all matching mappings (by ref or label)
+      let foundTarget = false;
+      for (const mapping of mappings) {
+        if (
           mapping.field_ref === prompt.field_ref ||
           (mapping.field_label && this.labelsMatch(mapping.field_label, prompt.field_label))
-      );
-      if (target) {
-        target.fact_value = answer;
-        target.status = 'RESOLVED';
-      } else {
-        target = {
+        ) {
+          mapping.fact_value = answer;
+          mapping.status = 'RESOLVED';
+          mapping.confidence = 1.0;
+          foundTarget = true;
+        }
+      }
+      if (!foundTarget) {
+        mappings.push({
           field_ref: prompt.field_ref,
           field_label: prompt.field_label,
           fact_value: answer,
           confidence: 1.0,
           status: 'RESOLVED',
-        };
-        mappings.push(target);
+        });
       }
 
       // Re-scan immediately after clarification answer arrives
@@ -1188,6 +1222,490 @@ export class AgentController {
   }
 
   /**
+   * Retrieve an already clarified answer for a field reference or label.
+   */
+  public getClarifiedAnswer(field: { label?: string; ref?: string; key?: string }): string | undefined {
+    if (field.ref && this.clarifiedAnswers.has(field.ref)) {
+      return this.clarifiedAnswers.get(field.ref);
+    }
+    const norm = this.normalizeLabel(field.label);
+    if (norm && this.clarifiedAnswers.has(norm)) {
+      return this.clarifiedAnswers.get(norm);
+    }
+    if (field.key) {
+      const normKey = this.normalizeLabel(field.key.replace(/_/g, ' '));
+      if (this.clarifiedAnswers.has(normKey)) {
+        return this.clarifiedAnswers.get(normKey);
+      }
+      if (this.clarifiedAnswers.has(field.key)) {
+        return this.clarifiedAnswers.get(field.key);
+      }
+    }
+    for (const [key, val] of this.clarifiedAnswers.entries()) {
+      if (this.labelsMatch(key, field.label)) {
+        return val;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Search available extracted document facts, profile facts, and derived facts
+   * for a compatible match for the specified form field using normalized labels,
+   * semantic aliases, field types, and available context.
+   */
+  private findMatchingFact(
+    field: FormFieldSnapshot,
+    facts: ExtractedFact[]
+  ): { fact: ExtractedFact; confidence: number; isAmbiguous?: boolean; options?: string[] } | null {
+    if (!facts || facts.length === 0) return null;
+
+    const rawLabel = field.label || '';
+    const normLabel = this.normalizeLabel(rawLabel);
+    const cleanLabel = rawLabel
+      .toLowerCase()
+      .replace(/[*:\s]+$/, '')
+      .replace(/\be-mail\b/g, 'email')
+      .trim();
+    const fieldType = (field.type || 'text').toLowerCase();
+
+    // 1. Direct label and key matches (exact or normalized)
+    for (const f of facts) {
+      const fKey = f.key.toLowerCase().trim();
+      const fKeySpaces = fKey.replace(/_/g, ' ');
+      const fLabelNorm = this.normalizeLabel(f.label);
+
+      if (
+        normLabel === fKey ||
+        normLabel === fKeySpaces ||
+        normLabel === fLabelNorm ||
+        this.labelsMatch(rawLabel, f.label) ||
+        cleanLabel === fKey ||
+        cleanLabel === fKeySpaces
+      ) {
+        if (field.type === 'select' || field.type === 'radio') {
+          if (field.options && field.options.length > 0) {
+            const optMatch = matchOption(f.value, field.options);
+            if (optMatch.needsClarification) {
+              return { fact: f, confidence: optMatch.confidence, isAmbiguous: true, options: field.options };
+            }
+            return { fact: { ...f, value: optMatch.matchedOption || f.value }, confidence: optMatch.confidence };
+          }
+        }
+        const compat = checkFieldCompatibility(field, f.value);
+        if (compat.valid) {
+          return { fact: f, confidence: 1.0 };
+        }
+      }
+    }
+
+    // 2. Semantic category mappings
+    interface AliasCategory {
+      id: string;
+      keys: string[];
+      phrases: string[];
+      words: string[];
+      types?: string[];
+    }
+
+    const categories: AliasCategory[] = [
+      {
+        id: 'email',
+        keys: ['email', 'student_email', 'applicant_email', 'parent_email'],
+        phrases: ['student email address', 'student email', 'email address', 'email', 'e-mail'],
+        words: ['email', 'mail'],
+        types: ['email', 'text'],
+      },
+      {
+        id: 'phone',
+        keys: ['phone', 'mobile', 'contact_phone', 'alternate_phone', 'emergency_phone', 'primary_mobile', 'contact'],
+        phrases: ['contact phone number', 'phone number', 'mobile number', 'contact number', 'mobile', 'phone', 'telephone', 'emergency phone number', 'emergency phone', 'alternate phone'],
+        words: ['phone', 'mobile', 'tel'],
+        types: ['tel', 'text'],
+      },
+      {
+        id: 'dob',
+        keys: ['dob', 'date_of_birth', 'birth_date'],
+        phrases: ['date of birth', 'birth date', 'dob', 'birthday'],
+        words: ['dob', 'birth', 'birthday'],
+        types: ['date', 'text'],
+      },
+      {
+        id: 'first_name',
+        keys: ['first_name'],
+        phrases: ['first name', 'given name'],
+        words: ['first_name'],
+      },
+      {
+        id: 'last_name',
+        keys: ['last_name', 'surname'],
+        phrases: ['last name', 'surname', 'family name'],
+        words: ['last_name', 'surname'],
+      },
+      {
+        id: 'middle_name',
+        keys: ['middle_name'],
+        phrases: ['middle name'],
+        words: ['middle_name'],
+      },
+      {
+        id: 'student_name',
+        keys: ['student_name', 'full_name', 'applicant_name', 'candidate_name', 'name'],
+        phrases: ['student full name', 'name of student', "student's full name", "student's name", 'student name', 'full name', 'applicant name', 'candidate name', 'name'],
+        words: ['name'],
+      },
+      {
+        id: 'father_name',
+        keys: ['father_name', 'father', 'guardian_name'],
+        phrases: ["father's name", 'father name', 'fathers name', 'father', "guardian's name", 'guardian name'],
+        words: ['father', 'fathers', 'guardian'],
+      },
+      {
+        id: 'mother_name',
+        keys: ['mother_name', 'mother'],
+        phrases: ["mother's name", 'mother name', 'mothers name', 'mother'],
+        words: ['mother', 'mothers'],
+      },
+      {
+        id: 'gender',
+        keys: ['gender', 'sex'],
+        phrases: ['gender', 'sex'],
+        words: ['gender', 'sex'],
+      },
+      {
+        id: 'address',
+        keys: ['address', 'residential_address', 'current_address', 'street_address'],
+        phrases: ['residential address', 'current address', 'street address', 'home address', 'address'],
+        words: ['address', 'residential'],
+      },
+      {
+        id: 'permanent_address',
+        keys: ['permanent_address'],
+        phrases: ['permanent address', 'permanent street address'],
+        words: ['permanent'],
+      },
+      {
+        id: 'city',
+        keys: ['city', 'town', 'current_city'],
+        phrases: ['city', 'town', 'current city'],
+        words: ['city', 'town'],
+      },
+      {
+        id: 'permanent_city',
+        keys: ['permanent_city'],
+        phrases: ['permanent city'],
+        words: ['permanent_city'],
+      },
+      {
+        id: 'state',
+        keys: ['state', 'province', 'current_state'],
+        phrases: ['state', 'province', 'current state'],
+        words: ['state', 'province'],
+      },
+      {
+        id: 'permanent_state',
+        keys: ['permanent_state'],
+        phrases: ['permanent state'],
+        words: ['permanent_state'],
+      },
+      {
+        id: 'pincode',
+        keys: ['pincode', 'zip_code', 'postal_code', 'zip', 'pin'],
+        phrases: ['pincode / zip code', 'pincode/zip code', 'pincode', 'zip code', 'postal code', 'zipcode', 'zip', 'pin'],
+        words: ['pincode', 'zipcode', 'postal', 'zip', 'pin'],
+      },
+      {
+        id: 'permanent_pincode',
+        keys: ['permanent_pincode'],
+        phrases: ['permanent pincode', 'permanent zip code'],
+        words: ['permanent_pincode'],
+      },
+      {
+        id: 'grade',
+        keys: ['grade', 'class', 'applying_grade'],
+        phrases: ['applying grade / class', 'applying grade', 'applying class', 'grade', 'class', 'standard'],
+        words: ['grade', 'class', 'standard'],
+      },
+      {
+        id: 'previous_school',
+        keys: ['previous_school', 'school'],
+        phrases: ['previous school attended', 'previous school', 'school attended', 'last school attended'],
+        words: ['previous_school', 'school'],
+      },
+      {
+        id: 'allergies',
+        keys: ['allergies', 'allergy'],
+        phrases: ['does student have allergies', 'allergies', 'allergy'],
+        words: ['allergies', 'allergy'],
+      },
+      {
+        id: 'transport',
+        keys: ['transport'],
+        phrases: ['does student require transport', 'transport required', 'transport'],
+        words: ['transport'],
+      },
+      {
+        id: 'nationality',
+        keys: ['nationality'],
+        phrases: ['nationality', 'citizenship'],
+        words: ['nationality', 'citizenship'],
+      },
+      {
+        id: 'religion',
+        keys: ['religion'],
+        phrases: ['religion'],
+        words: ['religion'],
+      },
+      {
+        id: 'category',
+        keys: ['category', 'caste'],
+        phrases: ['category', 'caste', 'social category'],
+        words: ['category', 'caste'],
+      },
+      {
+        id: 'blood_group',
+        keys: ['blood_group', 'blood_type'],
+        phrases: ['blood group', 'blood type'],
+        words: ['blood'],
+      },
+      {
+        id: 'mother_tongue',
+        keys: ['mother_tongue'],
+        phrases: ['mother tongue', 'native language'],
+        words: ['tongue', 'native'],
+      },
+      {
+        id: 'marital_status',
+        keys: ['marital_status'],
+        phrases: ['marital status'],
+        words: ['marital'],
+      },
+      {
+        id: 'age',
+        keys: ['age'],
+        phrases: ['age'],
+        words: ['age'],
+      },
+    ];
+
+    const labelWords = new Set(cleanLabel.split(/[^a-z0-9]+/));
+    for (const cat of categories) {
+      const phraseMatch = cat.phrases.some((p) => p === cleanLabel || p === cleanLabel.replace('/', ' '));
+      const wordMatch = cat.words.some((w) => labelWords.has(w));
+      if (!phraseMatch && !wordMatch) continue;
+
+      if (cat.types && cat.types.length > 0 && !cat.types.includes(fieldType)) {
+        continue;
+      }
+
+      if (phraseMatch || wordMatch) {
+        if (cat.id === 'phone') {
+          const phoneFacts = facts.filter((f) =>
+            ['phone', 'mobile', 'tel', 'contact'].some((k) => f.key.toLowerCase().includes(k))
+          );
+          const emergencyFacts = facts.filter((f) => f.key.toLowerCase().includes('emergency'));
+          if (cleanLabel.includes('emergency') && emergencyFacts.length > 1) {
+            return {
+              fact: emergencyFacts[0],
+              confidence: 0.7,
+              isAmbiguous: true,
+              options: emergencyFacts.map((f) => f.value || f.label || f.key),
+            };
+          }
+          if (phoneFacts.length > 1 && !cleanLabel.includes('alternate') && !cleanLabel.includes('emergency')) {
+            return {
+              fact: phoneFacts[0],
+              confidence: 0.7,
+              isAmbiguous: true,
+              options: phoneFacts.map((f) => f.value || f.label || f.key),
+            };
+          }
+          if (cleanLabel.includes('alternate') || cleanLabel.includes('emergency')) {
+            const alt =
+              (emergencyFacts.length > 0 ? emergencyFacts[0] : null) ||
+              facts.find((f) => f.key.includes('alternate')) ||
+              (phoneFacts.length > 1 ? phoneFacts[1] : phoneFacts[0]);
+            if (alt) return { fact: alt, confidence: 0.9 };
+          }
+          if (phoneFacts.length > 0) {
+            return { fact: phoneFacts[0], confidence: 0.9 };
+          }
+        }
+
+        if (cat.id === 'student_name') {
+          if (
+            cleanLabel.includes('father') ||
+            cleanLabel.includes('mother') ||
+            cleanLabel.includes('guardian') ||
+            cleanLabel.includes('email') ||
+            cleanLabel.includes('phone') ||
+            cleanLabel.includes('allerg') ||
+            cleanLabel.includes('transport') ||
+            cleanLabel.includes('school')
+          ) {
+            continue;
+          }
+        }
+
+        for (const k of cat.keys) {
+          const found = facts.find((f) => f.key.toLowerCase().trim() === k);
+          if (found && found.value && String(found.value).trim().length > 0) {
+            if (field.type === 'select' || field.type === 'radio') {
+              if (field.options && field.options.length > 0) {
+                const optMatch = matchOption(found.value, field.options);
+                if (optMatch.needsClarification) {
+                  return { fact: found, confidence: optMatch.confidence, isAmbiguous: true, options: field.options };
+                }
+                return { fact: { ...found, value: optMatch.matchedOption || found.value }, confidence: optMatch.confidence };
+              }
+            }
+            const compat = checkFieldCompatibility(field, found.value);
+            if (compat.valid) {
+              return { fact: found, confidence: phraseMatch ? 0.9 : 0.8 };
+            }
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Reconcile mappings with existing facts and clarified answers.
+   * Ensures that facts existing in documents, profile, or past clarifications
+   * are cleanly attached to mappings without triggering redundant clarifications.
+   */
+  private reconcileMappingsWithFacts(
+    mappings: FieldMapping[],
+    fields: FormFieldSnapshot[],
+    facts: ExtractedFact[],
+    clarifications?: ClarificationRequest[]
+  ): void {
+    for (const field of fields) {
+      if (isConsentCheckbox(field)) continue;
+
+      let mapping = mappings.find(
+        (m) =>
+          m.field_ref === field.ref ||
+          (m.field_label && field.label && this.labelsMatch(m.field_label, field.label))
+      );
+
+      // Check if there is an explicit multi-option clarification for this field
+      const explicitClarification = clarifications?.find(
+        (c) => c.field_ref === field.ref || this.labelsMatch(c.field_label, field.label)
+      );
+      const isExplicitAmbiguity =
+        explicitClarification &&
+        explicitClarification.options &&
+        explicitClarification.options.length > 1;
+
+      // 1. Check clarified answers first
+      const clarified = this.getClarifiedAnswer(field);
+      if (clarified) {
+        if (!mapping) {
+          mapping = {
+            field_ref: field.ref,
+            field_label: field.label,
+            fact_value: clarified,
+            confidence: 1.0,
+            status: 'RESOLVED',
+          };
+          mappings.push(mapping);
+        } else {
+          mapping.fact_value = clarified;
+          mapping.status = 'RESOLVED';
+          mapping.confidence = 1.0;
+        }
+        if (clarifications) {
+          const idx = clarifications.findIndex(
+            (c) => c.field_ref === field.ref || this.labelsMatch(c.field_label, field.label)
+          );
+          if (idx >= 0) clarifications.splice(idx, 1);
+        }
+        continue;
+      }
+
+      // If the backend or previous stage explicitly returned a multi-option clarification for this field,
+      // it is genuinely ambiguous - preserve it and set status to CLARIFICATION_REQUIRED
+      if (isExplicitAmbiguity) {
+        if (mapping) {
+          mapping.status = 'CLARIFICATION_REQUIRED';
+        }
+        continue;
+      }
+
+      // 2. If mapping already has a usable value and is not ambiguous
+      const hasVal =
+        mapping &&
+        mapping.fact_value !== undefined &&
+        mapping.fact_value !== null &&
+        String(mapping.fact_value).trim().length > 0;
+      if (mapping && hasVal && mapping.status !== 'CLARIFICATION_REQUIRED') {
+        if (clarifications) {
+          const idx = clarifications.findIndex(
+            (c) => c.field_ref === field.ref || this.labelsMatch(c.field_label, field.label)
+          );
+          if (idx >= 0) clarifications.splice(idx, 1);
+        }
+        continue;
+      }
+
+      // 3. Search facts for a compatible match
+      const matched = this.findMatchingFact(field, facts);
+      if (matched) {
+        if (matched.isAmbiguous) {
+          if (!field.required) {
+            continue;
+          }
+          if (mapping) {
+            mapping.status = 'CLARIFICATION_REQUIRED';
+            mapping.fact_key = matched.fact.key;
+          }
+          if (
+            clarifications &&
+            !clarifications.some(
+              (c) => c.field_ref === field.ref || this.labelsMatch(c.field_label, field.label)
+            )
+          ) {
+            clarifications.push({
+              clarification_id: `clarify_${field.ref}_${Date.now()}`,
+              field_ref: field.ref,
+              field_label: field.label,
+              question: `Multiple choices available for '${field.label}'. Please choose:`,
+              options: matched.options || field.options || [],
+              selected_value: '',
+            });
+          }
+        } else {
+          if (!mapping) {
+            mapping = {
+              field_ref: field.ref,
+              field_label: field.label,
+              fact_key: matched.fact.key,
+              fact_value: matched.fact.value,
+              confidence: matched.confidence,
+              status: 'RESOLVED',
+            };
+            mappings.push(mapping);
+          } else {
+            mapping.fact_key = matched.fact.key;
+            mapping.fact_value = matched.fact.value;
+            mapping.status = 'RESOLVED';
+            mapping.confidence = matched.confidence;
+          }
+          if (clarifications) {
+            const idx = clarifications.findIndex(
+              (c) => c.field_ref === field.ref || this.labelsMatch(c.field_label, field.label)
+            );
+            if (idx >= 0) clarifications.splice(idx, 1);
+          }
+        }
+      }
+    }
+  }
+
+  /**
    * Attach fact values locally from available document facts or vault records.
    *
    * Zero-value mapping: the backend only returns field_ref -> fact_key associations.
@@ -1203,12 +1721,33 @@ export class AgentController {
     }
 
     for (const mapping of mappings) {
-      if (mapping.fact_key && (!mapping.fact_value || String(mapping.fact_value).trim().length === 0)) {
-        const fact = factMap.get(mapping.fact_key.toLowerCase().trim());
-        if (fact) {
-          mapping.fact_value = fact.value;
-          if (!mapping.status || mapping.status === 'PENDING') {
-            mapping.status = 'PENDING';
+      if (!mapping.fact_value || String(mapping.fact_value).trim().length === 0) {
+        if (mapping.fact_key) {
+          const fact = factMap.get(mapping.fact_key.toLowerCase().trim());
+          if (fact) {
+            mapping.fact_value = fact.value;
+            if (!mapping.status || mapping.status === 'PENDING') {
+              mapping.status = 'PENDING';
+            }
+          }
+        }
+        if (!mapping.fact_value) {
+          const matched = this.findMatchingFact(
+            {
+              ref: mapping.field_ref,
+              label: mapping.field_label,
+              type: 'text',
+              required: false,
+              disabled: false,
+              visible: true,
+            },
+            facts
+          );
+          if (matched && !matched.isAmbiguous) {
+            mapping.fact_key = matched.fact.key;
+            mapping.fact_value = matched.fact.value;
+            mapping.status = 'RESOLVED';
+            mapping.confidence = matched.confidence;
           }
         }
       }
@@ -1301,6 +1840,7 @@ export class AgentController {
     for (const field of sortedFields) {
       const normLabel = this.normalizeLabel(field.label);
       const type = field.type;
+      const clarifiedAns = this.getClarifiedAnswer(field);
 
       let match = existingPool.find(
         (e) => !e.used && e.normLabel === normLabel && (!e.type || e.type === type)
@@ -1323,16 +1863,16 @@ export class AgentController {
           field_ref: field.ref,
           field_label: field.label,
         };
-        if (this.clarifiedAnswers.has(normLabel)) {
-          rebound.fact_value = this.clarifiedAnswers.get(normLabel);
+        if (clarifiedAns) {
+          rebound.fact_value = clarifiedAns;
           rebound.status = 'RESOLVED';
         }
         newMappings.push(rebound);
-      } else if (this.clarifiedAnswers.has(normLabel)) {
+      } else if (clarifiedAns) {
         newMappings.push({
           field_ref: field.ref,
           field_label: field.label,
-          fact_value: this.clarifiedAnswers.get(normLabel),
+          fact_value: clarifiedAns,
           confidence: 1.0,
           status: 'RESOLVED',
         });
@@ -1340,7 +1880,10 @@ export class AgentController {
     }
 
     for (const e of existingPool) {
-      if (!e.used) {
+      if (
+        !e.used &&
+        !newMappings.some((nm) => this.labelsMatch(nm.field_label, e.mapping.field_label))
+      ) {
         newMappings.push(e.mapping);
       }
     }
@@ -1409,6 +1952,48 @@ export class AgentController {
         facts = facts.filter((f) => !idRegex.test(f.key));
       }
 
+      // Merge saved profile facts if supplied
+      if (options.profileFacts && options.profileFacts.length > 0) {
+        for (const pf of options.profileFacts) {
+          if (!facts.some((f) => f.key.toLowerCase().trim() === pf.key.toLowerCase().trim())) {
+            facts.push(pf);
+          }
+        }
+      } else if (this.vaultService && typeof this.vaultService.getProfiles === 'function') {
+        try {
+          const profiles = this.vaultService.getProfiles();
+          if (profiles && profiles.length > 0 && profiles[0].sections) {
+            const vaultFactMap: Record<string, string> = {};
+            profiles[0].sections.forEach((sec: any) => {
+              if (sec.fields) {
+                sec.fields.forEach((f: any) => {
+                  if (f.value && !vaultFactMap[f.key]) {
+                    const isSensitive = sec.id === 'id_numbers' || sec.id === 'bank' || Boolean(f.sensitive);
+                    if (!isSensitive || options.fillIdFields) {
+                      vaultFactMap[f.key] = f.value;
+                    }
+                  }
+                });
+              }
+            });
+            const derivedVault = deriveFacts(vaultFactMap);
+            for (const [vKey, vVal] of Object.entries(derivedVault)) {
+              if (vVal && !facts.some((f) => f.key.toLowerCase().trim() === vKey.toLowerCase().trim())) {
+                facts.push({
+                  key: vKey,
+                  label: vKey.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+                  value: vVal,
+                  confidence: 1.0,
+                  source_page: null,
+                });
+              }
+            }
+          }
+        } catch {
+          // Non-fatal if vault read fails
+        }
+      }
+
       // Supplement facts with derived facts (full name, age, one-line address, permanent copies)
       const factMap: Record<string, string> = {};
       facts.forEach((f) => {
@@ -1457,18 +2042,20 @@ export class AgentController {
           }));
 
           const tempMappings: FieldMapping[] = [];
-          await this.resolveClarifications(preflightClarifications, tempMappings);
+          await this.resolveClarifications(preflightClarifications, tempMappings, facts);
 
           for (const m of tempMappings) {
             if (m.fact_value) {
               const cleanedKey = m.field_ref.replace(/^preflight_/, '');
-              facts.push({
-                key: cleanedKey,
-                label: m.field_label,
-                value: m.fact_value,
-                confidence: 1.0,
-                source_page: null,
-              });
+              if (!facts.some((f) => f.key === cleanedKey)) {
+                facts.push({
+                  key: cleanedKey,
+                  label: m.field_label,
+                  value: m.fact_value,
+                  confidence: 1.0,
+                  source_page: null,
+                });
+              }
             }
           }
 
@@ -1510,12 +2097,15 @@ export class AgentController {
         this.attachFactValues(preflightMappings, facts);
         this.resolveOptionMappings(preflightMappings, probeSnapshot.fields);
 
+        // Reconcile mappings with existing document, profile, and clarified facts
+        this.reconcileMappingsWithFacts(preflightMappings, probeSnapshot.fields, facts, preflightClarifications);
+
         // 3. Mapping Completeness Check:
         // Explicitly determine:
         // - required form fields (non-disabled, not honeypots)
         // - mapped fields (usable value)
         // - unmapped required fields
-        // - fields with no available fact
+        // - fields with genuinely missing facts
         const requiredFields = probeSnapshot.fields.filter(
           (f) => f.required && !f.disabled && !f.isHoneypot && !isConsentCheckbox(f)
         );
@@ -1534,23 +2124,86 @@ export class AgentController {
         const unmappedRequiredFields = requiredFields.filter((f) => !mappedWithUsableValue.has(f.ref));
 
         const consolidatedMissingClarifications: ClarificationRequest[] = [];
+        const seenLabels = new Set<string>();
 
-        // Add any clarification requests returned by the backend
+        // Add any clarification requests returned by the backend that are not already resolved
         for (const cl of preflightClarifications) {
-          consolidatedMissingClarifications.push(cl);
+          const norm = this.normalizeLabel(cl.field_label);
+          if (
+            !seenLabels.has(norm) &&
+            !this.getClarifiedAnswer({ label: cl.field_label, ref: cl.field_ref })
+          ) {
+            consolidatedMissingClarifications.push(cl);
+            seenLabels.add(norm);
+          }
         }
 
-        // Add all unmapped required fields (fields with no available fact)
+        // Add genuinely unmapped required fields that have no existing value in facts or clarified answers
         for (const reqField of unmappedRequiredFields) {
-          if (!consolidatedMissingClarifications.some((c) => c.field_ref === reqField.ref)) {
+          const norm = this.normalizeLabel(reqField.label);
+          const alreadyClarified = this.getClarifiedAnswer(reqField);
+          const existingFact = this.findMatchingFact(reqField, facts);
+
+          if (alreadyClarified) {
+            let m = preflightMappings.find(
+              (cand) =>
+                cand.field_ref === reqField.ref ||
+                (cand.field_label && reqField.label && this.labelsMatch(cand.field_label, reqField.label))
+            );
+            if (!m) {
+              preflightMappings.push({
+                field_ref: reqField.ref,
+                field_label: reqField.label,
+                fact_value: alreadyClarified,
+                confidence: 1.0,
+                status: 'RESOLVED',
+              });
+            } else {
+              m.fact_value = alreadyClarified;
+              m.status = 'RESOLVED';
+            }
+            continue;
+          }
+
+          if (existingFact && !existingFact.isAmbiguous) {
+            let m = preflightMappings.find(
+              (cand) =>
+                cand.field_ref === reqField.ref ||
+                (cand.field_label && reqField.label && this.labelsMatch(cand.field_label, reqField.label))
+            );
+            if (!m) {
+              preflightMappings.push({
+                field_ref: reqField.ref,
+                field_label: reqField.label,
+                fact_key: existingFact.fact.key,
+                fact_value: existingFact.fact.value,
+                confidence: existingFact.confidence,
+                status: 'RESOLVED',
+              });
+            } else {
+              m.fact_key = existingFact.fact.key;
+              m.fact_value = existingFact.fact.value;
+              m.status = 'RESOLVED';
+              m.confidence = existingFact.confidence;
+            }
+            continue;
+          }
+
+          if (
+            !seenLabels.has(norm) &&
+            !consolidatedMissingClarifications.some((c) => c.field_ref === reqField.ref)
+          ) {
             consolidatedMissingClarifications.push({
               clarification_id: `preflight_${reqField.ref}_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`,
               field_ref: reqField.ref,
               field_label: reqField.label,
-              question: `Please provide value for required field '${reqField.label}':`,
-              options: reqField.options || [],
+              question: existingFact?.isAmbiguous
+                ? `Multiple choices available for '${reqField.label}'. Please choose:`
+                : `Please provide value for required field '${reqField.label}':`,
+              options: existingFact?.options || reqField.options || [],
               selected_value: '',
             });
+            seenLabels.add(norm);
           }
         }
 
@@ -1570,7 +2223,7 @@ export class AgentController {
             )
           );
 
-          await this.resolveClarifications(consolidatedMissingClarifications, preflightMappings);
+          await this.resolveClarifications(consolidatedMissingClarifications, preflightMappings, facts);
 
           // Ingest newly resolved facts
           for (const m of preflightMappings) {
@@ -1781,29 +2434,39 @@ export class AgentController {
         this.updateScanMappings(scanTrace, mappings);
 
         // 3c: Identify all required/unresolved fields for current section
-        // Collect ALL missing information needed rather than arbitrarily stopping after two
-        const neededClarifications: ClarificationRequest[] = sectionClarifications.filter(
-          (c) => {
-            const normLabel = this.normalizeLabel(c.field_label);
-            if (this.clarifiedAnswers.has(normLabel)) return false;
-            return (
-              !verifiedFieldRefs.has(c.field_ref) &&
-              activeSectionFields.some((f) => f.ref === c.field_ref) &&
-              !mappings.some(
-                (m) =>
-                  m.field_ref === c.field_ref &&
-                  m.status === 'RESOLVED' &&
-                  m.fact_value !== undefined &&
-                  m.fact_value !== null &&
-                  String(m.fact_value).trim().length > 0
-              )
-            );
+        this.reconcileMappingsWithFacts(mappings, activeSectionFields, facts, sectionClarifications);
+
+        const neededClarifications: ClarificationRequest[] = [];
+        const seenLabels = new Set<string>();
+
+        for (const c of sectionClarifications) {
+          const normLabel = this.normalizeLabel(c.field_label);
+          if (this.getClarifiedAnswer({ label: c.field_label, ref: c.field_ref })) continue;
+          if (verifiedFieldRefs.has(c.field_ref)) continue;
+          if (!activeSectionFields.some((f) => f.ref === c.field_ref || this.labelsMatch(f.label, c.field_label))) continue;
+          if (
+            mappings.some(
+              (m) =>
+                (m.field_ref === c.field_ref || this.labelsMatch(m.field_label, c.field_label)) &&
+                m.status === 'RESOLVED' &&
+                m.fact_value !== undefined &&
+                m.fact_value !== null &&
+                String(m.fact_value).trim().length > 0
+            )
+          ) {
+            continue;
           }
-        );
+
+          if (!seenLabels.has(normLabel)) {
+            neededClarifications.push(c);
+            seenLabels.add(normLabel);
+          }
+        }
 
         for (const reqField of activeRequiredFields) {
           const normLabel = this.normalizeLabel(reqField.label);
-          if (this.clarifiedAnswers.has(normLabel)) {
+          const clarified = this.getClarifiedAnswer(reqField);
+          if (clarified) {
             let m = mappings.find(
               (cand) =>
                 cand.field_ref === reqField.ref ||
@@ -1813,19 +2476,19 @@ export class AgentController {
               m = {
                 field_ref: reqField.ref,
                 field_label: reqField.label,
-                fact_value: this.clarifiedAnswers.get(normLabel),
+                fact_value: clarified,
                 confidence: 1.0,
                 status: 'RESOLVED',
               };
               mappings.push(m);
             } else {
-              m.fact_value = this.clarifiedAnswers.get(normLabel);
+              m.fact_value = clarified;
               m.status = 'RESOLVED';
             }
             continue;
           }
 
-          const m = mappings.find(
+          let m = mappings.find(
             (cand) =>
               cand.field_ref === reqField.ref ||
               (cand.field_label && reqField.label && this.labelsMatch(cand.field_label, reqField.label))
@@ -1833,21 +2496,50 @@ export class AgentController {
           const hasUsableValue =
             m && m.fact_value !== undefined && m.fact_value !== null && String(m.fact_value).trim().length > 0;
           if (!hasUsableValue || m?.status === 'CLARIFICATION_REQUIRED') {
-            if (!neededClarifications.some((c) => c.field_ref === reqField.ref)) {
+            const existingFact = this.findMatchingFact(reqField, facts);
+            if (existingFact && !existingFact.isAmbiguous) {
+              if (!m) {
+                m = {
+                  field_ref: reqField.ref,
+                  field_label: reqField.label,
+                  fact_key: existingFact.fact.key,
+                  fact_value: existingFact.fact.value,
+                  confidence: existingFact.confidence,
+                  status: 'RESOLVED',
+                };
+                mappings.push(m);
+              } else {
+                m.fact_key = existingFact.fact.key;
+                m.fact_value = existingFact.fact.value;
+                m.status = 'RESOLVED';
+                m.confidence = existingFact.confidence;
+              }
+              continue;
+            }
+
+            if (
+              !seenLabels.has(normLabel) &&
+              !neededClarifications.some(
+                (c) => c.field_ref === reqField.ref || this.labelsMatch(c.field_label, reqField.label)
+              )
+            ) {
               neededClarifications.push({
                 clarification_id: `clarify_${reqField.ref}_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`,
                 field_ref: reqField.ref,
                 field_label: reqField.label,
-                question: `Please provide value for required field '${reqField.label}':`,
-                options: reqField.options || [],
+                question: existingFact?.isAmbiguous
+                  ? `Multiple choices available for '${reqField.label}'. Please choose:`
+                  : `Please provide value for required field '${reqField.label}':`,
+                options: existingFact?.options || reqField.options || [],
                 selected_value: '',
               });
+              seenLabels.add(normLabel);
             }
           }
         }
 
         if (neededClarifications.length > 0) {
-          await this.resolveClarifications(neededClarifications, mappings);
+          await this.resolveClarifications(neededClarifications, mappings, facts);
         }
 
         // 2. FRESH BINDING: re-scan immediately before filling each section
@@ -1912,23 +2604,23 @@ export class AgentController {
               });
               continue;
             }
-            const normLabel = this.normalizeLabel(field.label);
+
+            const clarifiedVal = this.getClarifiedAnswer(field);
             if (
               (!mapping ||
                 mapping.fact_value === undefined ||
                 mapping.fact_value === null ||
                 !String(mapping.fact_value).trim()) &&
-              this.clarifiedAnswers.has(normLabel)
+              clarifiedVal
             ) {
-              const ans = this.clarifiedAnswers.get(normLabel)!;
               if (mapping) {
-                mapping.fact_value = ans;
+                mapping.fact_value = clarifiedVal;
                 mapping.status = 'RESOLVED';
               } else {
                 mapping = {
                   field_ref: field.ref,
                   field_label: field.label,
-                  fact_value: ans,
+                  fact_value: clarifiedVal,
                   confidence: 1.0,
                   status: 'RESOLVED',
                 };
@@ -1942,6 +2634,43 @@ export class AgentController {
                 };
                 fieldTrace.valueAvailable = true;
                 fieldTrace.skippedReason = null;
+              }
+            }
+
+            // If still no mapping value, check findMatchingFact before concluding missing
+            if (
+              !mapping ||
+              mapping.fact_value === undefined ||
+              mapping.fact_value === null ||
+              !String(mapping.fact_value).trim()
+            ) {
+              const matched = this.findMatchingFact(field, facts);
+              if (matched && !matched.isAmbiguous) {
+                if (mapping) {
+                  mapping.fact_key = matched.fact.key;
+                  mapping.fact_value = matched.fact.value;
+                  mapping.status = 'RESOLVED';
+                  mapping.confidence = matched.confidence;
+                } else {
+                  mapping = {
+                    field_ref: field.ref,
+                    field_label: field.label,
+                    fact_key: matched.fact.key,
+                    fact_value: matched.fact.value,
+                    confidence: matched.confidence,
+                    status: 'RESOLVED',
+                  };
+                  mappings.push(mapping);
+                }
+                if (fieldTrace) {
+                  fieldTrace.mapping = {
+                    factKey: matched.fact.key,
+                    confidence: matched.confidence,
+                    source: 'heuristic fallback',
+                  };
+                  fieldTrace.valueAvailable = true;
+                  fieldTrace.skippedReason = null;
+                }
               }
             }
 
@@ -1972,7 +2701,14 @@ export class AgentController {
                 );
                 const answer = coerceClarificationValue(clarificationResult);
                 if (answer) {
-                  this.clarifiedAnswers.set(normLabel, answer);
+                  const normalizedLabel = this.normalizeLabel(field.label);
+                  this.clarifiedAnswers.set(normalizedLabel, answer);
+                  facts.push({
+                    key: normalizedLabel,
+                    label: field.label,
+                    value: answer,
+                    confidence: 1.0,
+                  });
                   if (mapping) {
                     mapping.fact_value = answer;
                     mapping.status = 'RESOLVED';
@@ -2068,7 +2804,14 @@ export class AgentController {
               );
               const answer = coerceClarificationValue(clarifyRes);
               if (answer) {
-                this.clarifiedAnswers.set(normLabel, answer);
+                const normalizedLabel = this.normalizeLabel(field.label);
+                this.clarifiedAnswers.set(normalizedLabel, answer);
+                facts.push({
+                  key: normalizedLabel,
+                  label: field.label,
+                  value: answer,
+                  confidence: 1.0,
+                });
                 mapping.fact_value = answer;
                 mapping.status = 'RESOLVED';
                 if (fieldTrace) {

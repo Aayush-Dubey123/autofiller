@@ -190,6 +190,7 @@ async function createWindow(): Promise<void> {
   const backendClient = new BackendClient(operatorToken, BACKEND_BASE_URL);
 
   agentController = new AgentController(backendClient);
+  agentController.setVaultService(vaultService);
 
   mainWindow = new BrowserWindow({
     width: 1440,

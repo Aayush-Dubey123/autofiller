@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.electron.json",
-    "build": "npm run typecheck && vite build && tsc -p tsconfig.electron.json",
+    "build": "tsc --noEmit && vite build && tsc -p tsconfig.electron.json",
     "electron": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",

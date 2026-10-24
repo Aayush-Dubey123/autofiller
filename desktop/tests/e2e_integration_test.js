@@ -1563,9 +1563,12 @@ async function runE2E() {
       assert.strictEqual(serialized.includes('aarav@example.com'), false, 'No raw email in history');
       assert.strictEqual(serialized.includes('9876543210'), false, 'No raw phone in history');
 
-      await controller.cleanup();
     } finally {
-      if (fs.existsSync(scratchDir)) fs.rmSync(scratchDir, { recursive: true, force: true });
+      try {
+        if (fs.existsSync(scratchDir)) {
+          fs.rmSync(scratchDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+        }
+      } catch {}
     }
   });
 

@@ -161,7 +161,9 @@ async function runVaultTests() {
 
   // Cleanup vault service tmp dirs
   vaultService.eraseAll();
-  fs.rmSync(tmpDir, { recursive: true, force: true });
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  } catch {}
 
   console.log('✓ Vault encryption, key slots, and security rules verified.');
 

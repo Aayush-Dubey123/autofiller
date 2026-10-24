@@ -178,7 +178,6 @@ def create_app() -> FastAPI:
 
             repo_root = Path(__file__).resolve().parents[3]
             candidate_paths = [
-                repo_root / "test-fixtures" / "mock_school_form.html",
                 repo_root / "desktop" / "public" / "mock_school_form.html",
                 repo_root / "desktop" / "dist" / "mock_school_form.html",
             ]

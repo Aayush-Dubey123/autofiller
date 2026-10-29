@@ -1115,10 +1115,14 @@ export class AgentController {
         );
       }
 
+      // Resolve option label/key reference to actual fact value (e.g. 'Alternate Phone Number' -> '844607912')
+      const { value: resolvedValue, factKey: resolvedFactKey } =
+        this.resolveClarificationAnswerToValue(answer, facts);
+
       const normLabel = this.normalizeLabel(prompt.field_label);
-      this.clarifiedAnswers.set(normLabel, answer);
+      this.clarifiedAnswers.set(normLabel, resolvedValue);
       if (prompt.field_ref) {
-        this.clarifiedAnswers.set(prompt.field_ref, answer);
+        this.clarifiedAnswers.set(prompt.field_ref, resolvedValue);
       }
 
       if (facts) {
@@ -1130,12 +1134,12 @@ export class AgentController {
           (f) => f.key === cleanKey || this.labelsMatch(f.label, prompt.field_label)
         );
         if (existingFact) {
-          existingFact.value = answer;
+          existingFact.value = resolvedValue;
         } else {
           facts.push({
-            key: cleanKey,
+            key: resolvedFactKey || cleanKey,
             label: prompt.field_label,
-            value: answer,
+            value: resolvedValue,
             confidence: 1.0,
             source_page: null,
           });
@@ -1165,7 +1169,10 @@ export class AgentController {
           mapping.field_ref === prompt.field_ref ||
           (mapping.field_label && this.labelsMatch(mapping.field_label, prompt.field_label))
         ) {
-          mapping.fact_value = answer;
+          mapping.fact_value = resolvedValue;
+          if (resolvedFactKey) {
+            mapping.fact_key = resolvedFactKey;
+          }
           mapping.status = 'RESOLVED';
           mapping.confidence = 1.0;
           foundTarget = true;
@@ -1175,7 +1182,8 @@ export class AgentController {
         mappings.push({
           field_ref: prompt.field_ref,
           field_label: prompt.field_label,
-          fact_value: answer,
+          fact_key: resolvedFactKey || null,
+          fact_value: resolvedValue,
           confidence: 1.0,
           status: 'RESOLVED',
         });
@@ -1803,6 +1811,53 @@ export class AgentController {
     return cleanA === cleanB;
   }
 
+  /**
+   * Resolve an answer provided in clarification to its real fact value if it refers
+   * to a profile fact key or label (e.g. user selected option 'Alternate Phone Number'
+   * for a contact field, which must resolve to '844607912' instead of typing the label).
+   */
+  private resolveClarificationAnswerToValue(
+    answer: string,
+    facts?: ExtractedFact[]
+  ): { value: string; factKey?: string } {
+    if (!facts || facts.length === 0) {
+      return { value: answer };
+    }
+
+    const cleanAnswer = answer.trim();
+    const normAnswer = this.normalizeLabel(cleanAnswer);
+    const keyAnswer = cleanAnswer.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+
+    // 1. Direct match on key or normalized label
+    const exactMatch = facts.find((f) => {
+      if (f.key.toLowerCase() === keyAnswer) return true;
+      if (f.key.toLowerCase().replace(/_/g, ' ') === cleanAnswer.toLowerCase().replace(/_/g, ' ')) return true;
+      if (this.normalizeLabel(f.label) === normAnswer) return true;
+      if (this.labelsMatch(f.label, cleanAnswer)) return true;
+      return false;
+    });
+
+    if (exactMatch && exactMatch.value) {
+      return { value: exactMatch.value, factKey: exactMatch.key };
+    }
+
+    // 2. Fuzzy/contains match on label or key tokens
+    const fuzzyMatch = facts.find((f) => {
+      const fNorm = this.normalizeLabel(f.label);
+      const fKeyNorm = this.normalizeLabel(f.key.replace(/_/g, ' '));
+      return (
+        (fNorm && (fNorm.includes(normAnswer) || normAnswer.includes(fNorm))) ||
+        (fKeyNorm && (fKeyNorm.includes(normAnswer) || normAnswer.includes(fKeyNorm)))
+      );
+    });
+
+    if (fuzzyMatch && fuzzyMatch.value) {
+      return { value: fuzzyMatch.value, factKey: fuzzyMatch.key };
+    }
+
+    // 3. Raw user input (e.g., custom value typed into custom answer field)
+    return { value: cleanAnswer };
+  }
   /**
    * Carry mappings across form scans by label + control type + order.
    */
@@ -2701,22 +2756,26 @@ export class AgentController {
                 );
                 const answer = coerceClarificationValue(clarificationResult);
                 if (answer) {
+                  const { value: resolvedValue, factKey: resolvedFactKey } =
+                    this.resolveClarificationAnswerToValue(answer, facts);
                   const normalizedLabel = this.normalizeLabel(field.label);
-                  this.clarifiedAnswers.set(normalizedLabel, answer);
+                  this.clarifiedAnswers.set(normalizedLabel, resolvedValue);
                   facts.push({
-                    key: normalizedLabel,
+                    key: resolvedFactKey || normalizedLabel,
                     label: field.label,
-                    value: answer,
+                    value: resolvedValue,
                     confidence: 1.0,
                   });
                   if (mapping) {
-                    mapping.fact_value = answer;
+                    mapping.fact_value = resolvedValue;
+                    if (resolvedFactKey) mapping.fact_key = resolvedFactKey;
                     mapping.status = 'RESOLVED';
                   } else {
                     mapping = {
                       field_ref: field.ref,
                       field_label: field.label,
-                      fact_value: answer,
+                      fact_key: resolvedFactKey || null,
+                      fact_value: resolvedValue,
                       confidence: 1.0,
                       status: 'RESOLVED',
                     };
@@ -2804,18 +2863,20 @@ export class AgentController {
               );
               const answer = coerceClarificationValue(clarifyRes);
               if (answer) {
+                const { value: resolvedValue, factKey: resolvedFactKey } =
+                  this.resolveClarificationAnswerToValue(answer, facts);
                 const normalizedLabel = this.normalizeLabel(field.label);
-                this.clarifiedAnswers.set(normalizedLabel, answer);
+                this.clarifiedAnswers.set(normalizedLabel, resolvedValue);
                 facts.push({
-                  key: normalizedLabel,
+                  key: resolvedFactKey || normalizedLabel,
                   label: field.label,
-                  value: answer,
+                  value: resolvedValue,
                   confidence: 1.0,
                 });
-                mapping.fact_value = answer;
+                mapping.fact_value = resolvedValue;
+                if (resolvedFactKey) mapping.fact_key = resolvedFactKey;
                 mapping.status = 'RESOLVED';
                 if (fieldTrace) {
-                  fieldTrace.mapping.source = 'clarification';
                   fieldTrace.valueAvailable = true;
                 }
                 try {

@@ -13,9 +13,8 @@ import path from 'path';
 
 import { AgentController } from '../agent/AgentController';
 import { BackendClient } from '../services/BackendClient';
-import { HistoryStore, VaultService } from '../services/VaultService';
+import { HistoryStore, SecretStore, VaultService } from '../services/VaultService';
 import { DocumentRecord, DocumentSelection, EngineStatus, ProfileRecord, StartSessionOptions, VaultStatus } from '../shared/types';
-
 /** In-memory remembered documents cache for active session reuse (Fixes M-04). */
 const rememberedDocuments: DocumentRecord[] = [];
 
@@ -92,7 +91,9 @@ export function registerIpcHandlers(
   agentController: AgentController,
   historyStore: HistoryStore,
   vaultService: VaultService,
-  getEngineStatus: () => EngineStatus = () => ({ ready: true })
+  getEngineStatus: () => EngineStatus = () => ({ ready: true }),
+  secretStore?: SecretStore | null,
+  onRestartBackend?: () => Promise<boolean>
 ): void {
   const backendClient: BackendClient = agentController.getBackendClient();
 
@@ -171,6 +172,13 @@ export function registerIpcHandlers(
     if (agentController.isSessionRunning()) {
       return { success: false, error: 'A session is already running.' };
     }
+
+    // Clean up previous error or completed state so retries launch cleanly
+    const currentState = agentController.getStateMachine().getState();
+    if (currentState === 'ERROR' || currentState === 'COMPLETED') {
+      await agentController.cleanup().catch(() => {});
+    }
+
     const urlError = validateTargetUrl(options?.targetUrl);
     if (urlError) {
       return { success: false, error: urlError };
@@ -377,7 +385,51 @@ export function registerIpcHandlers(
 
   ipcMain.handle('autofiller:app-version', async () => app.getVersion());
 
-  // Stream agent execution events to the renderer and into the session history.
+  // AI Provider Configuration (Encrypted via Windows DPAPI, zero key leakage to renderer)
+  ipcMain.handle('autofiller:get-ai-config', async (): Promise<{ configured: boolean }> => {
+    const hasKey = secretStore ? secretStore.hasApiKey() : Boolean(process.env.GEMINI_API_KEY?.trim());
+    return { configured: hasKey };
+  });
+
+  ipcMain.handle(
+    'autofiller:set-ai-key',
+    async (_event, apiKey: unknown): Promise<{ success: boolean; error?: string }> => {
+      if (typeof apiKey !== 'string' || !apiKey.trim()) {
+        return { success: false, error: 'API key must be a non-empty string.' };
+      }
+      try {
+        const cleanKey = apiKey.trim();
+        if (secretStore) {
+          secretStore.saveApiKey(cleanKey);
+        }
+        process.env.GEMINI_API_KEY = cleanKey;
+        // Dynamically update the running backend in memory without restart
+        const dynamicOk = await backendClient.configureAiKey(cleanKey);
+        if (!dynamicOk && onRestartBackend) {
+          // Fall back to controlled backend restart if endpoint did not respond
+          await onRestartBackend();
+        }
+        return { success: true };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, error: msg };
+      }
+    }
+  );
+
+  ipcMain.handle('autofiller:clear-ai-key', async (): Promise<{ success: boolean; error?: string }> => {
+    try {
+      if (secretStore) {
+        secretStore.clearApiKey();
+      }
+      delete process.env.GEMINI_API_KEY;
+      await backendClient.clearAiKey().catch(() => {});
+      return { success: true };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, error: msg };
+    }
+  });
   agentController.onEvent((event) => {
     historyStore.noteEvent(event);
     sendToRenderer('autofiller:event', event);

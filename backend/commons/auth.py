@@ -35,7 +35,12 @@ def _token_file_path() -> Path:
     configured = os.getenv(TOKEN_FILE_ENV, "").strip() or os.getenv("FORMPILOT_TOKEN_FILE", "").strip()
     if configured:
         return Path(configured).expanduser().resolve()
-    
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        user_data_token = Path(appdata) / "autofiller-desktop" / ".autofiller_token"
+        if user_data_token.exists() or user_data_token.parent.exists():
+            return user_data_token
+
     primary = (Path(__file__).resolve().parent.parent / ".autofiller_token").resolve()
     legacy = (Path(__file__).resolve().parent.parent / ".formpilot_token").resolve()
     if legacy.exists() and not primary.exists():

@@ -1,0 +1,109 @@
+name: Package Windows Desktop App
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package-windows:
+    name: Build & Package Windows Standalone Desktop App
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      GEMINI_API_KEY: ci-build-verification-key
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Run backend unit tests
+        run: python -m pytest backend/tests/test_backend.py
+
+      - name: Run live security verification
+        run: python verify_security_live.py
+
+      - name: Build standalone backend executable
+        run: python backend/scripts/build_backend.py
+
+      - name: Verify compiled backend binary exists
+        shell: pwsh
+        run: |
+          $exe = "desktop/build-resources/backend/autofiller-backend.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Error "Backend executable was not generated at $exe"
+            exit 1
+          }
+          $size = (Get-Item $exe).Length / 1MB
+          Write-Host "Verified backend executable: $exe ($([math]::Round($size, 1)) MB)"
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Desktop Typecheck
+        working-directory: desktop
+        run: npm run typecheck
+
+      - name: Desktop Build
+        working-directory: desktop
+        run: npm run build
+
+      - name: Desktop Unit Tests (PolicyEngine, ToolRegistry, Vault)
+        working-directory: desktop
+        run: |
+          node tests/policy_test.js
+          node tests/tool_registry_test.js
+          node tests/vault_test.js
+
+      - name: Package Windows Executables (NSIS Installer & Portable)
+        working-directory: desktop
+        run: npm run dist
+
+      - name: Verify packaged Windows release artifacts
+        shell: pwsh
+        run: |
+          $artifacts = Get-ChildItem -Path "desktop/release/*.exe"
+          if ($artifacts.Count -eq 0) {
+            Write-Error "No .exe release artifacts found in desktop/release"
+            exit 1
+          }
+          Write-Host "Generated Windows Release Artifacts:"
+          foreach ($a in $artifacts) {
+            $mb = [math]::Round($a.Length / 1MB, 1)
+            Write-Host "  - $($a.Name) ($mb MB)"
+          }
+
+      - name: Upload Windows Distribution Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoFiller-AI-Windows-${{ github.sha }}
+          path: desktop/release/*.exe
+          if-no-files-found: error
+          retention-days: 14

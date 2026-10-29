@@ -10,15 +10,18 @@ import {
   AlertTriangle,
   Check,
   CheckCircle2,
+  ExternalLink,
   Eye,
   EyeOff,
   FileText,
   FileUp,
+  Globe,
   HelpCircle,
   Key,
   Loader2,
   Lock,
   Moon,
+  Play,
   Plus,
   RefreshCw,
   Save,
@@ -782,12 +785,14 @@ interface SettingsViewProps {
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
   onLockVault?: () => void;
+  onTryMockForm?: () => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   theme,
   onToggleTheme,
   onLockVault,
+  onTryMockForm,
 }) => {
   const [vaultStatus, setVaultStatus] = useState<VaultStatus>({
     exists: false,
@@ -818,6 +823,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   // Erase all data confirmation modal
   const [showEraseModal, setShowEraseModal] = useState<boolean>(false);
 
+  // AI Model Configuration
+  const [aiConfigured, setAiConfigured] = useState<boolean>(false);
+  const [aiKeyInput, setAiKeyInput] = useState<string>('');
+  const [showAiKey, setShowAiKey] = useState<boolean>(false);
+  const [isAiProcessing, setIsAiProcessing] = useState<boolean>(false);
+
   useEffect(() => {
     loadStatus();
     bridge.appVersion().then((v) => setVersion(v || '1.0.0'));
@@ -827,11 +838,54 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     try {
       const st = await bridge.vaultStatus();
       setVaultStatus(st);
+      const aiStatus = await bridge.getAiConfig();
+      setAiConfigured(aiStatus.configured);
     } catch (err) {
       console.error('Failed to load vault status', err);
     }
   };
 
+  const handleSaveAiKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!aiKeyInput.trim()) return;
+    setIsAiProcessing(true);
+    setStatusMsg(null);
+    try {
+      const res = await bridge.setAiApiKey(aiKeyInput.trim());
+      if (res.success) {
+        setAiConfigured(true);
+        setAiKeyInput('');
+        setStatusMsg({ type: 'success', text: 'AI API key saved and encrypted with Windows DPAPI. Automation is ready.' });
+      } else {
+        setStatusMsg({ type: 'error', text: res.error || 'Failed to save AI API key.' });
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setStatusMsg({ type: 'error', text: msg });
+    } finally {
+      setIsAiProcessing(false);
+    }
+  };
+
+  const handleClearAiKey = async () => {
+    setIsAiProcessing(true);
+    setStatusMsg(null);
+    try {
+      const res = await bridge.clearAiApiKey();
+      if (res.success) {
+        setAiConfigured(false);
+        setAiKeyInput('');
+        setStatusMsg({ type: 'success', text: 'AI API key removed.' });
+      } else {
+        setStatusMsg({ type: 'error', text: res.error || 'Failed to remove AI API key.' });
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setStatusMsg({ type: 'error', text: msg });
+    } finally {
+      setIsAiProcessing(false);
+    }
+  };
   const handleStartWizard = () => {
     setShowWizard(true);
     setStatusMsg(null);
@@ -913,27 +967,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const isExtraProtectionOn = Boolean(vaultStatus.hasPassphraseSlot);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '1040px', margin: '0 auto' }}>
-      {/* Canonical Header */}
-      <div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0 }}>
+      {/* Compact Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '2px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Settings size={22} color="var(--text-brand)" />
-          <h1 style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--text-title)' }}>Settings</h1>
+          <Settings size={20} color="var(--text-brand)" />
+          <h1 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-title)', margin: 0 }}>Settings</h1>
+          <span style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>&bull; Manage privacy, AI model, and app preferences</span>
         </div>
-        <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-          Manage your privacy protection, app preferences, and stored data.
-        </p>
       </div>
 
       {statusMsg && (
         <div
           style={{
-            padding: '12px 16px',
+            padding: '8px 12px',
             borderRadius: 'var(--radius-md)',
             background: statusMsg.type === 'success' ? '#F0FDF4' : '#FEF2F2',
             border: `1px solid ${statusMsg.type === 'success' ? '#86EFAC' : '#FCA5A5'}`,
             color: statusMsg.type === 'success' ? 'var(--badge-green-text)' : 'var(--status-danger)',
-            fontSize: '0.875rem',
+            fontSize: '0.8125rem',
             fontWeight: 600,
           }}
         >
@@ -941,277 +993,390 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       )}
 
-      {/* 2-Column Responsive Layout */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 0.85fr', gap: '20px' }}>
-        {/* Left Column: Privacy & Security Primary Card */}
-        <div
-          style={{
-            background: 'var(--bg-card)',
-            borderRadius: 'var(--radius-lg)',
-            border: '1px solid var(--border-subtle)',
-            padding: '22px',
-            boxShadow: 'var(--shadow-card)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '18px',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <div
-                style={{
-                  width: '38px',
-                  height: '38px',
-                  borderRadius: '10px',
-                  background: isExtraProtectionOn ? '#D1FAE5' : '#E2E8F0',
-                  color: isExtraProtectionOn ? '#065F46' : '#334155',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                }}
-              >
-                {isExtraProtectionOn ? <ShieldCheck size={20} /> : <Lock size={20} />}
-              </div>
-              <div>
-                <h2 style={{ fontSize: '1.125rem', fontWeight: 800, color: 'var(--text-title)' }}>Privacy & Security</h2>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                  Local AES-256-GCM Vault Encryption
-                </div>
-              </div>
-            </div>
-
-            <span
-              style={{
-                padding: '4px 12px',
-                borderRadius: 'var(--radius-full)',
-                fontSize: '0.75rem',
-                fontWeight: 700,
-                background: isExtraProtectionOn ? '#10B981' : '#64748B',
-                color: '#FFFFFF',
-              }}
-            >
-              {isExtraProtectionOn ? 'Extra protection on' : 'Standard protection'}
-            </span>
-          </div>
-
-          {/* Mode explanation */}
+      {/* Balanced Responsive 2-Column Grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '12px', minHeight: 0 }}>
+        {/* Left Column: AI Model Configuration + Privacy & Security */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {/* 1. AI Model Configuration Card */}
           <div
             style={{
-              background: 'var(--bg-surface-subtle)',
-              borderRadius: 'var(--radius-md)',
-              padding: '14px 16px',
+              background: 'var(--bg-card)',
+              borderRadius: 'var(--radius-lg)',
               border: '1px solid var(--border-subtle)',
-              fontSize: '0.8125rem',
-              lineHeight: 1.5,
-              color: 'var(--text-secondary)',
+              padding: '14px 16px',
+              boxShadow: 'var(--shadow-card)',
               display: 'flex',
               flexDirection: 'column',
-              gap: '8px',
+              gap: '10px',
             }}
           >
-            {isExtraProtectionOn ? (
-              <div>
-                <strong style={{ color: 'var(--text-title)' }}>Extra Protection Active:</strong> Your details are encrypted with your master passphrase. The passphrase is required each time AutoFiller launches or auto-locks.
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Sparkles size={16} color="var(--text-brand)" />
+                <h2 style={{ fontSize: '0.875rem', fontWeight: 800, color: 'var(--text-title)', margin: 0 }}>AI Model Configuration</h2>
               </div>
-            ) : (
-              <div>
-                <strong style={{ color: 'var(--text-title)' }}>Standard Protection:</strong> Details are encrypted locally using Windows DPAPI user security. Anyone signed into this Windows account can open the app.
-              </div>
-            )}
-
-            <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '8px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              Field labels are sent to AI for matching; your values stay on this device; uploaded documents are processed by Gemini.
-            </div>
-          </div>
-
-          {/* Action Controls */}
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: 'auto' }}>
-            {!isExtraProtectionOn ? (
-              <button
-                onClick={handleStartWizard}
+              <span
                 style={{
-                  padding: '10px 18px',
+                  padding: '2px 8px',
+                  borderRadius: 'var(--radius-full)',
+                  fontSize: '0.6875rem',
+                  fontWeight: 700,
+                  background: aiConfigured ? '#10B981' : '#F59E0B',
+                  color: '#FFFFFF',
+                }}
+              >
+                {aiConfigured ? 'Configured (Encrypted)' : 'Setup Required'}
+              </span>
+            </div>
+
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.35 }}>
+              Enter your Google Gemini API key to enable document fact extraction and semantic form field mapping.
+              Key is encrypted locally using Windows DPAPI and never logged.
+            </p>
+
+            <form onSubmit={handleSaveAiKey} style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              <div style={{ position: 'relative', flex: 1 }}>
+                <input
+                  type={showAiKey ? 'text' : 'password'}
+                  placeholder={aiConfigured ? '•••••••••••••••••••••••• (Change key)' : 'AIzaSy... (Paste Gemini key)'}
+                  value={aiKeyInput}
+                  onChange={(e) => setAiKeyInput(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '6px 32px 6px 10px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-surface-subtle)',
+                    color: 'var(--text-title)',
+                    fontSize: '0.8125rem',
+                    fontFamily: 'monospace',
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowAiKey(!showAiKey)}
+                  style={{
+                    position: 'absolute',
+                    right: '6px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                  }}
+                  title={showAiKey ? 'Hide Key' : 'Show Key'}
+                >
+                  {showAiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              </div>
+              <button
+                type="submit"
+                disabled={isAiProcessing || !aiKeyInput.trim()}
+                style={{
+                  padding: '6px 14px',
                   borderRadius: 'var(--radius-md)',
                   background: 'var(--status-success)',
                   color: '#FFFFFF',
                   border: 'none',
                   fontWeight: 700,
-                  fontSize: '0.84375rem',
-                  cursor: 'pointer',
+                  fontSize: '0.8125rem',
+                  cursor: isAiProcessing || !aiKeyInput.trim() ? 'not-allowed' : 'pointer',
+                  opacity: isAiProcessing || !aiKeyInput.trim() ? 0.6 : 1,
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '8px',
-                  boxShadow: '0 2px 8px rgba(22, 101, 78, 0.2)',
+                  gap: '4px',
                 }}
               >
-                <Key size={16} />
-                <span>Turn on Extra Protection</span>
+                <Save size={13} />
+                <span>{isAiProcessing ? 'Saving...' : 'Save'}</span>
               </button>
-            ) : (
-              <>
+              {aiConfigured && (
                 <button
-                  onClick={() => setShowChangeModal(true)}
+                  type="button"
+                  onClick={handleClearAiKey}
+                  disabled={isAiProcessing}
                   style={{
-                    padding: '8px 14px',
+                    padding: '6px 10px',
                     borderRadius: 'var(--radius-md)',
-                    background: 'var(--bg-app)',
-                    border: '1px solid var(--border-subtle)',
-                    color: 'var(--text-primary)',
+                    background: 'transparent',
+                    color: 'var(--status-danger)',
+                    border: '1px solid var(--status-danger)',
                     fontWeight: 600,
-                    fontSize: '0.8125rem',
+                    fontSize: '0.75rem',
                     cursor: 'pointer',
                   }}
+                  title="Remove stored API key"
                 >
-                  Change Privacy Key
+                  Clear
                 </button>
+              )}
+            </form>
+          </div>
 
-                <button
-                  onClick={() => setShowDisableModal(true)}
+          {/* 2. Privacy & Security Vault Card */}
+          <div
+            style={{
+              background: 'var(--bg-card)',
+              borderRadius: 'var(--radius-lg)',
+              border: '1px solid var(--border-subtle)',
+              padding: '14px 16px',
+              boxShadow: 'var(--shadow-card)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '10px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div
                   style={{
-                    padding: '8px 14px',
-                    borderRadius: 'var(--radius-md)',
-                    background: 'var(--bg-app)',
-                    border: '1px solid var(--border-subtle)',
-                    color: '#DC2626',
-                    fontWeight: 600,
-                    fontSize: '0.8125rem',
-                    cursor: 'pointer',
+                    width: '28px',
+                    height: '28px',
+                    borderRadius: '8px',
+                    background: isExtraProtectionOn ? '#D1FAE5' : '#E2E8F0',
+                    color: isExtraProtectionOn ? '#065F46' : '#334155',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
                   }}
                 >
-                  Turn off Extra Protection
-                </button>
+                  {isExtraProtectionOn ? <ShieldCheck size={16} /> : <Lock size={16} />}
+                </div>
+                <div>
+                  <h2 style={{ fontSize: '0.875rem', fontWeight: 800, color: 'var(--text-title)', margin: 0 }}>Privacy & Security</h2>
+                  <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>Local AES-256-GCM Vault</div>
+                </div>
+              </div>
+              <span
+                style={{
+                  padding: '2px 8px',
+                  borderRadius: 'var(--radius-full)',
+                  fontSize: '0.6875rem',
+                  fontWeight: 700,
+                  background: isExtraProtectionOn ? '#10B981' : '#64748B',
+                  color: '#FFFFFF',
+                }}
+              >
+                {isExtraProtectionOn ? 'Extra protection on' : 'Standard protection'}
+              </span>
+            </div>
 
-                {onLockVault && (
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.35 }}>
+              {isExtraProtectionOn
+                ? 'Your profile details are encrypted with your master passphrase, required on each launch.'
+                : 'Encrypted locally using Windows DPAPI user security. Anyone signed into this Windows account can open the app.'}
+            </p>
+
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '2px' }}>
+              {!isExtraProtectionOn ? (
+                <button
+                  onClick={handleStartWizard}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--status-success)',
+                    color: '#FFFFFF',
+                    border: 'none',
+                    fontWeight: 700,
+                    fontSize: '0.78125rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <Key size={14} />
+                  <span>Turn on Extra Protection</span>
+                </button>
+              ) : (
+                <>
                   <button
-                    onClick={handleLockNow}
+                    onClick={() => setShowChangeModal(true)}
                     style={{
-                      padding: '8px 14px',
+                      padding: '5px 10px',
                       borderRadius: 'var(--radius-md)',
-                      background: 'var(--accent-primary)',
-                      color: '#FFFFFF',
-                      border: 'none',
-                      fontWeight: 700,
-                      fontSize: '0.8125rem',
+                      background: 'var(--bg-app)',
+                      border: '1px solid var(--border-subtle)',
+                      color: 'var(--text-primary)',
+                      fontWeight: 600,
+                      fontSize: '0.75rem',
                       cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
                     }}
                   >
-                    <Lock size={15} />
-                    <span>Lock Now</span>
+                    Change Key
                   </button>
-                )}
-              </>
-            )}
+                  <button
+                    onClick={() => setShowDisableModal(true)}
+                    style={{
+                      padding: '5px 10px',
+                      borderRadius: 'var(--radius-md)',
+                      background: 'var(--bg-app)',
+                      border: '1px solid var(--border-subtle)',
+                      color: '#DC2626',
+                      fontWeight: 600,
+                      fontSize: '0.75rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Turn off
+                  </button>
+                  {onLockVault && (
+                    <button
+                      onClick={handleLockNow}
+                      style={{
+                        padding: '5px 10px',
+                        borderRadius: 'var(--radius-md)',
+                        background: 'var(--accent-primary)',
+                        color: '#FFFFFF',
+                        border: 'none',
+                        fontWeight: 700,
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                    >
+                      <Lock size={12} />
+                      <span>Lock Now</span>
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Right Column: Stack of Compact Secondary Panels */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {/* Appearance Panel */}
+        {/* Right Column: Practice Form + App Preferences & Storage */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {/* 3. Practice Form & Simulation Card */}
           <div
             style={{
               background: 'var(--bg-card)',
               borderRadius: 'var(--radius-lg)',
               border: '1px solid var(--border-subtle)',
-              padding: '18px 20px',
-              boxShadow: 'var(--shadow-card)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}
-          >
-            <div>
-              <h2 style={{ fontSize: '0.9375rem', fontWeight: 800, color: 'var(--text-title)' }}>App Appearance</h2>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                Toggle Light or Dark desktop theme
-              </div>
-            </div>
-
-            <button
-              onClick={onToggleTheme}
-              style={{
-                padding: '8px 14px',
-                borderRadius: 'var(--radius-md)',
-                background: 'var(--bg-surface-subtle)',
-                border: '1px solid var(--border-subtle)',
-                color: 'var(--text-title)',
-                fontWeight: 700,
-                fontSize: '0.8125rem',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-              }}
-            >
-              {theme === 'light' ? <Sun size={16} color="var(--text-brand)" /> : <Moon size={16} color="var(--text-brand)" />}
-              <span>{theme === 'light' ? 'Light Theme' : 'Dark Theme'}</span>
-            </button>
-          </div>
-
-          {/* Your Data Panel */}
-          <div
-            style={{
-              background: 'var(--bg-card)',
-              borderRadius: 'var(--radius-lg)',
-              border: '1px solid var(--border-subtle)',
-              padding: '18px 20px',
+              padding: '14px 16px',
               boxShadow: 'var(--shadow-card)',
               display: 'flex',
               flexDirection: 'column',
-              gap: '12px',
+              gap: '10px',
             }}
           >
-            <div>
-              <h2 style={{ fontSize: '0.9375rem', fontWeight: 800, color: 'var(--text-title)' }}>Your Data & Storage</h2>
-              <p style={{ fontSize: '0.78125rem', color: 'var(--text-secondary)', marginTop: '2px', lineHeight: 1.4 }}>
-                Purge all local profiles, session histories, traces, and backend session data from this computer.
-              </p>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Globe size={16} color="var(--text-brand)" />
+                <h2 style={{ fontSize: '0.875rem', fontWeight: 800, color: 'var(--text-title)', margin: 0 }}>Practice Form & Simulation</h2>
+              </div>
+              <span
+                style={{
+                  padding: '2px 8px',
+                  borderRadius: 'var(--radius-full)',
+                  fontSize: '0.6875rem',
+                  fontWeight: 700,
+                  background: 'var(--badge-green-bg)',
+                  color: 'var(--text-brand)',
+                }}
+              >
+                Ready &amp; Bundled
+              </span>
             </div>
 
-            <div>
-              <button
-                onClick={() => setShowEraseModal(true)}
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0, lineHeight: 1.35 }}>
+              Test automated form filling locally on the 5-step school admission form without submitting to external websites.
+            </p>
+
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: 'auto' }}>
+              <div
                 style={{
-                  padding: '8px 14px',
+                  flex: 1,
+                  padding: '6px 10px',
                   borderRadius: 'var(--radius-md)',
-                  background: '#FEF2F2',
-                  border: '1px solid #FCA5A5',
-                  color: '#DC2626',
-                  fontWeight: 700,
-                  fontSize: '0.8125rem',
+                  background: 'var(--bg-surface-subtle)',
+                  border: '1px solid var(--border-subtle)',
+                  fontSize: '0.75rem',
+                  fontFamily: 'monospace',
+                  color: 'var(--text-secondary)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+                title="http://127.0.0.1:8000/mock_school_form.html"
+              >
+                http://127.0.0.1:8000/mock_school_form.html
+              </div>
+              {onTryMockForm && (
+                <button
+                  type="button"
+                  onClick={onTryMockForm}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--accent-primary)',
+                    color: '#FFFFFF',
+                    border: 'none',
+                    fontWeight: 700,
+                    fontSize: '0.78125rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <Play size={13} />
+                  <span>Try Practice Form</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => window.open('http://127.0.0.1:8000/mock_school_form.html', '_blank')}
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'var(--bg-surface-subtle)',
+                  border: '1px solid var(--border-subtle)',
+                  color: 'var(--text-secondary)',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '6px',
+                  gap: '4px',
+                  whiteSpace: 'nowrap',
                 }}
+                title="Open practice form in external browser"
               >
-                <Trash2 size={14} />
-                <span>Erase All My Data</span>
+                <ExternalLink size={12} />
+                <span>View</span>
               </button>
             </div>
           </div>
 
-          {/* About AutoFiller AI Panel */}
+          {/* 4. Preferences, Storage & System Panel */}
           <div
             style={{
               background: 'var(--bg-card)',
               borderRadius: 'var(--radius-lg)',
               border: '1px solid var(--border-subtle)',
-              padding: '18px 20px',
+              padding: '14px 16px',
               boxShadow: 'var(--shadow-card)',
               display: 'flex',
               flexDirection: 'column',
-              gap: '6px',
+              gap: '10px',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <h2 style={{ fontSize: '0.9375rem', fontWeight: 800, color: 'var(--text-title)' }}>About AutoFiller AI</h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Settings size={16} color="var(--text-brand)" />
+                <h2 style={{ fontSize: '0.875rem', fontWeight: 800, color: 'var(--text-title)', margin: 0 }}>Preferences &amp; Storage</h2>
+              </div>
               <span
                 style={{
-                  fontSize: '0.75rem',
+                  fontSize: '0.6875rem',
                   fontWeight: 700,
                   padding: '2px 8px',
                   borderRadius: 'var(--radius-full)',
@@ -1219,13 +1384,66 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   color: 'var(--text-brand)',
                 }}
               >
-                {version}
+                v{version}
               </span>
             </div>
-            <p style={{ fontSize: '0.78125rem', color: 'var(--text-secondary)' }}>
-              Intelligent Electron desktop application for automated document extraction and form-filling.
-            </p>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-brand)', fontWeight: 700, marginTop: '2px' }}>
+
+            {/* Theme Toggle Row */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border-subtle)' }}>
+              <div>
+                <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-title)' }}>App Appearance</div>
+                <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>Toggle light or dark desktop theme</div>
+              </div>
+              <button
+                onClick={onToggleTheme}
+                style={{
+                  padding: '5px 12px',
+                  borderRadius: 'var(--radius-md)',
+                  background: 'var(--bg-surface-subtle)',
+                  border: '1px solid var(--border-subtle)',
+                  color: 'var(--text-title)',
+                  fontWeight: 700,
+                  fontSize: '0.75rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                {theme === 'light' ? <Sun size={13} color="var(--text-brand)" /> : <Moon size={13} color="var(--text-brand)" />}
+                <span>{theme === 'light' ? 'Light Theme' : 'Dark Theme'}</span>
+              </button>
+            </div>
+
+            {/* Data & Storage Row */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 0' }}>
+              <div>
+                <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-title)' }}>Local Data Storage</div>
+                <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>Purge local profiles, session histories, and traces</div>
+              </div>
+              <button
+                onClick={() => setShowEraseModal(true)}
+                style={{
+                  padding: '5px 12px',
+                  borderRadius: 'var(--radius-md)',
+                  background: '#FEF2F2',
+                  border: '1px solid #FCA5A5',
+                  color: '#DC2626',
+                  fontWeight: 700,
+                  fontSize: '0.75rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  flexShrink: 0,
+                }}
+              >
+                <Trash2 size={12} />
+                <span>Erase All Data</span>
+              </button>
+            </div>
+
+            <div style={{ fontSize: '0.6875rem', color: 'var(--text-brand)', fontWeight: 700, marginTop: 'auto', paddingTop: '4px', borderTop: '1px solid var(--border-subtle)' }}>
               Safety Policy: Form submission is strictly user-controlled.
             </div>
           </div>

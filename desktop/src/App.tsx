@@ -665,6 +665,7 @@ export const App: React.FC = () => {
               onOpenHistory={() => handleNavigate('History')}
               onResetSession={session.resetSession}
               onConfirmSubmission={() => void bridge.confirmSubmission()}
+              onNavigateToSettings={() => handleNavigate('Settings')}
             />
           )}
 
@@ -677,6 +678,10 @@ export const App: React.FC = () => {
               theme={theme}
               onToggleTheme={toggleTheme}
               onLockVault={checkVaultStatus}
+              onTryMockForm={() => {
+                session.setTargetUrl('http://127.0.0.1:8000/mock_school_form.html');
+                handleNavigate('New Session');
+              }}
             />
           )}
 

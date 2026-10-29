@@ -50,6 +50,9 @@ export interface AutoFillerAPI {
   backendHealth: () => Promise<BackendHealth>;
   getEngineStatus: () => Promise<EngineStatus>;
   appVersion: () => Promise<string>;
+  getAiConfig: () => Promise<{ configured: boolean }>;
+  setAiApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
+  clearAiApiKey: () => Promise<{ success: boolean; error?: string }>;
   vaultStatus: () => Promise<VaultStatus>;
   vaultCreate: (payload: {
     privacyKey: string;
@@ -124,7 +127,9 @@ const api: AutoFillerAPI = {
   vaultDeleteField: (payload) => ipcRenderer.invoke('vault:delete-field', payload),
   vaultChangeKey: (payload) => ipcRenderer.invoke('vault:change-key', payload),
   vaultEraseAll: () => ipcRenderer.invoke('vault:erase-all'),
-
+  getAiConfig: () => ipcRenderer.invoke('autofiller:get-ai-config'),
+  setAiApiKey: (apiKey: string) => ipcRenderer.invoke('autofiller:set-ai-key', apiKey),
+  clearAiApiKey: () => ipcRenderer.invoke('autofiller:clear-ai-key'),
   onAgentEvent: (callback) => {
     const subscription = (_event: unknown, payload: AgentEventPayload) => callback(payload);
     ipcRenderer.on('autofiller:event', subscription);

@@ -335,12 +335,11 @@ class GeminiService:
             logging.error(f"Could not initialize Google GenAI client: {error}")
 
     def _ensure_client(self) -> None:
-        """Attempt to initialize the client from the environment if not yet ready."""
-        if self.client is None:
-            api_key = get_gemini_api_key()
-            if api_key:
-                self.api_key = api_key
-                self._build_client(api_key)
+        """Attempt to initialize or refresh the client from the environment if not ready or key changed."""
+        api_key = get_gemini_api_key()
+        if api_key and (self.client is None or api_key != self.api_key):
+            self.api_key = api_key
+            self._build_client(api_key)
 
     async def _generate_async(
         self,
@@ -641,7 +640,7 @@ class GeminiService:
         if self.client is None and not is_openrouter_configured():
             raise RuntimeError(
                 "Gemini API key is required to extract facts from images. "
-                "Set GEMINI_API_KEY in backend/.env and restart the backend."
+                "Configure your Gemini API key in Settings."
             )
 
         prompt = """You are AutoFiller AI, an expert document intelligence assistant specialized in educational records, transfer certificates (TC), admission forms, marksheets, and identity documents.
@@ -763,7 +762,7 @@ Respond ONLY with valid JSON."""
         if self.client is None and not is_openrouter_configured():
             raise RuntimeError(
                 "Gemini API key is required to extract facts from text. "
-                "Set GEMINI_API_KEY in backend/.env and restart the backend."
+                "Configure your Gemini API key in Settings."
             )
 
         prompt = f"""You are AutoFiller AI, an expert document intelligence assistant specialized in educational records, transfer certificates (TC), admission forms, marksheets, and identity documents.
@@ -887,7 +886,7 @@ Respond ONLY with valid JSON."""
         if self.client is None and not (is_openrouter_configured() and is_openrouter_authorized()):
             raise RuntimeError(
                 "Gemini API client is not configured. A valid Gemini API key is required; "
-                "set GEMINI_API_KEY in backend/.env and restart the backend."
+                "configure your Gemini API key in Settings."
             )
 
         try:

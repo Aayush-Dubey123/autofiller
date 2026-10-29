@@ -192,6 +192,63 @@ export class BackendClient {
   }
 
   /**
+   * Verify that the active operator token is accepted by the backend.
+   *
+   * @returns True when the backend confirms token authenticity.
+   */
+  public async verifyToken(): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.baseUrl}/v1/auth/verify`, {
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+        },
+      });
+      return response.status === 200;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Dynamically update the Gemini API key in active backend memory.
+   *
+   * @param apiKey Google Gemini API key.
+   * @returns True when accepted and configured.
+   */
+  public async configureAiKey(apiKey: string): Promise<boolean> {
+    try {
+      const res = await this.request<{ success: boolean; gemini_configured: boolean }>(
+        '/v1/ai/configure-key',
+        {
+          method: 'POST',
+          body: JSON.stringify({ api_key: apiKey }),
+        }
+      );
+      return res.success === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Remove the Gemini API key from active backend memory.
+   *
+   * @returns True when key is cleared.
+   */
+  public async clearAiKey(): Promise<boolean> {
+    try {
+      const res = await this.request<{ success: boolean; gemini_configured: boolean }>(
+        '/v1/ai/configure-key',
+        {
+          method: 'DELETE',
+        }
+      );
+      return res.success === true;
+    } catch {
+      return false;
+    }
+  }
+  /**
    * Create a new workflow session.
    *
    * @param documentName Source document name.

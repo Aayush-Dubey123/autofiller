@@ -4,12 +4,14 @@ Session and document router for AutoFiller AI API.
 Provides authenticated HTTP endpoints for document ingestion, form mapping, and human clarification.
 """
 
+import os
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from commons.auth import require_operator
 from commons.logger import logger
 from core.apis.schemas.requests.session_request import (
     ClarificationAnswerRequest,
+    ConfigureApiKeyRequest,
     CreateSessionRequest,
     DocumentExtractRequest,
     FormMapRequest,
@@ -383,3 +385,91 @@ async def delete_all_sessions(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal Server Error",
         )
+
+
+@session_router.get(
+    "/v1/auth/verify",
+    status_code=status.HTTP_200_OK,
+)
+async def verify_auth_token(
+    user: dict = Depends(require_operator),
+):
+    """
+    Validate operator authentication token for desktop IPC handshake.
+
+    Confirms that the calling process possesses a valid internal bearer token.
+
+    Args:
+        user (dict): Authenticated operator identity injected by the auth dependency.
+
+    Returns:
+        dict: Authentication confirmation status and operator role.
+
+    Raises:
+        HTTPException 401: If the bearer token is missing or invalid.
+    """
+    logging.info("Calling GET /v1/auth/verify endpoint")
+    return {"authenticated": True, "role": user.get("role", "OPERATOR")}
+
+
+@session_router.post(
+    "/v1/ai/configure-key",
+    status_code=status.HTTP_200_OK,
+)
+async def configure_ai_key(
+    request: ConfigureApiKeyRequest,
+    user: dict = Depends(require_operator),
+):
+    """
+    Dynamically update the active Gemini API key in backend memory.
+
+    Enables immediate AI provider activation from Settings without requiring application restart.
+
+    Args:
+        request (ConfigureApiKeyRequest): Payload containing the validated API key.
+        user (dict): Authenticated operator identity injected by the auth dependency.
+
+    Returns:
+        dict: Configuration success flag and activation status.
+
+    Raises:
+        HTTPException 401: If the operator token is missing or invalid.
+        HTTPException 500: If key configuration encounters an unexpected failure.
+    """
+    try:
+        logging.info("Calling POST /v1/ai/configure-key endpoint")
+        clean_key = request.api_key.strip()
+        os.environ["GEMINI_API_KEY"] = clean_key
+        return {"success": True, "gemini_configured": True}
+    except Exception as error:
+        logging.error(f"Error in POST /v1/ai/configure-key endpoint: {error}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal Server Error",
+        )
+
+
+@session_router.delete(
+    "/v1/ai/configure-key",
+    status_code=status.HTTP_200_OK,
+)
+async def clear_ai_key(
+    user: dict = Depends(require_operator),
+):
+    """
+    Remove the active Gemini API key from backend environment.
+
+    Clears the configured provider credentials from runtime memory.
+
+    Args:
+        user (dict): Authenticated operator identity injected by the auth dependency.
+
+    Returns:
+        dict: Deletion confirmation status.
+
+    Raises:
+        HTTPException 401: If the operator token is missing or invalid.
+    """
+    logging.info("Calling DELETE /v1/ai/configure-key endpoint")
+    os.environ.pop("GEMINI_API_KEY", None)
+    return {"success": True, "gemini_configured": False}

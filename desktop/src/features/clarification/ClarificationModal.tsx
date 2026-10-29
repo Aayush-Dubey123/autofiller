@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { HelpCircle, Send, X } from 'lucide-react';
-import { Button } from '../../components/ui/Button';
 
 export interface ClarificationPrompt {
   clarificationId: string;
@@ -75,8 +74,8 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
       style={{
         position: 'fixed',
         inset: 0,
-        backgroundColor: 'rgba(5, 8, 16, 0.88)',
-        backdropFilter: 'blur(8px)',
+        backgroundColor: 'rgba(5, 8, 16, 0.75)',
+        backdropFilter: 'blur(6px)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -85,18 +84,20 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
       }}
     >
       <div
-        className="glass-panel"
         style={{
           width: '100%',
           maxWidth: '540px',
-          minHeight: '480px',
+          minHeight: '460px',
           padding: '28px',
           display: 'flex',
           flexDirection: 'column',
           gap: '18px',
-          border: '1px solid rgba(245, 158, 11, 0.5)',
-          boxShadow: '0 20px 50px rgba(0, 0, 0, 0.7), 0 0 30px rgba(245, 158, 11, 0.2)',
+          background: 'var(--bg-card)',
+          borderRadius: 'var(--radius-lg)',
+          border: '2px solid rgba(245, 158, 11, 0.5)',
+          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35), 0 0 24px rgba(245, 158, 11, 0.15)',
           position: 'relative',
+          color: 'var(--text-primary)',
         }}
       >
         {/* Stepper Header */}
@@ -120,16 +121,30 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
               </div>
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span className="badge badge-amber">Human Clarification</span>
+                  <span
+                    style={{
+                      fontSize: '0.75rem',
+                      fontWeight: 800,
+                      color: '#92400E',
+                      background: '#FEF3C7',
+                      padding: '3px 10px',
+                      borderRadius: 'var(--radius-full)',
+                      border: '1px solid #FCD34D',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                    }}
+                  >
+                    Human Clarification
+                  </span>
                   <span
                     style={{
                       fontSize: '0.75rem',
                       fontWeight: 700,
-                      color: '#fcd34d',
-                      background: 'rgba(245, 158, 11, 0.2)',
-                      padding: '2px 8px',
+                      color: 'var(--text-title)',
+                      background: 'var(--bg-surface-subtle)',
+                      padding: '3px 10px',
                       borderRadius: 'var(--radius-full)',
-                      border: '1px solid rgba(245, 158, 11, 0.35)',
+                      border: '1px solid var(--border-subtle)',
                     }}
                   >
                     Question {currentIndex} of {total}
@@ -138,9 +153,9 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
                 <div
                   style={{
                     fontSize: '0.8125rem',
-                    color: '#f59e0b',
+                    color: 'var(--text-secondary)',
                     fontWeight: 600,
-                    marginTop: '2px',
+                    marginTop: '4px',
                   }}
                 >
                   {totalMissingText}
@@ -153,9 +168,9 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
                 onClick={onCancel}
                 title="Stop session"
                 style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'var(--text-muted, #94a3b8)',
+                  background: 'var(--bg-surface-subtle)',
+                  border: '1px solid var(--border-subtle)',
+                  color: 'var(--text-secondary)',
                   cursor: 'pointer',
                   padding: '6px',
                   borderRadius: '6px',
@@ -164,7 +179,7 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
                   justifyContent: 'center',
                 }}
               >
-                <X size={20} />
+                <X size={18} />
               </button>
             )}
           </div>
@@ -174,7 +189,7 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
             style={{
               width: '100%',
               height: '6px',
-              backgroundColor: 'rgba(255, 255, 255, 0.08)',
+              backgroundColor: 'var(--bg-surface-hover, #E2DDD3)',
               borderRadius: 'var(--radius-full)',
               overflow: 'hidden',
               marginTop: '4px',
@@ -206,10 +221,10 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
                       height: '4px',
                       borderRadius: 'var(--radius-full)',
                       backgroundColor: isPassed
-                        ? '#10b981'
+                        ? 'var(--status-success, #10B981)'
                         : isCurrent
-                        ? '#f59e0b'
-                        : 'rgba(255, 255, 255, 0.1)',
+                        ? '#F59E0B'
+                        : 'var(--border-subtle, #CBD5E1)',
                       transition: 'background-color 0.3s ease',
                     }}
                   />
@@ -233,7 +248,7 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
             <span
               style={{
                 fontSize: '0.75rem',
-                fontWeight: 600,
+                fontWeight: 700,
                 color: 'var(--text-muted)',
                 textTransform: 'uppercase',
                 letterSpacing: '0.04em',
@@ -243,20 +258,20 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
             </span>
             <h3
               style={{
-                fontSize: '1.2rem',
-                fontWeight: 700,
-                color: '#f8fafc',
-                marginTop: '2px',
+                fontSize: '1.25rem',
+                fontWeight: 800,
+                color: 'var(--text-title)',
+                marginTop: '3px',
+                marginBottom: '4px',
               }}
             >
               {prompt.fieldLabel}
             </h3>
           </div>
 
-          <p style={{ fontSize: '0.875rem', color: '#cbd5e1', lineHeight: 1.6 }}>
+          <p style={{ fontSize: '0.9375rem', color: 'var(--text-primary)', lineHeight: 1.6, fontWeight: 500, margin: 0 }}>
             {prompt.question}
           </p>
-
           <form
             onSubmit={handleSubmit}
             style={{ display: 'flex', flexDirection: 'column', gap: '14px', flex: 1 }}
@@ -264,7 +279,7 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
             {/* Suggested Options */}
             {prompt.options.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+                <span style={{ fontSize: '0.78125rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
                   Suggested Options:
                 </span>
                 <div
@@ -280,22 +295,22 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
                   {prompt.options.map((opt) => (
                     <label
                       key={opt}
-                      className="glass-card"
                       style={{
                         padding: '10px 14px',
                         display: 'flex',
                         alignItems: 'center',
                         gap: '10px',
                         cursor: isDisabled ? 'not-allowed' : 'pointer',
-                        opacity: isDisabled ? 0.7 : 1,
+                        borderRadius: 'var(--radius-md)',
                         border:
                           selectedOption === opt
-                            ? '1px solid var(--accent-primary)'
+                            ? '2px solid var(--status-success, #16654E)'
                             : '1px solid var(--border-subtle)',
                         background:
                           selectedOption === opt
-                            ? 'rgba(99, 102, 241, 0.15)'
-                            : 'rgba(255, 255, 255, 0.03)',
+                            ? 'rgba(22, 101, 78, 0.08)'
+                            : 'var(--bg-surface-subtle)',
+                        transition: 'all 0.15s ease',
                       }}
                     >
                       <input
@@ -309,9 +324,11 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
                           setSelectedOption(opt);
                           setCustomValue('');
                         }}
-                        style={{ accentColor: 'var(--accent-primary)' }}
+                        style={{ accentColor: 'var(--status-success, #16654E)' }}
                       />
-                      <span style={{ fontSize: '0.875rem', color: '#f8fafc' }}>{opt}</span>
+                      <span style={{ fontSize: '0.875rem', color: 'var(--text-primary)', fontWeight: selectedOption === opt ? 700 : 500 }}>
+                        {opt}
+                      </span>
                     </label>
                   ))}
                 </div>
@@ -320,7 +337,7 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
 
             {/* Custom Input */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>
+              <span style={{ fontSize: '0.78125rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
                 Or type custom answer:
               </span>
               <input
@@ -336,36 +353,61 @@ export const ClarificationModal: React.FC<ClarificationModalProps> = ({
                 style={{
                   width: '100%',
                   padding: '10px 14px',
-                  background: 'rgba(255, 255, 255, 0.04)',
+                  background: 'var(--bg-surface-subtle)',
                   border: '1px solid var(--border-subtle)',
                   borderRadius: 'var(--radius-md)',
-                  color: '#f8fafc',
+                  color: 'var(--text-primary)',
                   fontSize: '0.875rem',
+                  fontWeight: 500,
                   outline: 'none',
-                  opacity: isDisabled ? 0.7 : 1,
                 }}
               />
             </div>
 
             {/* Action Bar */}
             <div style={{ marginTop: 'auto', paddingTop: '10px' }}>
-              <Button
+              <button
                 type="submit"
-                variant="warning"
-                size="md"
-                icon={<Send size={14} />}
-                loading={isDisabled}
                 disabled={isDisabled || (!selectedOption && !customValue.trim())}
-                style={{ width: '100%' }}
+                style={{
+                  width: '100%',
+                  padding: '12px 20px',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'none',
+                  background:
+                    isDisabled || (!selectedOption && !customValue.trim())
+                      ? 'var(--bg-surface-hover, #E2DDD3)'
+                      : 'var(--status-success, #16654E)',
+                  color:
+                    isDisabled || (!selectedOption && !customValue.trim())
+                      ? 'var(--text-muted, #64748B)'
+                      : '#FFFFFF',
+                  fontWeight: 800,
+                  fontSize: '0.90625rem',
+                  cursor:
+                    isDisabled || (!selectedOption && !customValue.trim())
+                      ? 'not-allowed'
+                      : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  boxShadow:
+                    isDisabled || (!selectedOption && !customValue.trim())
+                      ? 'none'
+                      : '0 4px 14px rgba(22, 101, 78, 0.3)',
+                  transition: 'all 0.2s ease',
+                }}
               >
-                {isDisabled ? 'Delivering Answer...' : 'Confirm & Resume Agent'}
-              </Button>
-
+                <Send size={15} />
+                <span>{isDisabled ? 'Delivering Answer...' : 'Confirm & Resume Agent'}</span>
+              </button>
               <div
                 style={{
                   textAlign: 'center',
                   fontSize: '0.75rem',
-                  color: 'var(--text-muted)',
+                  color: 'var(--text-secondary)',
+                  fontWeight: 600,
                   marginTop: '8px',
                 }}
               >

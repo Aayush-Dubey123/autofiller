@@ -120,3 +120,9 @@ class SessionEventAppendRequest(BaseModel):
         max_length=500,
         description="Optional verification records to persist",
     )
+
+
+class ConfigureApiKeyRequest(BaseModel):
+    """Payload to dynamically configure AI provider key."""
+
+    api_key: str = Field(..., min_length=1, description="Google Gemini API key")

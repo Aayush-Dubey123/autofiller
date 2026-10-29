@@ -22,6 +22,7 @@ import {
   RefreshCw,
   RotateCw,
   Shield,
+  Sparkles,
   Square,
   Trash2,
   UploadCloud,
@@ -388,6 +389,7 @@ interface NewSessionViewProps {
   onOpenHistory?: () => void;
   onResetSession?: () => void;
   onConfirmSubmission?: () => void;
+  onNavigateToSettings?: () => void;
 }
 
 export const NewSessionView: React.FC<NewSessionViewProps> = ({
@@ -407,6 +409,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
   onOpenHistory,
   onResetSession,
   onConfirmSubmission,
+  onNavigateToSettings,
 }) => {
   const [dataSourceMode, setDataSourceMode] = useState<DataSourceMode>(() => {
     if (propFacts && propFacts.length > 0) return 'document';
@@ -433,7 +436,14 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
   const [localError, setLocalError] = useState<string | null>(null);
   const [recheckStatus, setRecheckStatus] = useState<string | null>(null);
   const [isRechecking, setIsRechecking] = useState<boolean>(false);
+  const [aiConfigured, setAiConfigured] = useState<boolean>(true);
 
+  useEffect(() => {
+    bridge.getAiConfig().then((cfg) => setAiConfigured(cfg.configured)).catch(() => {});
+    if (!targetUrl || !targetUrl.trim()) {
+      onSetTargetUrl('http://127.0.0.1:8000/mock_school_form.html');
+    }
+  }, []);
   useEffect(() => {
     if (state !== 'USER_TAKEOVER') {
       setRecheckStatus(null);
@@ -462,6 +472,7 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
   }, []);
 
   const lastLoadedDocRef = useRef<string>('');
+  const userSelectedModeRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (propFacts && propFacts.length > 0) {
@@ -471,7 +482,9 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
         setDocFacts(propFacts);
         if (propDocumentName) setUploadedDocName(propDocumentName);
         if (propDocumentSize) setUploadedDocSize(propDocumentSize);
-        setDataSourceMode('document');
+        if (!userSelectedModeRef.current) {
+          setDataSourceMode('document');
+        }
       }
     }
   }, [propFacts, propDocumentName, propDocumentSize]);
@@ -653,20 +666,27 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
     return null;
   })();
 
-  const canStart = finalFacts.length > 0 && isValidUrl && state === 'IDLE';
+  const canStart = finalFacts.length > 0 && isValidUrl && (state === 'IDLE' || state === 'ERROR');
 
   let disabledReason = '';
-  if (finalFacts.length === 0) {
+  if (!aiConfigured) {
+    disabledReason = 'Configure Gemini API Key in Settings first';
+  } else if (finalFacts.length === 0) {
     if (dataSourceMode === 'profile' && !selectedProfile) disabledReason = 'No profile selected';
     else if (dataSourceMode === 'document' && !uploadedDocPath) disabledReason = 'Upload a document first';
     else disabledReason = 'Select profile or upload document data first';
   } else if (!isValidUrl) {
     disabledReason = 'Enter a valid http(s) target form URL';
-  } else if (state !== 'IDLE') {
+  } else if (state !== 'IDLE' && state !== 'ERROR' && state !== 'COMPLETED') {
     disabledReason = 'Session is already active';
   }
 
   const handleStart = async () => {
+    userSelectedModeRef.current = true;
+    if (!aiConfigured) {
+      setLocalError('Gemini API key is required. Please open Settings and insert your API key.');
+      return;
+    }
     if (!canStart) return;
     setLocalError(null);
 
@@ -700,6 +720,53 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
           Configure your data source and target web form URL to launch AI form filling under your review.
         </p>
       </div>
+
+      {/* First-Run AI Setup Banner */}
+      {!aiConfigured && (
+        <div
+          style={{
+            padding: '12px 16px',
+            borderRadius: 'var(--radius-md)',
+            background: '#FFFBEB',
+            border: '1px solid #FCD34D',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Sparkles size={18} color="#D97706" />
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '0.84375rem', color: '#92400E' }}>
+                AI Model Key Setup Required
+              </div>
+              <div style={{ fontSize: '0.78125rem', color: '#B45309', marginTop: '1px' }}>
+                Insert your Google Gemini API key in Settings to enable automated document extraction and form mapping.
+              </div>
+            </div>
+          </div>
+          {onNavigateToSettings && (
+            <button
+              onClick={onNavigateToSettings}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 'var(--radius-md)',
+                background: '#D97706',
+                color: '#FFFFFF',
+                border: 'none',
+                fontWeight: 700,
+                fontSize: '0.78125rem',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+              }}
+            >
+              Configure in Settings
+            </button>
+          )}
+        </div>
+      )}
 
       {(propInlineError || localError) && (
         <div
@@ -1007,7 +1074,10 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                 return (
                   <div
                     key={option.mode}
-                    onClick={() => setDataSourceMode(option.mode)}
+                    onClick={() => {
+                      setDataSourceMode(option.mode);
+                      userSelectedModeRef.current = true;
+                    }}
                     style={{
                       padding: '12px 10px',
                       borderRadius: 'var(--radius-md)',
@@ -1303,21 +1373,42 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
         >
           {/* Step 2: Target Web Form Link */}
           <div>
-            <label style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-title)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Globe size={18} color="var(--text-brand)" />
-              <span>2. Target Web Form URL</span>
-            </label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+              <label style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-title)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Globe size={18} color="var(--text-brand)" />
+                <span>2. Target Web Form URL</span>
+              </label>
+              <button
+                type="button"
+                onClick={() => onSetTargetUrl('http://127.0.0.1:8000/mock_school_form.html')}
+                style={{
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  color: 'var(--text-brand)',
+                  background: 'var(--bg-surface-subtle)',
+                  border: '1px solid var(--border-subtle)',
+                  padding: '3px 10px',
+                  borderRadius: 'var(--radius-full)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+                title="Fill in the built-in practice mock school admission form"
+              >
+                <span>Use Mock Form (Default)</span>
+              </button>
+            </div>
             <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-              Paste the public application or registration form URL.
+              Paste the public application form URL or click 'Use Mock Form' to test locally.
             </p>
             <input
               type="url"
               value={targetUrl}
               onChange={(e) => onSetTargetUrl(e.target.value)}
-              placeholder="https://example.com/admission-form"
+              placeholder="http://127.0.0.1:8000/mock_school_form.html"
               style={{
                 width: '100%',
-                marginTop: '8px',
                 padding: '10px 12px',
                 borderRadius: 'var(--radius-md)',
                 border: '1px solid var(--border-subtle)',
@@ -1450,6 +1541,11 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                 <>
                   <CheckCircle2 size={17} />
                   <span>Submitted</span>
+                </>
+              ) : state === 'ERROR' ? (
+                <>
+                  <RotateCw size={17} />
+                  <span>Retry Automation</span>
                 </>
               ) : (
                 <>

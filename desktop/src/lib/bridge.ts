@@ -48,6 +48,9 @@ export interface AutoFillerAPI {
   backendHealth: () => Promise<BackendHealth>;
   getEngineStatus: () => Promise<EngineStatus>;
   appVersion: () => Promise<string>;
+  getAiConfig: () => Promise<{ configured: boolean }>;
+  setAiApiKey: (apiKey: string) => Promise<{ success: boolean; error?: string }>;
+  clearAiApiKey: () => Promise<{ success: boolean; error?: string }>;
   vaultStatus: () => Promise<VaultStatus>;
   vaultCreate: (payload: {
     privacyKey: string;
@@ -130,6 +133,9 @@ const browserFallback: AutoFillerAPI = {
   clearAllHistory: async () => ({ success: true }),
   eraseAllData: async () => ({ success: true }),
   backendHealth: async () => ({ healthy: false, geminiConfigured: false }),
+  getAiConfig: async () => ({ configured: false }),
+  setAiApiKey: async () => ({ success: true }),
+  clearAiApiKey: async () => ({ success: true }),
   getEngineStatus: async (): Promise<EngineStatus> => {
     const isElectronUA = typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron');
     if (isElectronUA) {

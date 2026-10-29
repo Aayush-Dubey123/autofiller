@@ -34,6 +34,7 @@ desktop/dist/
 desktop/dist-electron/
 desktop/release/
 desktop/out/
+desktop/build-resources/
 
 # AutoFiller & FormPilot runtime secrets, stores and local state
 .autofiller_token

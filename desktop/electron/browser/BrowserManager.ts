@@ -112,24 +112,113 @@ export class BrowserManager {
    *
    * @param headless Whether to run without a visible window.
    */
+  /**
+   * Search for a bundled or user-provisioned browser binary.
+   * Checks process.resourcesPath/browsers and userData/browsers.
+   */
+  private resolveBundledBrowserPath(): string | null {
+    let resourcesBrowserDir: string | null = null;
+    if (typeof process !== 'undefined' && 'resourcesPath' in process) {
+      const resPath = (process as NodeJS.Process & { resourcesPath?: unknown }).resourcesPath;
+      if (typeof resPath === 'string') {
+        resourcesBrowserDir = path.join(resPath, 'browsers');
+      }
+    }
+    const appDataBrowserDir =
+      typeof process !== 'undefined' && process.env?.APPDATA
+        ? path.join(process.env.APPDATA, 'autofiller-desktop', 'browsers')
+        : null;
+
+    const candidateDirs = [resourcesBrowserDir, appDataBrowserDir].filter(
+      (dir): dir is string => Boolean(dir)
+    );
+
+    for (const dir of candidateDirs) {
+      if (!fs.existsSync(dir)) continue;
+      const findExe = (curDir: string, depth: number): string | null => {
+        if (depth > 3) return null;
+        try {
+          const files = fs.readdirSync(curDir);
+          for (const f of files) {
+            const full = path.join(curDir, f);
+            const stat = fs.statSync(full);
+            if (stat.isDirectory()) {
+              const res = findExe(full, depth + 1);
+              if (res) return res;
+            } else if (f.toLowerCase() === 'chrome.exe' || f.toLowerCase() === 'msedge.exe') {
+              return full;
+            }
+          }
+        } catch {
+          // Skip unreadable subdirectories
+        }
+        return null;
+      };
+      const found = findExe(dir, 0);
+      if (found) return found;
+    }
+    return null;
+  }
+
   public async launch(headless: boolean = false): Promise<void> {
     if (!this.browser) {
-      const launchOptions: any = {
+      const launchOptions = {
         headless,
         args: ['--disable-blink-features=AutomationControlled'],
       };
-      try {
-        this.browser = await chromium.launch(launchOptions);
-      } catch (err: any) {
-        if (err?.message?.includes("Executable doesn't exist")) {
-          try {
-            this.browser = await chromium.launch({ ...launchOptions, channel: 'chrome' });
-          } catch {
-            this.browser = await chromium.launch({ ...launchOptions, channel: 'msedge' });
-          }
-        } else {
-          throw err;
+
+      const bundledExe = this.resolveBundledBrowserPath();
+      let launched = false;
+
+      // Tier 1 & 2: Bundled or provisioned standalone browser binary
+      if (bundledExe && fs.existsSync(bundledExe)) {
+        try {
+          this.browser = await chromium.launch({
+            ...launchOptions,
+            executablePath: bundledExe,
+          });
+          launched = true;
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`[BrowserManager] Failed to launch bundled browser at ${bundledExe} (${msg}). Falling back to system browsers...`);
         }
+      }
+
+      // Tier 3: Standard Playwright local cache
+      if (!launched) {
+        try {
+          this.browser = await chromium.launch(launchOptions);
+          launched = true;
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (!msg.includes("Executable doesn't exist")) {
+            throw err;
+          }
+        }
+      }
+
+      // Tier 4: System Microsoft Edge (Standard on Windows 10 & 11)
+      if (!launched) {
+        try {
+          this.browser = await chromium.launch({ ...launchOptions, channel: 'msedge' });
+          launched = true;
+        } catch {}
+      }
+
+      // Tier 5: System Google Chrome
+      if (!launched) {
+        try {
+          this.browser = await chromium.launch({ ...launchOptions, channel: 'chrome' });
+          launched = true;
+        } catch {}
+      }
+
+      // Tier 6: Actionable error if all tiers fail
+      if (!this.browser) {
+        throw new Error(
+          'No compatible browser found. AutoFiller requires Chromium, Microsoft Edge, or Google Chrome. ' +
+          'Please ensure Microsoft Edge or Google Chrome is installed on this Windows computer.'
+        );
       }
       this.context = await this.browser.newContext({
         viewport: null,

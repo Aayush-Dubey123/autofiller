@@ -6,6 +6,7 @@
  */
 
 import { app, BrowserWindow, session, shell } from 'electron';
+import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
 
@@ -56,13 +57,14 @@ function resolveOperatorToken(): string {
   if (secretStore) {
     const stored = secretStore.loadToken();
     if (stored) {
+      process.env.AUTOFILLER_INTERNAL_KEY = stored;
       return stored;
     }
   }
 
-  // Fall back to the token the backend generates on first run so a fresh install
-  // authenticates without manual configuration.
+  // Fall back to on-disk token candidates
   const candidates = [
+    path.join(app.getPath('userData'), '.autofiller_token'),
     path.join(__dirname, '../../backend/.autofiller_token'),
     path.join(process.resourcesPath || '', 'backend/.autofiller_token'),
     path.join(__dirname, '../../backend/.formpilot_token'),
@@ -80,6 +82,7 @@ function resolveOperatorToken(): string {
               // Non-fatal: continue using the on-disk token for this session.
             }
           }
+          process.env.AUTOFILLER_INTERNAL_KEY = token;
           return token;
         }
       }
@@ -87,8 +90,23 @@ function resolveOperatorToken(): string {
       // Try the next candidate.
     }
   }
-  return '';
+
+  // Generate a fresh cryptographically random 32-byte hex token immediately so the app
+  // NEVER starts with an empty operator token!
+  const generated = crypto.randomBytes(32).toString('hex');
+  if (secretStore && secretStore.isEncryptionAvailable()) {
+    try {
+      secretStore.saveToken(generated);
+    } catch {}
+  }
+  try {
+    const tokenFile = path.join(app.getPath('userData'), '.autofiller_token');
+    fs.writeFileSync(tokenFile, generated, { encoding: 'utf-8', mode: 0o600 });
+  } catch {}
+  process.env.AUTOFILLER_INTERNAL_KEY = generated;
+  return generated;
 }
+export { resolveOperatorToken };
 
 /**
  * Poll the backend health endpoint until it reports healthy or the timeout elapses.
@@ -100,7 +118,9 @@ async function waitForBackend(client: BackendClient): Promise<boolean> {
   const deadline = Date.now() + BACKEND_HEALTH_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (await client.health()) {
-      return true;
+      if (await client.verifyToken()) {
+        return true;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
@@ -136,7 +156,12 @@ function spawnBackend(): void {
         path.join(process.resourcesPath, 'backend', 'autofiller-backend.exe'),
         path.join(process.resourcesPath, 'backend', 'formpilot-backend.exe'),
       ]
-    : [path.join(__dirname, '../../venv/Scripts/python.exe'), path.join(__dirname, '../../venv/bin/python')];
+    : [
+        path.join(__dirname, '../../backend/venv/Scripts/python.exe'),
+        path.join(__dirname, '../../venv/Scripts/python.exe'),
+        path.join(__dirname, '../../backend/venv/bin/python'),
+        path.join(__dirname, '../../venv/bin/python'),
+      ];
 
   const executable = candidatePaths.find((candidate) => candidate && fs.existsSync(candidate));
   if (!executable) {
@@ -149,8 +174,25 @@ function spawnBackend(): void {
     const args = isPackaged
       ? []
       : ['-m', 'uvicorn', 'core.apis.api:app', '--app-dir', 'backend', '--host', '127.0.0.1', '--port', '8000'];
+    const cwd = isPackaged
+      ? app.getPath('userData')
+      : path.join(__dirname, '../..');
+
+    const tokenFile = path.join(app.getPath('userData'), '.autofiller_token');
+    const storedApiKey = secretStore ? secretStore.loadApiKey() : null;
+    const operatorToken = resolveOperatorToken();
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      AUTOFILLER_INTERNAL_KEY: operatorToken,
+      AUTOFILLER_TOKEN_FILE: tokenFile,
+      HOST: '127.0.0.1',
+      PORT: '8000',
+      ...(storedApiKey ? { GEMINI_API_KEY: storedApiKey } : {}),
+    };
+
     const child = spawn(executable, args, {
-      cwd: path.join(__dirname, '../..'),
+      cwd,
+      env,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
@@ -215,7 +257,9 @@ async function createWindow(): Promise<void> {
     agentController,
     new HistoryStore(app.getPath('userData')),
     vaultService,
-    () => currentEngineStatus
+    () => currentEngineStatus,
+    secretStore,
+    restartBackend
   );
 
   // Apply a strict CSP and block all outbound navigation and window creation.
@@ -286,9 +330,53 @@ async function shutdown(): Promise<void> {
     await agentController.cleanup().catch(() => undefined);
   }
   if (backendProcess && !backendProcess.killed) {
-    backendProcess.kill();
+    const pid = backendProcess.pid;
+    try {
+      if (process.platform === 'win32' && pid) {
+        const { spawnSync } = require('child_process');
+        spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
+      } else {
+        backendProcess.kill('SIGTERM');
+      }
+    } catch {
+      backendProcess.kill();
+    }
     backendProcess = null;
   }
+}
+
+/**
+ * Restart the local backend service to apply updated environment or credentials.
+ *
+ * @returns True when the restarted backend becomes healthy.
+ */
+export async function restartBackend(): Promise<boolean> {
+  if (backendProcess && !backendProcess.killed) {
+    const pid = backendProcess.pid;
+    try {
+      if (process.platform === 'win32' && pid) {
+        const { spawnSync } = require('child_process');
+        spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
+      } else {
+        backendProcess.kill('SIGTERM');
+      }
+    } catch {
+      backendProcess.kill();
+    }
+    backendProcess = null;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  spawnBackend();
+  const operatorToken = resolveOperatorToken();
+  if (agentController) {
+    agentController.getBackendClient().setToken(operatorToken);
+  }
+  const client = new BackendClient(operatorToken, BACKEND_BASE_URL);
+  const ok = await waitForBackend(client);
+  if (ok) {
+    currentEngineStatus = { ready: true };
+  }
+  return ok;
 }
 
 app.whenReady().then(async () => {
@@ -296,10 +384,22 @@ app.whenReady().then(async () => {
   const operatorToken = resolveOperatorToken();
   const client = new BackendClient(operatorToken, BACKEND_BASE_URL);
 
-  if (await client.health()) {
-    console.log('Backend service is already online and healthy. Skipping backend process spawn.');
+  const isHealthy = await client.health();
+  const isAuthValid = isHealthy ? await client.verifyToken() : false;
+
+  if (isHealthy && isAuthValid) {
+    console.log('Backend service is online with matching operator token. Reusing existing instance.');
     currentEngineStatus = { ready: true };
   } else {
+    if (isHealthy && !isAuthValid) {
+      console.warn('Existing service on port 8000 rejected operator token. Terminating stale process...');
+      if (process.platform === 'win32') {
+        try {
+          const { spawnSync } = require('child_process');
+          spawnSync('cmd.exe', ['/c', 'for /f "tokens=5" %a in (\'netstat -aon ^| findstr :8000 ^| findstr LISTENING\') do taskkill /f /pid %a'], { windowsHide: true });
+        } catch {}
+      }
+    }
     spawnBackend();
   }
 

@@ -2,6 +2,7 @@
   "name": "autofiller-desktop",
   "version": "1.0.0",
   "description": "AutoFiller AI - AI-assisted document-to-web-form desktop workflow engine",
+  "author": "AutoFiller AI Team",
   "main": "dist-electron/main.js",
   "type": "commonjs",
   "scripts": {
@@ -10,8 +11,11 @@
     "clean": "node -e \"const fs = require('fs'); ['dist', 'dist-electron'].forEach(d => fs.rmSync(d, { recursive: true, force: true }));\"",
     "build": "npm run clean && tsc --noEmit && vite build && tsc -p tsconfig.electron.json",
     "electron": "npm run build && electron .",
+    "build:backend": "node -e \"const { spawnSync } = require('child_process'); const p = process.platform === 'win32' ? '..\\\\backend\\\\venv\\\\Scripts\\\\python.exe' : 'python3'; const res = spawnSync(p, ['../backend/scripts/build_backend.py'], { stdio: 'inherit' }); process.exit(res.status || 0);\"",
     "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder",
+    "prune:release": "node scripts/clean_release.js",
+    "dist": "npm run build && electron-builder && npm run prune:release",
+    "dist:all": "npm run build:backend && npm run dist",
     "test": "npm run build && node tests/policy_test.js && node tests/tool_registry_test.js && node tests/scanner_test.js && node tests/vault_test.js && node tests/e2e_integration_test.js"
   },
   "dependencies": {
@@ -33,6 +37,7 @@
   "build": {
     "appId": "com.autofiller.ai",
     "productName": "AutoFiller AI",
+    "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release"
     },
@@ -43,7 +48,17 @@
     ],
     "asar": true,
     "asarUnpack": [
-      "node_modules/playwright/**"
+      "node_modules/playwright/**",
+      "node_modules/playwright-core/**"
+    ],
+    "extraResources": [
+      {
+        "from": "build-resources/backend",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "win": {
       "target": [
@@ -53,7 +68,11 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AutoFiller AI"
     }
   }
 }

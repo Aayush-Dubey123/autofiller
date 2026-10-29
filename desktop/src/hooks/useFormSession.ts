@@ -211,12 +211,12 @@ export function useFormSession() {
     targetUrl.trim() && (targetUrl.startsWith('http://') || targetUrl.startsWith('https://'))
   );
   const isDocumentReady = Boolean(facts && facts.length > 0);
-  const canStart = isDocumentReady && isValidUrl && state === 'IDLE';
+  const canStart = isDocumentReady && isValidUrl && (state === 'IDLE' || state === 'ERROR');
 
   let disabledReason = '';
   if (!isDocumentReady) disabledReason = 'Process a document first';
   else if (!isValidUrl) disabledReason = 'Enter a valid http(s) URL';
-  else if (state !== 'IDLE') disabledReason = 'Session is active';
+  else if (state !== 'IDLE' && state !== 'ERROR' && state !== 'COMPLETED') disabledReason = 'Session is active';
 
   return {
     state,

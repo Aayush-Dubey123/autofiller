@@ -836,12 +836,17 @@ export class VaultService {
 
 /** File name holding the encrypted internal operator token. */
 const TOKEN_FILE = 'operator-token.bin';
+/** File name holding the encrypted AI provider API key. */
+const AI_SECRET_FILE = 'ai-secret.bin';
 
 export class SecretStore {
   private tokenPath: string;
+  private apiKeyPath: string;
 
-  constructor() {
-    this.tokenPath = path.join(app.getPath('userData'), TOKEN_FILE);
+  constructor(userDataPath?: string) {
+    const baseDir = userDataPath || (typeof app !== 'undefined' && app?.getPath ? app.getPath('userData') : process.cwd());
+    this.tokenPath = path.join(baseDir, TOKEN_FILE);
+    this.apiKeyPath = path.join(baseDir, AI_SECRET_FILE);
   }
 
   public isEncryptionAvailable(): boolean {
@@ -886,6 +891,46 @@ export class SecretStore {
     } catch (error) {
       console.error('Could not clear stored operator token:', error);
     }
+  }
+
+  public saveApiKey(apiKey: string): void {
+    if (!this.isEncryptionAvailable()) {
+      throw new Error(
+        'OS credential encryption is unavailable; refusing to store the API key in plaintext.'
+      );
+    }
+    const encrypted = safeStorage.encryptString(apiKey.trim());
+    fs.writeFileSync(this.apiKeyPath, encrypted, { mode: 0o600 });
+  }
+
+  public loadApiKey(): string | null {
+    try {
+      if (!fs.existsSync(this.apiKeyPath)) {
+        return null;
+      }
+      const encrypted = fs.readFileSync(this.apiKeyPath);
+      if (!this.isEncryptionAvailable()) {
+        return null;
+      }
+      return safeStorage.decryptString(encrypted);
+    } catch (error) {
+      console.error('Could not read stored AI API key:', error);
+      return null;
+    }
+  }
+
+  public clearApiKey(): void {
+    try {
+      if (fs.existsSync(this.apiKeyPath)) {
+        fs.unlinkSync(this.apiKeyPath);
+      }
+    } catch (error) {
+      console.error('Could not clear stored AI API key:', error);
+    }
+  }
+
+  public hasApiKey(): boolean {
+    return fs.existsSync(this.apiKeyPath) || Boolean(process.env.GEMINI_API_KEY?.trim());
   }
 }
 

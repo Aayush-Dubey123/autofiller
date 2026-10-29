@@ -158,34 +158,37 @@ def create_app() -> FastAPI:
             "gemini_configured": is_gemini_configured(),
         }
 
-    if os.getenv("ENV", "development").lower() != "production":
-        @app.get("/mock_school_form.html", include_in_schema=False)
-        async def get_mock_school_form():
-            """
-            Serve the bundled mock school admission form in development and testing.
+    @app.get("/mock_school_form.html", include_in_schema=False)
+    async def get_mock_school_form():
+        """
+        Serve the bundled mock school admission form.
 
-            Allows the browser automation engine and desktop operator to access the demo form
-            directly over HTTP without requiring an active frontend dev server.
+        Allows the browser automation engine and desktop operator to access the demo form
+        directly over HTTP without requiring an active external web server.
 
-            Args:
-                None
+        Args:
+            None
 
-            Returns:
-                FileResponse: HTML content of the mock school form.
-            """
-            from pathlib import Path
-            from fastapi.responses import FileResponse, Response
+        Returns:
+            FileResponse: HTML content of the mock school form.
+        """
+        import sys
+        from pathlib import Path
+        from fastapi.responses import FileResponse, Response
 
-            repo_root = Path(__file__).resolve().parents[3]
-            candidate_paths = [
-                repo_root / "desktop" / "public" / "mock_school_form.html",
-                repo_root / "desktop" / "dist" / "mock_school_form.html",
-            ]
-            for form_path in candidate_paths:
-                if form_path.is_file():
-                    return FileResponse(str(form_path), media_type="text/html")
-            return Response(content="Mock school form not found", status_code=404)
-
+        here = Path(__file__).resolve().parent
+        candidate_paths = [
+            Path(getattr(sys, "_MEIPASS", "")) / "mock_school_form.html",
+            Path(sys.executable).parent / "mock_school_form.html",
+            here.parents[3] / "desktop" / "public" / "mock_school_form.html",
+            here.parents[2] / "desktop" / "public" / "mock_school_form.html",
+            here.parents[3] / "desktop" / "dist" / "mock_school_form.html",
+            Path(sys.executable).parent.parent / "app.asar.unpacked" / "public" / "mock_school_form.html",
+        ]
+        for form_path in candidate_paths:
+            if form_path and form_path.is_file():
+                return FileResponse(str(form_path), media_type="text/html")
+        return Response(content="Mock school form not found", status_code=404)
     return app
 
 

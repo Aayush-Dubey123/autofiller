@@ -17,9 +17,9 @@ const DIST = path.resolve(__dirname, '../dist-electron');
 const { AgentController } = require(path.join(DIST, 'agent/AgentController'));
 
 const FORMS_DIR = path.resolve(__dirname, 'fixtures/forms');
+const PUBLIC_DIR = path.resolve(__dirname, '../public');
 const SCENARIOS_DIR = path.resolve(__dirname, 'fixtures/scenarios');
 const REPORT_PATH = path.resolve(__dirname, '../../BENCHMARK_V2.md');
-
 /**
  * Start ephemeral local HTTP server to serve test-only fixtures without polluting production.
  *
@@ -30,7 +30,10 @@ function startFixtureServer() {
     const server = http.createServer((req, res) => {
       const parsedUrl = new URL(req.url, 'http://127.0.0.1');
       const safePath = path.normalize(parsedUrl.pathname).replace(/^(\.\.[\/\\])+/, '');
-      const filePath = path.join(FORMS_DIR, safePath);
+      let filePath = path.join(FORMS_DIR, safePath);
+      if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+        filePath = path.join(PUBLIC_DIR, safePath);
+      }
 
       if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
         res.writeHead(404, { 'Content-Type': 'text/plain' });

@@ -229,7 +229,16 @@ async function createWindow(): Promise<void> {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url).catch(() => undefined);
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        void shell.openExternal(url).catch(() => undefined);
+      } else {
+        console.warn(`[Security] Blocked external open for disallowed protocol: ${parsed.protocol} (${url})`);
+      }
+    } catch {
+      console.warn(`[Security] Blocked external open for malformed URL: ${url}`);
+    }
     return { action: 'deny' };
   });
 

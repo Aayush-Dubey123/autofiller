@@ -430,13 +430,19 @@ export class FormScanner {
    * @param page Active Playwright page.
    * @returns Structured snapshot with stable field references and collapsed radio groups.
    */
-  public async scanForm(page: Page): Promise<FormSnapshot> {
+  /**
+   * Reset all internal locator, selector, frame, and label maps.
+   */
+  public reset(): void {
     this.locatorMap.clear();
     this.selectorMap.clear();
     this.nameMap.clear();
     this.frameMap.clear();
     this.labelMap.clear();
+  }
 
+  public async scanForm(page: Page): Promise<FormSnapshot> {
+    this.reset();
     const title = await page.title();
     const url = page.url();
 
@@ -448,16 +454,17 @@ export class FormScanner {
         await frame.evaluate(() => {
           document.querySelectorAll('[data-af-ref]').forEach((el) => el.removeAttribute('data-af-ref'));
         });
-      } catch {}
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[FormScanner] Could not clear existing data-af-ref in frame ${frame.name() || frame.url()}:`, msg);
+      }
     }
 
     // 2. Discover and tag all controls frame-by-frame
     let globalIndex = 0;
     const allCollected: Array<{ frame: any; item: any }> = [];
 
-    for (const frame of frames) {
-      try {
-        const frameResult = await frame.evaluate((startIndex: number) => {
+    const scanControlsInFrame = (startIndex: number) => {
           const collected: Array<{
             ref: string;
             selector: string;
@@ -857,15 +864,30 @@ export class FormScanner {
           });
 
           return { controls: collected, nextIndex: currentIndex };
-        }, globalIndex);
+    };
 
-        if (frameResult && frameResult.controls) {
-          for (const item of frameResult.controls) {
-            allCollected.push({ frame, item });
-          }
-          globalIndex = frameResult.nextIndex;
+    for (const frame of frames) {
+      let frameResult: { controls: any[]; nextIndex: number } | null = null;
+      try {
+        frameResult = await frame.evaluate(scanControlsInFrame, globalIndex);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[FormScanner] Frame evaluation failed for frame ${frame.name() || frame.url()} (${msg}). Retrying once...`);
+        try {
+          await new Promise<void>((resolve) => setTimeout(resolve, 50));
+          frameResult = await frame.evaluate(scanControlsInFrame, globalIndex);
+        } catch (retryErr: unknown) {
+          const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          console.warn(`[FormScanner] Frame evaluation retry failed for frame ${frame.name() || frame.url()}:`, retryMsg);
         }
-      } catch {}
+      }
+
+      if (frameResult && frameResult.controls) {
+        for (const item of frameResult.controls) {
+          allCollected.push({ frame, item });
+        }
+        globalIndex = frameResult.nextIndex;
+      }
     }
 
     const fields: FormFieldSnapshot[] = [];

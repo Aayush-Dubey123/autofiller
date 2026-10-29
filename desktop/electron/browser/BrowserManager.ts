@@ -1340,9 +1340,8 @@ export class BrowserManager {
     }
 
     // Ladder Attempt b: if reports not visible / detached / multiple matches / empty:
-    // Re-scan, re-resolve by label inside the same question container, prefer VISIBLE candidate, retry
+    // Non-destructively re-resolve by label inside the same question container, prefer VISIBLE candidate, retry
     try {
-      await this.scanActiveForm();
       const reResolved = await this.reResolveVisibleCandidate(fieldRef);
       if (reResolved) {
         locator = this.scanner.getLocator(fieldRef) || locator;
@@ -1994,7 +1993,23 @@ export class BrowserManager {
     expectedValue: string;
     classification: 'match' | 'normalized-match' | 'mismatch' | 'empty' | 'unreadable';
   }> {
-    const locator = this.scanner.getLocator(fieldRef);
+    let locator = this.scanner.getLocator(fieldRef);
+    if (!locator && this.page) {
+      const candidate = this.page.locator(`[data-af-ref="${fieldRef}"]`).first();
+      if ((await candidate.count().catch(() => 0)) > 0) {
+        this.scanner.setLocator(fieldRef, candidate);
+        locator = candidate;
+      } else {
+        for (const frame of this.page.frames()) {
+          const frameCandidate = frame.locator(`[data-af-ref="${fieldRef}"]`).first();
+          if ((await frameCandidate.count().catch(() => 0)) > 0) {
+            this.scanner.setLocator(fieldRef, frameCandidate);
+            locator = frameCandidate;
+            break;
+          }
+        }
+      }
+    }
     if (!locator) {
       throw new Error(`Field reference '${fieldRef}' not found.`);
     }
@@ -2399,6 +2414,7 @@ export class BrowserManager {
    */
   public async close(): Promise<void> {
     this.notifyChange('browser_close');
+    this.scanner.reset();
     if (this.browser) {
       await this.browser.close().catch(() => { });
       this.browser = null;

@@ -46,9 +46,11 @@ backend/.formpilot_token
 backend/.formpilot_secrets
 autofiller-store.json
 autofiller-error.log
+autofiller-trace.json
+diagnostic-blocker-screenshot.png
+diagnostic-*.png
 backend.log
 backend_err.log
-
 # Logs & Databases
 logs/
 *.log

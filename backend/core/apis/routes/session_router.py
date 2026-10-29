@@ -318,15 +318,30 @@ async def delete_session(
 ):
     """
     Purge a single session from persistent storage.
+
+    Permanently removes the session record, associated field mappings, and audit events.
+
+    Args:
+        session_id (str): Unique session identifier.
+        user (dict): Authenticated operator identity injected by the auth dependency.
+
+    Returns:
+        dict: Deletion confirmation result.
+
+    Raises:
+        HTTPException 401: If the operator token is missing or invalid.
+        HTTPException 404: If the session ID is not found.
+        HTTPException 500: If deleting the session encounters an unexpected failure.
     """
     try:
         logging.info(f"Calling DELETE /v1/sessions/{session_id} endpoint")
         controller = SessionController()
         return await controller.delete_session(session_id=session_id)
     except HTTPException as httperror:
+        logging.error(f"Error in DELETE /v1/sessions/{session_id} endpoint: {httperror}")
         raise httperror
     except Exception as error:
-        logging.error(f"Error in DELETE /v1/sessions/{session_id}: {error}")
+        logging.error(f"Error in DELETE /v1/sessions/{session_id} endpoint: {error}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal Server Error",
@@ -342,15 +357,28 @@ async def delete_all_sessions(
 ):
     """
     Purge all active sessions from persistent storage.
+
+    Cleans up all persisted session state, historical mappings, and audit logs.
+
+    Args:
+        user (dict): Authenticated operator identity injected by the auth dependency.
+
+    Returns:
+        dict: Purge confirmation status and deleted count.
+
+    Raises:
+        HTTPException 401: If the operator token is missing or invalid.
+        HTTPException 500: If purging all sessions encounters an unexpected failure.
     """
     try:
         logging.info("Calling DELETE /v1/sessions endpoint")
         controller = SessionController()
         return await controller.purge_all_sessions()
     except HTTPException as httperror:
+        logging.error(f"Error in DELETE /v1/sessions endpoint: {httperror}")
         raise httperror
     except Exception as error:
-        logging.error(f"Error in DELETE /v1/sessions: {error}")
+        logging.error(f"Error in DELETE /v1/sessions endpoint: {error}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal Server Error",

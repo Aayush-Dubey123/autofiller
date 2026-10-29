@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.electron.json",
-    "build": "tsc --noEmit && vite build && tsc -p tsconfig.electron.json",
+    "clean": "node -e \"const fs = require('fs'); ['dist', 'dist-electron'].forEach(d => fs.rmSync(d, { recursive: true, force: true }));\"",
+    "build": "npm run clean && tsc --noEmit && vite build && tsc -p tsconfig.electron.json",
     "electron": "npm run build && electron .",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",

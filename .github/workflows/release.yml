@@ -1,0 +1,89 @@
+name: Release AutoFiller AI
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-release:
+    name: Build & Publish GitHub Release
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      GEMINI_API_KEY: ci-release-verification-key
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Run backend verification
+        run: |
+          python -m pytest backend/tests/test_backend.py
+          python verify_security_live.py
+
+      - name: Build standalone backend executable
+        run: python backend/scripts/build_backend.py
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Run desktop test suites
+        working-directory: desktop
+        run: npm run test
+
+      - name: Package Windows Release (NSIS & Portable)
+        working-directory: desktop
+        run: npm run dist
+
+      - name: Generate Release Checksums
+        shell: pwsh
+        run: |
+          $releaseDir = "desktop/release"
+          $files = Get-ChildItem -Path "$releaseDir/*.exe"
+          $checksums = @("# AutoFiller AI Release Checksums (SHA-256)", "# Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss UTC')", "")
+          foreach ($f in $files) {
+            $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
+            $mb = [math]::Round($f.Length / 1MB, 1)
+            $checksums += "$hash *$($f.Name) ($mb MB)"
+          }
+          $checksumPath = "$releaseDir/checksums.txt"
+          $checksums | Set-Content -Path $checksumPath -Encoding utf8
+          Get-Content $checksumPath
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/release/*.exe
+            desktop/release/checksums.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: false

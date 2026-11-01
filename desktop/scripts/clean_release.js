@@ -23,8 +23,8 @@ if (!fs.existsSync(releaseDir)) {
   process.exit(0);
 }
 
-const expectedInstaller = `AutoFiller AI Setup ${version}.exe`;
-const expectedPortable = `AutoFiller AI ${version}.exe`;
+const expectedInstaller = `AutoFiller-AI-Setup-${version}.exe`;
+const expectedPortable = `AutoFiller-AI-${version}-Portable.exe`;
 
 const entries = fs.readdirSync(releaseDir);
 

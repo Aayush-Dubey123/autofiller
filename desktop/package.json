@@ -67,12 +67,16 @@
       ]
     },
     "nsis": {
+      "artifactName": "AutoFiller-AI-Setup-${version}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "AutoFiller AI"
+    },
+    "portable": {
+      "artifactName": "AutoFiller-AI-${version}-Portable.${ext}"
     }
   }
 }

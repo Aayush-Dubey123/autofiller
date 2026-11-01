@@ -43,6 +43,7 @@ export interface AutoFillerAPI {
   listDocuments: () => Promise<DocumentRecord[]>;
   deleteHistorySession: (id: string) => Promise<{ success: boolean }>;
   deleteHistorySessions: (ids: string[]) => Promise<{ success: boolean }>;
+  updateHistoryStatus: (id: string, status: SessionRecord['status']) => Promise<{ success: boolean }>;
   clearAllHistory: () => Promise<{ success: boolean }>;
   eraseAllData: () => Promise<{ success: boolean; error?: string }>;
   backendHealth: () => Promise<BackendHealth>;
@@ -130,6 +131,7 @@ const browserFallback: AutoFillerAPI = {
   listDocuments: async () => [],
   deleteHistorySession: async () => ({ success: true }),
   deleteHistorySessions: async () => ({ success: true }),
+  updateHistoryStatus: async () => ({ success: true }),
   clearAllHistory: async () => ({ success: true }),
   eraseAllData: async () => ({ success: true }),
   backendHealth: async () => ({ healthy: false, geminiConfigured: false }),

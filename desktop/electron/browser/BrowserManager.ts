@@ -2447,9 +2447,18 @@ export class BrowserManager {
           /form submitted successfully/i,
           /submitted successfully/i,
           /submission received/i,
+          /submission confirmed/i,
           /thank you for your submission/i,
           /thank you for submitting/i,
           /your response has been recorded/i,
+          /your application has been received/i,
+          /application received successfully/i,
+          /registration successful/i,
+          /registration confirmed/i,
+          /admission confirmed/i,
+          /payment successful/i,
+          /submission complete/i,
+          /successfully submitted/i,
         ];
         for (const pattern of confirmationPatterns) {
           if (pattern.test(bodyText)) {
@@ -2457,17 +2466,25 @@ export class BrowserManager {
           }
         }
 
-        // 4. Check URL pathname for redirect confirmation
-        const path = window.location.pathname.toLowerCase();
+        // 4. Check URL pathname, search, and hash for redirect confirmation
+        const path = (window.location.pathname || '').toLowerCase();
+        const search = (window.location.search || '').toLowerCase();
+        const hash = (window.location.hash || '').toLowerCase();
         if (
           path.includes('/submitted') ||
           path.includes('/thank-you') ||
+          path.includes('/thankyou') ||
           path.includes('/confirmation') ||
-          path.includes('/success')
+          path.includes('/success') ||
+          path.includes('/complete') ||
+          search.includes('submitted=') ||
+          search.includes('status=success') ||
+          search.includes('status=completed') ||
+          hash.includes('success') ||
+          hash.includes('submitted')
         ) {
           return true;
         }
-
         return false;
       });
     } catch {

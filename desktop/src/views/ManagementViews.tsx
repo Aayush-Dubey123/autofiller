@@ -1309,7 +1309,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               >
                 <Link2 size={14} color="var(--text-muted)" style={{ flexShrink: 0 }} />
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  http://127.0.0.1:8000/mock_school_form
+                  http://127.0.0.1:8000/mock_school_form.html
                 </span>
               </div>
 

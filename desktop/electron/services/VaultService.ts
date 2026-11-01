@@ -1011,10 +1011,15 @@ export class HistoryStore {
     if (state === 'IDLE') {
       if (record.status === 'COMPLETED' || record.status === 'REVIEW_READY') {
         this.activeId = null;
+        this.save();
         return;
       }
       if (ACTIVE_STATES.has(record.status)) {
-        record.status = 'INTERRUPTED';
+        if (record.fieldsFilled > 0 && record.totalFields && record.fieldsFilled >= record.totalFields) {
+          record.status = 'COMPLETED';
+        } else {
+          record.status = 'INTERRUPTED';
+        }
       }
       this.activeId = null;
       this.save();
@@ -1079,6 +1084,14 @@ export class HistoryStore {
       this.save();
     }
     this.activeId = null;
+  }
+
+  public updateSessionStatus(id: string, status: SessionRecord['status']): boolean {
+    const session = this.data.sessions.find((s) => s.id === id);
+    if (!session) return false;
+    session.status = status;
+    this.save();
+    return true;
   }
 
   public deleteSession(id: string): void {

@@ -45,6 +45,7 @@ export interface AutoFillerAPI {
   listDocuments: () => Promise<DocumentRecord[]>;
   deleteHistorySession: (id: string) => Promise<{ success: boolean }>;
   deleteHistorySessions: (ids: string[]) => Promise<{ success: boolean }>;
+  updateHistoryStatus: (id: string, status: SessionRecord['status']) => Promise<{ success: boolean }>;
   clearAllHistory: () => Promise<{ success: boolean }>;
   eraseAllData: () => Promise<{ success: boolean; error?: string }>;
   backendHealth: () => Promise<BackendHealth>;
@@ -110,6 +111,7 @@ const api: AutoFillerAPI = {
   listDocuments: () => ipcRenderer.invoke('autofiller:documents-list'),
   deleteHistorySession: (id) => ipcRenderer.invoke('autofiller:history-delete', id),
   deleteHistorySessions: (ids) => ipcRenderer.invoke('autofiller:history-delete-multiple', ids),
+  updateHistoryStatus: (id, status) => ipcRenderer.invoke('autofiller:history-update-status', { id, status }),
   clearAllHistory: () => ipcRenderer.invoke('autofiller:history-clear-all'),
   eraseAllData: () => ipcRenderer.invoke('autofiller:erase-all-data'),
   backendHealth: () => ipcRenderer.invoke('autofiller:backend-health'),

@@ -169,14 +169,14 @@ export function useFormSession() {
   };
 
   const stopSession = async () => {
+    setState('IDLE');
+    setClarificationPrompt(null);
+    setIsAnsweringClarification(false);
     try {
       await bridge.stopAgent();
     } catch (err) {
       console.warn('Could not stop agent cleanly:', err);
     }
-    setState('IDLE');
-    setClarificationPrompt(null);
-    setIsAnsweringClarification(false);
   };
 
   // Derive dynamic clarification stepper counts truthfully from session state and events

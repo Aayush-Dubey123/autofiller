@@ -14,7 +14,7 @@ import path from 'path';
 import { AgentController } from '../agent/AgentController';
 import { BackendClient } from '../services/BackendClient';
 import { HistoryStore, SecretStore, VaultService } from '../services/VaultService';
-import { DocumentRecord, DocumentSelection, EngineStatus, ProfileRecord, StartSessionOptions, VaultStatus } from '../shared/types';
+import { DocumentRecord, DocumentSelection, EngineStatus, ProfileRecord, SessionRecord, StartSessionOptions, VaultStatus } from '../shared/types';
 /** In-memory remembered documents cache for active session reuse (Fixes M-04). */
 const rememberedDocuments: DocumentRecord[] = [];
 
@@ -283,6 +283,10 @@ export function registerIpcHandlers(
   ipcMain.handle('autofiller:history-delete-multiple', async (_event, ids: string[]) => {
     historyStore.deleteSessions(ids);
     return { success: true };
+  });
+  ipcMain.handle('autofiller:history-update-status', async (_event, payload: { id: string; status: SessionRecord['status'] }) => {
+    const success = historyStore.updateSessionStatus(payload?.id, payload?.status);
+    return { success };
   });
   ipcMain.handle('autofiller:history-clear-all', async () => {
     historyStore.clearAllSessions();

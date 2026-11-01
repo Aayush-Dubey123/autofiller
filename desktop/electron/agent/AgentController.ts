@@ -867,33 +867,52 @@ export class AgentController {
    * Stop the workflow, cancelling in-flight operations, closing the browser, and cleaning up.
    */
   public async stop(): Promise<void> {
+    // If the browser page confirmed submission or is already COMPLETED, finalize as COMPLETED rather than interrupted!
+    let confirmedSubmitted = false;
+    if (this.stateMachine.getState() === 'COMPLETED') {
+      confirmedSubmitted = true;
+    } else if (this.browserManager && this.browserManager.hasOpenPage()) {
+      try {
+        confirmedSubmitted = await this.browserManager.checkSubmissionConfirmed();
+      } catch {}
+    }
+
+    if (confirmedSubmitted) {
+      await this.finalizeSubmissionSuccess();
+      return;
+    }
+
     this.isStoppedState = true;
     this.isPausedState = false;
     this.isTakeoverState = false;
-
-    if (this.abortController) {
-      this.abortController.abort();
-      this.abortController = null;
-    }
-
-    // Close and release the Playwright browser
-    await this.browserManager.close().catch(() => {});
-
-    // Safely drain and purge the active backend session
-    await this.purgeSessionSafely();
-
-    // Cancel any pending clarification waits so promises don't hang
+    this.isRunning = false;
+    // 1. Cancel any pending clarification waits immediately so promises reject and unblock
     for (const [clarificationId, pending] of this.pendingClarifications.entries()) {
       clearTimeout(pending.timer);
       pending.reject(new OperationCancelledError());
       this.pendingClarifications.delete(clarificationId);
     }
 
-    this.isRunning = false;
+    // 2. Abort active controllers immediately
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
+
+    // 3. Immediately transition stateMachine to IDLE so UI updates without waiting on close or purge
     if (this.stateMachine.getState() !== 'COMPLETED') {
       this.stateMachine.transition('IDLE');
       this.emitEvent(this.buildEvent('STATE_CHANGED', 'Workflow stopped by user.'));
     }
+
+    // 4. Close and release the Playwright browser with a bounded timeout
+    await Promise.race([
+      this.browserManager.close().catch(() => {}),
+      new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+    ]);
+
+    // 5. Safely drain and purge the active backend session
+    await this.purgeSessionSafely().catch(() => {});
   }
 
   /**
@@ -1708,6 +1727,34 @@ export class AgentController {
             );
             if (idx >= 0) clarifications.splice(idx, 1);
           }
+        }
+      } else if (field.required && !isConsentCheckbox(field)) {
+        if (!mapping) {
+          mapping = {
+            field_ref: field.ref,
+            field_label: field.label,
+            fact_key: null,
+            confidence: 0.0,
+            status: 'CLARIFICATION_REQUIRED',
+          };
+          mappings.push(mapping);
+        } else {
+          mapping.status = 'CLARIFICATION_REQUIRED';
+        }
+        if (
+          clarifications &&
+          !clarifications.some(
+            (c) => c.field_ref === field.ref || this.labelsMatch(c.field_label, field.label)
+          )
+        ) {
+          clarifications.push({
+            clarification_id: `clarify_${field.ref}_${Date.now()}`,
+            field_ref: field.ref,
+            field_label: field.label,
+            question: `Please provide value for required field '${field.label}':`,
+            options: field.options || [],
+            selected_value: '',
+          });
         }
       }
     }

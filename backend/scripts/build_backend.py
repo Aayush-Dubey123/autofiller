@@ -94,6 +94,13 @@ def build_standalone_backend() -> Path:
         "--exclude-module", "pytest",
         "--exclude-module", "pytest_asyncio",
         "--exclude-module", "tkinter",
+        "--exclude-module", "torch",
+        "--exclude-module", "tensorflow",
+        "--exclude-module", "scipy",
+        "--exclude-module", "pandas",
+        "--exclude-module", "IPython",
+        "--exclude-module", "matplotlib",
+        "--exclude-module", "numpy",
     ])
 
     cmd.append(str(entrypoint))

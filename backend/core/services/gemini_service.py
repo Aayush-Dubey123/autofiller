@@ -1019,7 +1019,6 @@ Respond ONLY with valid JSON."""
         mappings: List[FieldMapping] = []
         clarifications: List[ClarificationRequest] = []
         unmapped: List[str] = []
-
         for item in parsed.get("mappings", []):
             field_ref = item.get("field_ref")
             if not field_ref:

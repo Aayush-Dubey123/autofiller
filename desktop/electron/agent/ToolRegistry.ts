@@ -54,7 +54,8 @@ export function lookupKnownFormSchema(url: string): FormSnapshot | null {
   if (!url) return null;
   const lowerUrl = url.toLowerCase();
   for (const [key, fields] of Object.entries(KNOWN_FORM_SCHEMAS)) {
-    if (lowerUrl.includes(key.toLowerCase())) {
+    const baseKey = key.toLowerCase().replace(/\.html$/, '');
+    if (lowerUrl.includes(key.toLowerCase()) || lowerUrl.includes(baseKey)) {
       return {
         url,
         title: 'Greenwood Academy - Mock School Admission Form',

@@ -467,6 +467,18 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
     }
   };
 
+  const [isStopping, setIsStopping] = useState<boolean>(false);
+  const handleStopSession = async () => {
+    if (!onStopSession || isStopping) return;
+    setIsStopping(true);
+    setRecheckStatus(null);
+    try {
+      await onStopSession();
+    } finally {
+      setIsStopping(false);
+    }
+  };
+
   useEffect(() => {
     loadVaultProfiles();
   }, []);
@@ -1014,7 +1026,8 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
 
               {onStopSession && (
                 <button
-                  onClick={onStopSession}
+                  onClick={handleStopSession}
+                  disabled={isStopping}
                   data-testid="blocker-stop-button"
                   style={{
                     padding: '9px 16px',
@@ -1024,14 +1037,19 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                     color: '#DC2626',
                     fontWeight: 700,
                     fontSize: '0.8125rem',
-                    cursor: 'pointer',
+                    cursor: isStopping ? 'not-allowed' : 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px',
+                    opacity: isStopping ? 0.7 : 1,
                   }}
                 >
-                  <Square size={13} fill="currentColor" />
-                  <span>Stop</span>
+                  {isStopping ? (
+                    <RotateCw size={13} className="animate-spin" />
+                  ) : (
+                    <Square size={13} fill="currentColor" />
+                  )}
+                  <span>{isStopping ? 'Stopping...' : 'Stop'}</span>
                 </button>
               )}
             </div>
@@ -1490,9 +1508,33 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
 
           {/* Launch Action Controls */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingTop: '4px' }}>
+            {state === 'REVIEW_READY' && onConfirmSubmission && (
+              <button
+                onClick={onConfirmSubmission}
+                style={{
+                  padding: '11px 18px',
+                  borderRadius: 'var(--radius-md)',
+                  border: 'none',
+                  background: 'var(--status-success)',
+                  color: '#FFFFFF',
+                  fontWeight: 700,
+                  fontSize: '0.84375rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  boxShadow: '0 2px 8px rgba(22, 101, 78, 0.25)',
+                }}
+              >
+                <CheckCircle2 size={15} />
+                <span>I Have Submitted</span>
+              </button>
+            )}
+
             {(isRunning || state === 'REVIEW_READY' || state === 'PAUSED' || state === 'USER_TAKEOVER') && onStopSession && (
               <button
-                onClick={onStopSession}
+                onClick={handleStopSession}
+                disabled={isStopping}
                 style={{
                   padding: '11px 18px',
                   borderRadius: 'var(--radius-md)',
@@ -1501,13 +1543,15 @@ export const NewSessionView: React.FC<NewSessionViewProps> = ({
                   color: '#DC2626',
                   fontWeight: 700,
                   fontSize: '0.84375rem',
-                  cursor: 'pointer',
+                  cursor: isStopping ? 'not-allowed' : 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '6px',
+                  opacity: isStopping ? 0.7 : 1,
                 }}
               >
-                <span>Stop Session</span>
+                {isStopping && <RotateCw size={14} className="animate-spin" />}
+                <span>{isStopping ? 'Stopping...' : 'Stop Session'}</span>
               </button>
             )}
 
@@ -1620,6 +1664,11 @@ export const HistoryView: React.FC = () => {
   const handleClearAll = async () => {
     await bridge.clearAllHistory();
     setShowClearConfirm(false);
+    await loadHistory();
+  };
+
+  const handleMarkSubmitted = async (id: string) => {
+    await bridge.updateHistoryStatus(id, 'COMPLETED');
     await loadHistory();
   };
 
@@ -1848,7 +1897,30 @@ export const HistoryView: React.FC = () => {
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexShrink: 0 }}>
+                  {session.status !== 'COMPLETED' && (
+                    <button
+                      onClick={() => handleMarkSubmitted(session.id)}
+                      title="Mark this session as successfully submitted"
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid #86EFAC',
+                        background: '#F0FDF4',
+                        color: 'var(--text-brand)',
+                        fontSize: '0.75rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                    >
+                      <CheckCircle size={13} />
+                      <span>Mark Submitted</span>
+                    </button>
+                  )}
+
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '0.9375rem', fontWeight: 800, color: 'var(--text-brand)' }}>
                       {session.fieldsFilled} {session.totalFields ? `/ ${session.totalFields}` : ''}

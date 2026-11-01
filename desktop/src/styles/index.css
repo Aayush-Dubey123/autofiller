@@ -417,3 +417,21 @@ code, pre {
   background: var(--accent-tan-bg);
 }
 
+/* Responsive Settings Grid Layout */
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: auto auto;
+  gap: 12px;
+  width: 100%;
+}
+
+@media (max-width: 900px) {
+  .settings-grid {
+    grid-template-columns: 1fr !important;
+    grid-template-rows: auto auto auto auto !important;
+  }
+}
+
+
+

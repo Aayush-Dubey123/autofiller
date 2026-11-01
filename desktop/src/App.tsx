@@ -398,6 +398,7 @@ export const App: React.FC = () => {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
+            gap: '16px',
             borderBottom: '1px solid var(--border-subtle)',
             background: 'var(--bg-card)',
             minWidth: 0,
@@ -406,13 +407,23 @@ export const App: React.FC = () => {
           {/* Left Logo / Title -> Opens Home */}
           <div
             onClick={() => handleNavigate('Home')}
-            style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', minWidth: 0 }}
+            title="Back to Home Dashboard"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              cursor: 'pointer',
+              minWidth: 0,
+              flexShrink: 0,
+              whiteSpace: 'nowrap',
+            }}
           >
-            <Sprout size={22} color="var(--accent-primary)" />
-            <span style={{ fontWeight: 800, fontSize: '1.25rem', color: 'var(--text-primary)' }}>
+            <Sprout size={22} color="var(--accent-primary)" style={{ flexShrink: 0 }} />
+            <span style={{ fontWeight: 800, fontSize: '1.25rem', color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
               AutoFiller <span style={{ color: 'var(--accent-primary)' }}>AI</span>
             </span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+            <span style={{ color: 'var(--border-subtle)', opacity: 0.6, margin: '0 4px' }}>|</span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
               From Documents to Opportunities
             </span>
           </div>
@@ -441,9 +452,23 @@ export const App: React.FC = () => {
                 gap: '6px',
                 padding: '6px 12px',
                 borderRadius: 'var(--radius-full)',
-                background: vaultState.unlocked ? 'var(--accent-green-bg)' : 'rgba(239, 68, 68, 0.15)',
-                border: `1px solid ${vaultState.unlocked ? 'rgba(16, 185, 129, 0.25)' : 'rgba(239, 68, 68, 0.4)'}`,
-                color: vaultState.unlocked ? 'var(--accent-green-text)' : '#EF4444',
+                background: !vaultState.hasPassphraseSlot
+                  ? 'rgba(239, 68, 68, 0.12)'
+                  : vaultState.unlocked
+                    ? 'var(--accent-green-bg)'
+                    : 'rgba(239, 68, 68, 0.15)',
+                border: `1px solid ${
+                  !vaultState.hasPassphraseSlot
+                    ? 'rgba(239, 68, 68, 0.4)'
+                    : vaultState.unlocked
+                      ? 'rgba(16, 185, 129, 0.25)'
+                      : 'rgba(239, 68, 68, 0.4)'
+                }`,
+                color: !vaultState.hasPassphraseSlot
+                  ? '#FCA5A5'
+                  : vaultState.unlocked
+                    ? 'var(--accent-green-text)'
+                    : '#EF4444',
                 fontSize: '0.75rem',
                 fontWeight: 600,
                 cursor: 'pointer',
@@ -579,8 +604,8 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {/* One-Time Extra Protection Tip Banner */}
-        {showExtraTip && (
+        {/* One-Time Extra Protection Tip Banner (hidden on Settings view) */}
+        {showExtraTip && activeNav !== 'Settings' && (
           <div
             style={{
               margin: '16px 32px 0 32px',
@@ -628,10 +653,12 @@ export const App: React.FC = () => {
         <main
           style={{
             flex: 1,
-            padding: '28px 32px',
+            padding: activeNav === 'Settings' ? '14px 24px' : '28px 32px',
             overflowY: 'auto',
             minWidth: 0,
             minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
           }}
         >
           {activeNav === 'Home' && (
@@ -692,18 +719,21 @@ export const App: React.FC = () => {
         <footer
           style={{
             height: '40px',
-            padding: '0 32px',
+            padding: '0 24px',
             background: 'var(--bg-card)',
             borderTop: '1px solid var(--border-subtle)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
+            gap: '16px',
             fontSize: '0.75rem',
             color: 'var(--text-muted)',
             flexShrink: 0,
+            overflowX: 'auto',
+            whiteSpace: 'nowrap',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flexShrink: 0, whiteSpace: 'nowrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--status-success)' }} />
               <span style={{ fontWeight: 600, color: 'var(--text-title)' }}>Backend Operational</span>
@@ -718,7 +748,7 @@ export const App: React.FC = () => {
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexShrink: 0, whiteSpace: 'nowrap' }}>
             <span>autofiller.AI</span>
             <span>|</span>
             <span>v1.0.0</span>
